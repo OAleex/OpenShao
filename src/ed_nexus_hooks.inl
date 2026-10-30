@@ -13,12 +13,12 @@ constexpr uint32_t KontentListBytes = 9*8;
 constexpr uint32_t DebugTextBytes = 24;
 constexpr uint32_t PauseLabelBase = 0xFFFFFF00;
 constexpr uint32_t PauseRootBytes = 7*8;
-// Five categories plus Back, or three bindings plus paging/back, and sentinel.
-constexpr uint32_t PauseSettingsBytes = 7*8;
+// Six graphics controls plus Back need the largest native Select list.
+constexpr uint32_t PauseSettingsBytes = (pause_recomp::MaxRows+1)*8;
 constexpr uint32_t PauseExitBytes = 3*8;
 constexpr uint32_t PauseListBytes = PauseRootBytes + PauseSettingsBytes + PauseExitBytes;
 constexpr uint32_t PauseTextBytes = 64;
-constexpr uint32_t PauseTextCount = uint32_t(pause_recomp::Item::Count)+6;
+constexpr uint32_t PauseTextCount = uint32_t(pause_recomp::Item::Count)+pause_recomp::MaxRows;
 constexpr uint32_t PauseSettingsRow = 2, PauseDesktopExitRow = 4;
 uint32_t pause_storage = 0;
 bool EnsureMenuStorage();
@@ -62,7 +62,7 @@ void PauseTerminator(uint32_t address) {PausePair(address,0xFFFFFFFF,0);}
 void RefreshSettingsPage(uint32_t row=0) {
     if (!pause_menu.list || !pause_storage)return;
     const unsigned count=pause_recomp::RowCount();
-    if (!count || count>6)return;
+    if (!count || count>pause_recomp::MaxRows)return;
     const uint32_t list=pause_menu.list,rows=pause_storage+PauseRootBytes;
     for(unsigned i=0;i<count;++i)
         PausePair(rows+i*8,PauseLabelBase+uint32_t(pause_recomp::Item::Count)+i);
@@ -113,7 +113,9 @@ bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
         pause_menu.page!=PausePage::Root) {
         if(pause_menu.page==PausePage::Settings && !pause_recomp::Back())RefreshSettingsPage();
         else ShowPausePage(PausePage::Root);
-        kernel::Return(ctx,0,0);
+        // Navigation consumed this input. A zero result lets the native GUI
+        // propagate the same B press and close the surrounding Select menu.
+        kernel::Return(ctx,1,0);
         return true;
     }
     if (event!=4) return false;
@@ -255,6 +257,8 @@ void UpdateHeldInput(X86Context& ctx) {
 }
 }
 bool Unlocked() { return sequence.Unlocked(); }
+bool GameplayPaused() { return in_pause; }
+bool KontentUnlocked() { return kontent_unlocked; }
 void FrontendInput(X86Context& ctx,uint8_t*) {
     // The frontend still ticks with empty input while the held-modifier path runs.
     if (ctx.ecx != 0x598430 || !(kernel::R32(0x67C668) & 1)) sequence.ResetInput();

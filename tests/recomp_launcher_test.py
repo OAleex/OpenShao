@@ -355,9 +355,9 @@ def main():
             assert launcher.exit_code() == 3
             assert settings.read_bytes() == saved, 'Play must preserve the settings file'
             if WINDOWS:
-                closed = 'Error dialog closed. Application data folder: ' + str(data)
+                closed = 'Error dialog closed.'
                 logs = [launcher.output, *(data / 'logs').glob('*.log')]
-                assert any(closed in log.read_text(encoding='utf-8', errors='replace') for log in logs), 'The error report must log its folder'
+                assert any(closed in log.read_text(encoding='utf-8', errors='replace') for log in logs), 'The error report must log its dismissal'
 
             # A saved language without its pack keeps the player in the launcher and opens Mods.
             for kind, text, voice in (('text', 'pt-BR', 'en'), ('voice', 'fr', 'pt-BR')):

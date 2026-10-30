@@ -15,6 +15,7 @@ The controller report mapping derives from this SDK.
 
 The executable includes SDL, Dear ImGui, toml++, miniz, XZ Embedded and Lua.
 The launcher uses Dear ImGui, rendered with Direct3D 12 on Windows and Vulkan on Linux.
+The Windows game renderer can use Direct3D 12 or Vulkan; Linux uses Vulkan.
 SDL supplies controller input and platform services.
 File selection uses the Windows file dialog, SDL dialogs, `zenity` or `kdialog`.
 Release updates use the GitHub releases API and the SHA-256 digests published with each release.
@@ -47,21 +48,21 @@ The adaptation preserves the pinned download. Extraction still checks file bound
 ## Vulkan headers and glslang
 
 The Vulkan renderer uses [Khronos Vulkan headers](https://github.com/KhronosGroup/Vulkan-Headers) and [glslang](https://github.com/KhronosGroup/glslang).
-glslang compiles HLSL shaders to SPIR-V during play.
+glslang compiles HLSL shaders to SPIR-V for Vulkan, including during pipeline preparation.
 
 | Dependency | Version | Pinned revision |
 | --- | --- | --- |
 | Vulkan-Headers | `v1.4.321` | `2cd90f9d20df57eac214c148f3aed885372ddcfe` |
 | glslang | `15.4.0` | `8a85691a0740d390761a1008b4696f57facd02c4` |
 
-The Direct3D 12 build excludes these dependencies.
-SDL opens the system's Vulkan loader at runtime.
+Both desktop builds include these dependencies.
+Windows opens the system Vulkan loader when Vulkan is selected. Linux opens it through SDL.
 The Vulkan renderer follows the SDK's targets, texture cache, pipeline keys and constants.
 Its BC texture decoder follows the Khronos Data Format Specification.
 
 Parts of glslang use the Apache License 2.0.
 Builds that combine glslang with this project's code use GNU GPL version 3 or later.
-The Direct3D 12 build keeps GPL-2.0-or-later.
+The project's source code remains GPL-2.0-or-later.
 See the [glslang license](licenses/glslang-LICENSE.txt) and [Vulkan-Headers license](licenses/Vulkan-Headers-MIT.txt).
 
 ## Mod packages

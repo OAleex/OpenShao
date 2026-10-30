@@ -10,13 +10,13 @@ Read `README.md` for user features and `docs/BUILDING.md` for build instructions
 - The target is the supported USA/Europe Xbox release of **Mortal Kombat: Shaolin Monks**.
 - The project uses XboxXBERecomp, C++20, SDL and Dear ImGui.
 - Both targets share one Dear ImGui launcher in `src/launcher.cpp`, drawn with `src/launcher_art.cpp`.
-- The Direct3D 12 target uses XAudio2 and shows the launcher in a Win32 window rendered with Direct3D 12.
-- The Vulkan target uses SDL platform services and shows the launcher in an SDL window rendered with Vulkan.
+- Windows uses XAudio2 and Win32 windows. Its launcher uses Direct3D 12; the game offers Direct3D 12 and Vulkan.
+- Linux uses SDL platform services and Vulkan for the launcher and game.
 - Keep the launcher's own visual identity. Do not use the game's logos, artwork, characters, typefaces or trade dress in the launcher, icon or documentation image.
 - Without a usable game, the launcher opens on its game page. `--setup` and runs without a launcher window use the system dialogs.
 - Updates come from the project's GitHub releases. Verify each package with its SHA-256 before installing it.
 - Keep the migration of default folders from releases before 0.3.0. It recognizes them by their contents. Do not add the project's previous names to code or documentation.
-- Select platform code at compile time. Preserve each target's behavior when changing another target.
+- Select platform services at compile time. Select the Windows game renderer at startup. Preserve each target's behavior when changing another target.
 - Keep the SDL platform services and Vulkan renderer in `src/linux/`.
 - Keep code, identifiers, comments, messages, scripts, tests, and documentation in English.
 - Use neutral descriptions in user documentation.

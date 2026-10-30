@@ -19,7 +19,8 @@ parser.add_argument('--verify-pause-exit',action='store_true',help='In the pause
 parser.add_argument('--language',default='en',choices=['en','fr','de','es','it','pt-BR'])
 parser.add_argument('--voice-language',default='en',choices=['en','fr','de','es','it','pt-BR'])
 parser.add_argument('--aspect',default='original',choices=['original','16:9','16:10','21:9','32:9','auto'])
-parser.add_argument('--scenario',default='navigation',choices=['navigation','menu-layout','persistence','display','native-options','reload','write-failure','remapping','prompts','transition','polish','presentation','input-handoff','details','headings','restart','voices','language-preview','brightness','story-exit','storage-error','exit-desktop','scorpion-preview','scorpion-campaign','scorpion-campaign-enabled','scorpion-quickstart','scorpion-double-save','pause-recomp','pause-recomp-load'])
+parser.add_argument('--cinematic-bars',action='store_true',help='Enable cinematic bars through Enhancements in the cinematic-bars scenario')
+parser.add_argument('--scenario',default='navigation',choices=['navigation','menu-layout','persistence','display','native-options','reload','write-failure','remapping','prompts','transition','polish','presentation','input-handoff','details','headings','restart','voices','language-preview','brightness','story-exit','storage-error','exit-desktop','scorpion-preview','scorpion-campaign','scorpion-campaign-enabled','scorpion-quickstart','scorpion-double-save','pause-recomp','pause-recomp-load','cinematic-bars'])
 parser.add_argument('--clean-profile',action='store_true',help='Use empty isolated saves for the brightness scenario')
 parser.add_argument('--output',type=Path)
 parser.add_argument('--settings',type=Path,help='Read-only configuration fixture for restart validation')
@@ -33,7 +34,7 @@ if args.settings and args.scenario not in ('reload','navigation','native-options
     parser.error('--settings is supported by reload, navigation and native-options')
 if args.scenario=='display' and args.aspect!='original':parser.error('display starts from --aspect original')
 root=Path(__file__).resolve().parents[1];mode=args.aspect;locale=args.language
-flags={dict(navigation='--recomp',persistence='--save',display='--display-test',**{'menu-layout':'--menu-layout','native-options':'--suite','reload':'--reload','write-failure':'--write-failure','remapping':'--remapping','prompts':'--prompts','transition':'--transition','polish':'--polish','presentation':'--presentation','input-handoff':'--input-handoff','details':'--details','headings':'--headings','restart':'--restart','voices':'--voices','language-preview':'--language-preview','brightness':'--brightness','story-exit':'--story-exit','storage-error':'--storage-error','exit-desktop':'--exit-desktop','scorpion-preview':'--scorpion-preview','scorpion-campaign':'--scorpion-campaign','scorpion-campaign-enabled':'--scorpion-campaign-enabled','scorpion-quickstart':'--scorpion-quickstart','scorpion-double-save':'--scorpion-double-save','pause-recomp':'--pause-recomp','pause-recomp-load':'--pause-recomp-load'})[args.scenario]}
+flags={dict(navigation='--recomp',persistence='--save',display='--display-test',**{'menu-layout':'--menu-layout','native-options':'--suite','reload':'--reload','write-failure':'--write-failure','remapping':'--remapping','prompts':'--prompts','transition':'--transition','polish':'--polish','presentation':'--presentation','input-handoff':'--input-handoff','details':'--details','headings':'--headings','restart':'--restart','voices':'--voices','language-preview':'--language-preview','brightness':'--brightness','story-exit':'--story-exit','storage-error':'--storage-error','exit-desktop':'--exit-desktop','scorpion-preview':'--scorpion-preview','scorpion-campaign':'--scorpion-campaign','scorpion-campaign-enabled':'--scorpion-campaign-enabled','scorpion-quickstart':'--scorpion-quickstart','scorpion-double-save':'--scorpion-double-save','pause-recomp':'--pause-recomp','pause-recomp-load':'--pause-recomp-load','cinematic-bars':'--cinematic-bars'})[args.scenario]}
 out=(args.output or root/'work/recomp-runtime').resolve();out.mkdir(parents=True,exist_ok=True)
 run=out/('runtime-'+locale+'-'+mode.replace(':','-')+'-'+str(time.time_ns()));run.mkdir()
 if '--menu-layout' in flags:
@@ -47,6 +48,13 @@ if '--menu-layout' in flags:
     steps += [['main-step',12,0],['main-step',11,8],['enter-exit'],['accept'],['assert-top','0x598430'],['assert-main-row',8],['capture','exit-returned'],
               ['navigate',7],['enter-options'],['capture','enhancements'],['back'],['assert-top','0x598430'],['assert-main-row',7],
               ['navigate',6],['enter-options'],['capture','recompilation'],['back'],['assert-top','0x598430'],['assert-main-row',6],['quit']]
+    (run/'command-1.json').write_text(json.dumps(steps))
+if '--cinematic-bars' in flags:
+    steps=[['navigate',7],['enter-options'],['key',40],['key',40]]
+    if args.cinematic_bars:steps += [['key',39]]
+    steps += [['capture','enhancement-'+('on' if args.cinematic_bars else 'off')],['back']]
+    if args.cinematic_bars:steps += [['accept']]
+    steps += [['assert-top','0x598430'],['navigate',0],['accept'],['capture-cutscene-bars'],['quit']]
     (run/'command-1.json').write_text(json.dumps(steps))
 if '--exit-desktop' in flags:
     steps=[['main-step',11,8],['capture','exit-selected'],['enter-exit'],['capture','exit-default-no'],
@@ -638,14 +646,16 @@ try:
                     go_pause_row(row);pulse(0,duration=.3,gap=1.25)
                 def pause_settings():return tomllib.loads((data/'settings.toml').read_text(encoding='utf-8'))
                 # Graphics: Bloom, AF, rendering scale, immediately saved.
-                pause_choose(1);assert u32(panel+0x64)==4,'Graphics submenu must open'
+                pause_choose(1);assert u32(panel+0x64)==5,'Graphics submenu must open'
                 pause_choose(0);pause_choose(1);pause_choose(2)
                 current=pause_settings()
                 assert current['bloom_effect'] is (not initial.get('bloom_effect',False))
                 assert current['anisotropic_filtering']!=initial.get('anisotropic_filtering',0)
                 assert current['render_percent']!=initial.get('render_percent',100)
+                pause_choose(3);assert pause_settings()['fps_cap']==120,'Pause must persist 120 FPS'
+                pause_choose(3);assert pause_settings()['fps_cap']==60,'Pause must return to the default 60 FPS'
                 capture('pause-recomp-graphics')
-                pause_choose(3);assert u32(panel+0x64)==6,'Back to categories from graphics'
+                pause_choose(4);assert u32(panel+0x64)==6,'Back to categories from graphics'
                 # Video: VSync commits; display mode is previewed and then reverted.
                 pause_choose(2);assert u32(panel+0x64)==5,'Video/screen submenu must open'
                 pause_choose(3);assert pause_settings()['vsync'] is (not initial.get('vsync',True))
@@ -727,6 +737,32 @@ try:
                 checks.append(dict(capture='pause-recomp',root_rows=5,categories=['controls','graphics','video','audio','interface'],
                                    settings_toggled=['show_fps','vsync','bloom_effect','anisotropic_filtering','render_percent','master_volume','deadzone','rumble','mouse_sensitivity'],
                                    remapped=['keyboard.x','controller.x'],confirm_cancelled=True,original_save_unchanged=True))
+            elif action[0]=='capture-cutscene-bars':
+                import tomllib
+                saved=tomllib.loads((data/'settings.toml').read_text())
+                assert saved.get('enhancements',{}).get('cinematic_bars',False) is args.cinematic_bars
+                deadline=time.monotonic()+90
+                while top()!=0 and time.monotonic()<deadline:pulse(0,duration=.7,gap=4)
+                assert top()==0,'The character and difficulty selections must enter the campaign'
+                pulse(6,duration=.5,gap=3);pulse(6,duration=.5,gap=3)
+                deadline=time.monotonic()+75
+                while not u32(0x639224) and time.monotonic()<deadline:
+                    pulse(6,duration=.2,gap=1)
+                assert u32(0x639224),'The campaign world must load for the cinematic capture'
+                deadline=time.monotonic()+450
+                next_skip=time.monotonic()+15
+                while (read(0x6C4198,1)!=b'\x01' or u32(0x6C92F8)) and time.monotonic()<deadline:
+                    if read(0x6C4198,1)!=b'\x01' and not u32(0x6C92F8) and time.monotonic()>=next_skip:
+                        # Long movie decode batches can miss the short menu pulses.
+                        pulse(6,duration=2,gap=1);next_skip=time.monotonic()+15
+                    else:wait(.1)
+                assert read(0x6C4198,1)==b'\x01' and not u32(0x6C92F8),'The capture must show a running in-game cutscene after loading'
+                for sample in range(3):
+                    wait(2)
+                    capture('cutscene-'+('on' if args.cinematic_bars else 'off')+'-'+str(sample))
+                    checks[-1]['mask_sprites']=[hex(u32(a)) for a in (0x6CE8A0,0x6CE8A4)]
+                    checks[-1]['cinematic_active']=read(0x6C4198,1)==b'\x01'
+                checks.append(dict(capture='cinematic-bars-persisted',enabled=args.cinematic_bars))
             elif action[0]=='story-exit':
                 for _ in range(4):pulse(0,duration=.3,gap=4)
                 # Start skips the two introductory movies; Select opens the native pause menu.

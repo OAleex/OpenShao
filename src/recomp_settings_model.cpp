@@ -41,7 +41,8 @@ std::vector<Row> Model::Rows()const {
         add("settings.desktop",{},true);break;
     case Page::Graphics:
         add("settings.scale",std::to_string(s.render_percent)+"%");add("settings.aniso",s.aniso?std::to_string(s.aniso)+"x":"value.game_default");
-        add("settings.vsync",Toggle(s.vsync));add("settings.bloom_effect",Toggle(s.bloom_effect));add("settings.fps",Toggle(s.show_fps));break;
+        add("settings.vsync",Toggle(s.vsync));add("settings.bloom_effect",Toggle(s.bloom_effect));add("settings.fps",Toggle(s.show_fps));
+        add("settings.frame_rate",s.vsync?"value.display_refresh":std::to_string(s.fps_cap)+" FPS");break;
     case Page::Controls:
         add("settings.controller",{},true);add("settings.keyboard",{},true);add("settings.mouse",{},true);
         add("settings.deadzone",std::to_string(int(std::lround(s.deadzone*100)))+"%");add("settings.rumble",Toggle(s.rumble));break;
@@ -64,6 +65,8 @@ std::vector<Row> Model::Rows()const {
         add("settings.text_language","language."+s.language);add("settings.voice_language","language."+s.voice_language);break;
     case Page::Enhancements:
         add("settings.scorpion_unfiltered",Toggle(s.scorpion_unfiltered));
+        add("settings.restore_dialogue",Toggle(s.restore_dialogue));
+        add("settings.cinematic_bars",Toggle(s.cinematic_bars));
         add("settings.save",{},true);add("settings.discard",{},true);break;
     }
     return rows;
@@ -121,7 +124,8 @@ void Model::Change(size_t row,int direction) {
         if(row==3){std::array<std::string,6> modes;for(unsigned i=0;i<6;++i)modes[i]=aspect::modes[i];Cycle(s.aspect_ratio,modes,delta);}break;
     case Page::Graphics:
         if(row==0)number(s.render_percent,5,25,400);if(row==1)Cycle(s.aniso,std::array{0,2,4,8,16},delta);
-        if(row==2)s.vsync=!s.vsync;if(row==3)s.bloom_effect=!s.bloom_effect;if(row==4)s.show_fps=!s.show_fps;break;
+        if(row==2)s.vsync=!s.vsync;if(row==3)s.bloom_effect=!s.bloom_effect;if(row==4)s.show_fps=!s.show_fps;
+        if(row==5 && !s.vsync)Cycle(s.fps_cap,std::array{60,120},delta);break;
     case Page::Controls:
         if(row==3)s.deadzone=std::clamp(std::round(s.deadzone*100+delta)/100,0.,.5);if(row==4)s.rumble=!s.rumble;break;
     case Page::Controller:
@@ -147,7 +151,9 @@ void Model::Change(size_t row,int direction) {
         else if(row==1)Cycle(s.voice_language,launcher::voice_languages,delta);
         break;
     case Page::Enhancements:
-        if(row==0)s.scorpion_unfiltered=!s.scorpion_unfiltered;break;
+        if(row==0)s.scorpion_unfiltered=!s.scorpion_unfiltered;
+        if(row==1)s.restore_dialogue=!s.restore_dialogue;
+        if(row==2)s.cinematic_bars=!s.cinematic_bars;break;
     default:break;
     }
 }

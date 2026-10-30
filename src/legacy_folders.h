@@ -5,7 +5,6 @@
 #include <vector>
 
 namespace openshao::paths {
-// A default folder from an earlier release, and the folder that replaces it.
 struct LegacyFolder {
     std::filesystem::path previous, current;
 };

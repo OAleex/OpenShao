@@ -8,7 +8,7 @@ All systems:
 - The original USA/Europe `default.xbe`, kept outside the repository. Its SHA-256 must be
   `48240902bf4a04eb89376217c529531032d3370749bcce91a194878cc49db74a`.
 
-Windows (Direct3D 12):
+Windows (Direct3D 12 and Vulkan):
 
 - Visual Studio 2022 or later with the C++ workload, the Windows SDK, CMake and Ninja
 - [LLVM 21.1.8](https://github.com/llvm/llvm-project/releases/tag/llvmorg-21.1.8) with Clang and LLD
@@ -49,6 +49,7 @@ python3 tools/build_recomp.py --xbe ~/Games/ShaolinMonks/default.xbe --sdk third
 ```
 
 The script downloads the pinned dependencies, compiles, runs the tests and writes the package and `checksums.txt` to `dist/`.
+Vulkan headers and glslang are downloaded automatically. A separate Vulkan SDK is not required.
 Logs are in `build/`.
 
 | Target | Executable | Package |
@@ -102,14 +103,14 @@ Keep these version fields synchronized before building:
 
 The build script uses the packager's default version. Changing only the CMake version does not update the package names or mod compatibility version.
 
-For 0.3.0, use:
+For 0.4.0, use:
 
 | Release field | Value |
 | --- | --- |
 | Repository | `OAleex/OpenShao` |
-| Tag | `v0.3.0` |
-| Title | `OpenShao 0.3.0` |
-| Attached files | `OpenShao-0.3.0-Windows-x64.zip`, `OpenShao-0.3.0-Linux-x64.tar.gz`, `checksums.txt` |
+| Tag | `v0.4.0` |
+| Title | `OpenShao 0.4.0` |
+| Attached files | `OpenShao-0.4.0-Windows-x64.zip`, `OpenShao-0.4.0-Linux-x64.tar.gz`, `checksums.txt` |
 
 1. Set all version fields.
 2. Build with `--test` and include both platforms.

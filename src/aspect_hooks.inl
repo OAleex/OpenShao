@@ -1,9 +1,55 @@
+#include "frame_rate.h"
+#include <bitset>
+#include <unordered_map>
 namespace openshao::aspect {
+enum class TextLayout {None,Health,Combo,KoopCombo,Tutorial,EnemyLeft,EnemyRight};
+inline thread_local TextLayout text_layout=TextLayout::None;
+inline thread_local bool tutorial_prompt_layout=false;
+inline thread_local std::unordered_map<uint32_t,std::array<UiAnchor,256>> font_layouts;
+struct RenderedText {uint32_t command=0;UiAnchor anchor=UiAnchor::None;};
+inline thread_local RenderedText rendered_text;
+class TextScope {
+    TextLayout previous_=text_layout;
+public:
+    explicit TextScope(TextLayout layout){text_layout=layout;}
+    ~TextScope(){text_layout=previous_;}
+};
+// Retail game mode: 0 solo campaign, 1 Ko-op, 2 Versus.
+uint32_t GameMode() {
+    const uint32_t preferences=kernel::R32(0x5ACEBC);
+    return preferences?kernel::R32(preferences+0x88):~0u;
+}
+TextLayout SoloComboLayout() {
+    // Solo combo labels follow the health corner. Ko-op draws one combo per
+    // player, each under its own side of the shared bar. Versus is unchanged.
+    switch(GameMode()) {
+    case 0:return TextLayout::Combo;
+    case 1:return TextLayout::KoopCombo;
+    default:return TextLayout::None;
+    }
+}
+UiAnchor HealthSpriteAnchor(uint32_t sprite) {
+    if(!sprite)return UiAnchor::None;
+    // These retail solo-health callbacks identify the widget independently of
+    // its fill, animation and texture.
+    switch(kernel::R32(sprite+0x1FC)) {
+    case 0x15321:return UiAnchor::EnemyLeft;
+    case 0x13DB4:return UiAnchor::EnemyRight;
+    case 0x12EF5:case 0x14A2A:case 0x12C89:case 0x1534E:
+        return UiAnchor::TopLeft;
+    // Ko-op shares one health bar between two medallions. Each player's pieces
+    // follow their own top corner and the shared bar widens to join them.
+    case 0x12E14:
+        return GameMode()==1?UiAnchor::TopStretch:UiAnchor::None;
+    case 0x12FFE:case 0x15AFB:case 0x11AB4:case 0x13ED6:case 0x127E3:
+        return GameMode()==1?UiAnchor::TopSplit:UiAnchor::None;
+    default:return UiAnchor::None;
+    }
+}
 struct TutorialImage {uint32_t sprite=0;TutorialSprite role=TutorialSprite::None;};
-inline thread_local std::array<TutorialImage,3> tutorial_images{};
-struct TutorialPrompt {bool valid=false;uint32_t x=0,y=0,characters=0;};
-inline thread_local TutorialPrompt tutorial_prompt{};
-inline thread_local std::array<TutorialPrompt,4> artwork_footer{};
+inline thread_local std::array<TutorialImage,128> tutorial_images{};
+struct FooterText {bool valid=false;uint32_t x=0,y=0,characters=0;};
+inline thread_local std::array<FooterText,4> artwork_footer{};
 inline thread_local std::array<bool,512> flash_polygons{};
 inline thread_local uint32_t animation_scene=0;
 bool ArtworkViewerActive() {
@@ -32,7 +78,7 @@ bool IsTransitionScenery(uint32_t scene,uint32_t texture) {
     default:return false;
     }
 }
-bool LayoutGalleryBackdrop(uint32_t first,uint32_t end) {
+bool LayoutGalleryBackdrop(uint32_t first,uint32_t end,bool full_viewport=false) {
     const auto scale=CanvasScale(Current());
     if(scale.x==1 && scale.y==1)return false;
     if(end!=first+2 || first>506)return false;
@@ -43,6 +89,9 @@ bool LayoutGalleryBackdrop(uint32_t first,uint32_t end) {
     const float left=value(0x10),top=value(0x14),right=value(0x30),bottom=value(0x34);
     if(!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom) ||
        right-left<128 || bottom-top<128 || value(0x20)!=left || value(0x24)!=bottom)return false;
+    // Full-screen layers may start a fraction of a pixel inside the edge: the
+    // arena-entry snapshot is authored at y=0.047, for instance.
+    if(full_viewport && (left>1 || right<639 || top>1 || bottom<479))return false;
     const uint32_t second=0x63F5E4+(first+1)*0x6C;
     auto native_float=[](uint32_t a){return std::bit_cast<float>(kernel::R32(a));};
     if(native_float(second+0x10)!=left || native_float(second+0x14)!=top ||
@@ -141,12 +190,101 @@ void ExpandModalShade(uint32_t first,uint32_t end) {
     }
 }
 void UpdateCamera() {
-    // CEngineRenderer::m_pWorldCamera. Keep the original viewport and both FOV fields.
+    // CEngineRenderer::m_pWorldCamera. The projection (0x100900) divides x by this field, so it holds the
+    // output width/height; keep the original viewport and both FOV fields.
     const uint32_t world=kernel::R32(0x639224);
     if(!world)return;
     const uint32_t camera=kernel::R32(world+0x308);
     if(camera)kernel::W32(camera+0x20,std::bit_cast<uint32_t>(CameraScale(Current())));
 }
+}
+X86_EXTERN_FUNC(__imp__sub_00014A2A);
+X86_EXTERN_FUNC(__imp__sub_00015321);
+X86_FUNC(sub_00015321) {
+    openshao::aspect::TextScope text(openshao::aspect::TextLayout::EnemyLeft);
+    __imp__sub_00015321(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_00013DB4);
+X86_FUNC(sub_00013DB4) {
+    openshao::aspect::TextScope text(openshao::aspect::TextLayout::EnemyRight);
+    __imp__sub_00013DB4(ctx,base);
+}
+X86_FUNC(sub_00014A2A) {
+    openshao::aspect::TextScope text(openshao::aspect::TextLayout::Health);
+    __imp__sub_00014A2A(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_00012E14);
+X86_FUNC(sub_00012E14) {
+    // The Ko-op bar labels (names, experience) follow their player's corner.
+    openshao::aspect::TextScope text(openshao::aspect::GameMode()==1?openshao::aspect::TextLayout::Health:openshao::aspect::TextLayout::None);
+    __imp__sub_00012E14(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_000133A0);
+X86_FUNC(sub_000133A0) {
+    openshao::aspect::TextScope text(openshao::aspect::SoloComboLayout());
+    __imp__sub_000133A0(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_000149FD);
+X86_FUNC(sub_000149FD) {
+    openshao::aspect::TextScope text(openshao::aspect::SoloComboLayout());
+    __imp__sub_000149FD(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_00011DD4);
+X86_FUNC(sub_00011DD4) {
+    // Ko-op's second combo producer: player two's hit count and label.
+    openshao::aspect::TextScope text(openshao::aspect::GameMode()==1?openshao::aspect::TextLayout::KoopCombo:openshao::aspect::TextLayout::None);
+    __imp__sub_00011DD4(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_00016267);
+X86_FUNC(sub_00016267) {
+    openshao::aspect::TextScope text(openshao::aspect::SoloComboLayout());
+    __imp__sub_00016267(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_00152CE0);
+X86_FUNC(sub_00152CE0) {
+    // The solo combo producer also displays a separate experience reward at
+    // (320,240). Keep that retail call centered while its HUD labels move.
+    // Ko-op also draws the second player's count from this call site, so there
+    // the font queue decides by position: only text centered at x=320 stays.
+    const bool reward=kernel::R32(ctx.esp)==0x7C480 && openshao::aspect::text_layout==openshao::aspect::TextLayout::Combo;
+    openshao::aspect::TextScope text(reward?openshao::aspect::TextLayout::None:openshao::aspect::text_layout);
+    __imp__sub_00152CE0(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_000123BA);
+X86_FUNC(sub_000123BA) {
+    const uint32_t type=kernel::R32(0x4E6E20+0x6D4);
+    const bool tutorial=ctx.ecx==0x4E6E20 && (type==6 || type==8 || type==9);
+    openshao::aspect::TextScope text(tutorial?openshao::aspect::TextLayout::Tutorial:openshao::aspect::TextLayout::None);
+    __imp__sub_000123BA(ctx,base);
+}
+X86_EXTERN_FUNC(__imp__sub_001EE580);
+X86_FUNC(sub_001EE580) {
+    const uint32_t queue=ctx.ecx,index=kernel::R32(queue),command=kernel::R32(ctx.esp+4);
+    auto anchor=openshao::aspect::UiAnchor::None;
+    if(openshao::aspect::tutorial_prompt_layout)anchor=openshao::aspect::UiAnchor::TutorialPrompt;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::EnemyLeft)anchor=openshao::aspect::UiAnchor::EnemyLeft;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::EnemyRight)anchor=openshao::aspect::UiAnchor::EnemyRight;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Tutorial)anchor=openshao::aspect::UiAnchor::BottomLeft;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Combo)anchor=openshao::aspect::UiAnchor::TopLeft;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Health && command)
+        anchor=std::bit_cast<float>(kernel::R32(command))<320?openshao::aspect::UiAnchor::TopLeft:openshao::aspect::UiAnchor::TopRight;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::KoopCombo && command) {
+        const float x=std::bit_cast<float>(kernel::R32(command));
+        if(std::abs(x-320)>=1)anchor=x<320?openshao::aspect::UiAnchor::TopLeft:openshao::aspect::UiAnchor::KoopComboRight;
+    }
+    __imp__sub_001EE580(ctx,base);
+    // Tag the accepted queue slot, including unanchored text that reuses a slot.
+    // The renderer copies these commands later, after the producer has returned.
+    if(ctx.eax && index<256 && kernel::R32(queue)==index+1)openshao::aspect::font_layouts[queue][index]=anchor;
+}
+X86_EXTERN_FUNC(__imp__sub_001EEC70);
+X86_FUNC(sub_001EEC70) {
+    const uint32_t queue=ctx.ecx,command=kernel::R32(ctx.esp+4),index=kernel::R32(ctx.esp+8);
+    __imp__sub_001EEC70(ctx,base);
+    auto anchor=openshao::aspect::UiAnchor::None;
+    const auto found=openshao::aspect::font_layouts.find(queue);
+    if(found!=openshao::aspect::font_layouts.end() && index<256)anchor=found->second[index];
+    openshao::aspect::rendered_text={command,anchor};
 }
 X86_EXTERN_FUNC(__imp__sub_00016866);
 X86_FUNC(sub_00016866) {
@@ -155,9 +293,10 @@ X86_FUNC(sub_00016866) {
     const uint32_t image=kernel::R32(ctx.esp+8);
     __imp__sub_00016866(ctx,base);
     if(!message || !ctx.eax || (image!=0xA9 && image!=0x9D && image!=0x9E))return;
-    for(auto& item:openshao::aspect::tutorial_images)if(item.sprite==ctx.eax)item={};
-    const unsigned index=image==0xA9?0:image==0x9D?1:2;
-    openshao::aspect::tutorial_images[index]={ctx.eax,image==0xA9?openshao::aspect::TutorialSprite::Panel:openshao::aspect::TutorialSprite::Portrait};
+    for(auto& item:openshao::aspect::tutorial_images)if(item.sprite==ctx.eax || !item.sprite) {
+        item={ctx.eax,image==0xA9?openshao::aspect::TutorialSprite::Panel:openshao::aspect::TutorialSprite::Portrait};
+        break;
+    }
     if(image==0x9D) {
         const uint32_t definition=kernel::R32(ctx.eax+0x1D8);
         const float x=std::bit_cast<float>(kernel::R32(ctx.eax+0xC0));
@@ -170,7 +309,7 @@ X86_EXTERN_FUNC(__imp__sub_000165C3);
 X86_FUNC(sub_000165C3) {
     const bool message=ctx.ecx==0x4E6E20;
     __imp__sub_000165C3(ctx,base);
-    if(message){openshao::aspect::tutorial_images.fill({});openshao::aspect::tutorial_prompt={};openshao::aspect::tutorial_portrait_inset=0;}
+    if(message){openshao::aspect::tutorial_images.fill({});openshao::aspect::tutorial_portrait_inset=0;}
 }
 X86_EXTERN_FUNC(__imp__sub_0011B290);
 X86_EXTERN_FUNC(__imp__sub_00152AE0);
@@ -183,6 +322,7 @@ X86_FUNC(sub_00152AE0) {
     // Move the native navigation and counter into one footer; preserve localization and input glyphs.
     const uint32_t caller=kernel::R32(ctx.esp),y_address=ctx.esp+8;
     const uint32_t original_y=kernel::R32(y_address);
+    const bool previous_prompt=openshao::aspect::tutorial_prompt_layout;
     if(openshao::aspect::ArtworkViewerActive()) {
         unsigned index=4;
         if(caller==0x4C822)index=0;
@@ -203,16 +343,26 @@ X86_FUNC(sub_00152AE0) {
     if(kernel::R32(ctx.esp)==0x86714) {
         const uint32_t type=kernel::R32(0x4E6E20+0x6D4),text=kernel::R32(ctx.esp+20);
         if(text && (type==6 || type==8 || type==9)) {
-            const float x=float(int32_t(kernel::R32(ctx.esp+4))),y=float(int32_t(kernel::R32(ctx.esp+8)));
-            openshao::aspect::tutorial_prompt={true,std::bit_cast<uint32_t>(x),std::bit_cast<uint32_t>(y),kernel::R32(text)&0xFFFF};
+            openshao::aspect::tutorial_prompt_layout=true;
         }
     }
     __imp__sub_00152AE0(ctx,base);
+    openshao::aspect::tutorial_prompt_layout=previous_prompt;
     kernel::W32(y_address,original_y);
 }
 X86_EXTERN_FUNC(__imp__sub_001EF210);
 X86_FUNC(sub_001EF210) {
     const uint32_t command=kernel::R32(ctx.esp+4),text=command?kernel::R32(command+0x34):0;
+    const auto layout=openshao::aspect::rendered_text;
+    if(command && command==layout.command && layout.anchor!=openshao::aspect::UiAnchor::None) {
+        // The retail font clamps X within its old canvas. Translate the emitted
+        // glyph quads after that clamp, keeping native wrapping and queue data.
+        openshao::aspect::FontScope font(layout.anchor);
+        ++openshao::aspect::viewport_text_depth;
+        __imp__sub_001EF210(ctx,base);
+        --openshao::aspect::viewport_text_depth;
+        return;
+    }
     if(text && openshao::aspect::ArtworkViewerActive())for(const auto& footer:openshao::aspect::artwork_footer) {
         if(!footer.valid || kernel::R32(command)!=footer.x || kernel::R32(command+4)!=footer.y ||
            (kernel::R32(text)&0xFFFF)!=footer.characters)continue;
@@ -221,15 +371,7 @@ X86_FUNC(sub_001EF210) {
         --openshao::aspect::viewport_text_depth;
         return;
     }
-    const auto prompt=openshao::aspect::tutorial_prompt;
-    if(!prompt.valid || !text || kernel::R32(command)!=prompt.x || kernel::R32(command+4)!=prompt.y ||
-       (kernel::R32(text)&0xFFFF)!=prompt.characters){__imp__sub_001EF210(ctx,base);return;}
-    const auto scale=openshao::aspect::CanvasScale(openshao::aspect::Current());
-    kernel::W32(command,std::bit_cast<uint32_t>(std::bit_cast<float>(prompt.x)+320.f*(1/scale.x-1)-openshao::aspect::tutorial_portrait_inset));
-    ++openshao::aspect::viewport_text_depth;
     __imp__sub_001EF210(ctx,base);
-    --openshao::aspect::viewport_text_depth;
-    kernel::W32(command,prompt.x);
 }
 X86_FUNC(sub_0011B290) {
     __imp__sub_0011B290(ctx,base);
@@ -245,11 +387,9 @@ X86_EXTERN_FUNC(__imp__sub_0011D000);
 X86_FUNC(sub_0011D000) {
     const uint32_t entry=kernel::R32(ctx.esp+4);
     const uint32_t sprite=entry?kernel::R32(entry+8):0;
-    if(entry && openshao::aspect::Current()>openshao::aspect::Original+.0001f) {
-        // Preserve the native cinematic-mask animation; presentation adds bars for wider viewports.
-        if(sprite && (sprite==kernel::R32(0x6CE8A0) || sprite==kernel::R32(0x6CE8A4))) {
-            kernel::Return(ctx,0,1);return;
-        }
+    const bool cinematic=sprite && (sprite==kernel::R32(0x6CE8A0) || sprite==kernel::R32(0x6CE8A4));
+    if(cinematic && !openshao::launcher::Current().cinematic_bars) {
+        kernel::Return(ctx,0,1);return;
     }
     // Match the atlas white-fill tile, not logical dimensions, to distinguish tints from artwork.
     const uint32_t definition=entry?kernel::R32(entry):0;
@@ -262,7 +402,7 @@ X86_FUNC(sub_0011D000) {
     if(sprite)for(const auto& item:openshao::aspect::tutorial_images)if(item.sprite==sprite)tutorial=item.role;
     // Only fit the separate full-image owner while the concept or photo viewer is active.
     const bool artwork=sprite && sprite==kernel::R32(0x5984B0) && openshao::aspect::ArtworkViewerActive();
-    openshao::aspect::SpriteScope sprite_scope(solid_fill,tutorial,artwork);
+    openshao::aspect::SpriteScope sprite_scope(solid_fill,tutorial,artwork,openshao::aspect::HealthSpriteAnchor(sprite),cinematic);
     __imp__sub_0011D000(ctx,base);
 }
 X86_EXTERN_FUNC(__imp__sub_00100B44);
@@ -289,7 +429,16 @@ X86_FUNC(sub_0012F930) {
 }
 X86_EXTERN_FUNC(__imp__sub_0013FD70);
 X86_FUNC(sub_0013FD70) {
+    // Output-only passes redraw the same queued polygons with the flags of their captured pass.
+    static thread_local std::array<bool,512> drawn_flash{};
+    static thread_local std::bitset<512> drawn_arrows;
+    using openshao::frames::Replay;
+    const auto replay=openshao::frames::replay;
+    if(replay==Replay::After){openshao::aspect::flash_polygons=drawn_flash;openshao::menu::SetFrameArrows(drawn_arrows);}
+    else if(replay==Replay::None){drawn_flash=openshao::aspect::flash_polygons;drawn_arrows=openshao::menu::FrameArrows();}
+    openshao::frames::BeforePolygons(ctx.ecx);
     __imp__sub_0013FD70(ctx,base);
+    if(replay==Replay::Before)return;
     openshao::aspect::flash_polygons.fill(false);
     openshao::menu::BeginFrame();
 }
@@ -315,7 +464,9 @@ X86_FUNC(sub_0013FFB0) {
     const uint32_t menu_key=openshao::aspect::AnimationTextureKey(openshao::aspect::animation_scene,kernel::R32(ctx.esp+12));
     const bool gallery=openshao::aspect::animation_scene==0x58F210 &&
         openshao::aspect::AnimationTextureKey(openshao::aspect::animation_scene,kernel::R32(ctx.esp+12))==0x3BF25039;
-    const bool backdrop=(!gallery && openshao::aspect::backdrop_depth!=0) ||
+    // Level Select draws its frame, vortex and arena preview as one composition; only its wall extends.
+    const bool level_select=openshao::aspect::animation_scene==0x5936F8;
+    const bool backdrop=(!gallery && !level_select && openshao::aspect::backdrop_depth!=0) ||
         openshao::aspect::IsTransitionScenery(openshao::aspect::animation_scene,kernel::R32(ctx.esp+12));
     __imp__sub_0013FFB0(ctx,base);
     const uint32_t end=kernel::R32(0x63F5E0);
@@ -323,6 +474,12 @@ X86_FUNC(sub_0013FFB0) {
     if(openshao::recomp::Graphic(ctx,openshao::aspect::animation_scene,menu_key,first,end))return;
     if(openshao::menu::ReplaceGraphic(ctx,menu_key,first,end))return;
     if(gallery && openshao::aspect::LayoutGalleryBackdrop(first,end))return;
+    // Accepting an arena zooms a blurred snapshot of the screen from the Level
+    // Select control itself (not its scenery instance). Extend it like the wall
+    // so the zoom fills the viewport instead of a 4:3 box.
+    const uint32_t control_depth=kernel::R32(0x6C9308);
+    const bool level_select_control=control_depth<32 && kernel::R32(0x6C9308+control_depth*4)==0x598C90;
+    if((level_select || level_select_control) && openshao::aspect::LayoutGalleryBackdrop(first,end,true))return;
     openshao::aspect::CanvasScope canvas;
     for(uint32_t i=first;i<end;++i) {
         openshao::aspect::CorrectUiVertices(kernel::HostPtr(0x63F5E4+i*0x6C+0x10),3,16,backdrop);

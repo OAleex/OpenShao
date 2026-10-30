@@ -163,7 +163,6 @@ void Enso(const Canvas& c, ImVec2 center, float R, float width, float drawn, flo
             const float noise = 0.5f + 0.32f * std::sin(t * f1 + p1) + 0.18f * std::sin(t * f2 + p2);
             const float threshold = Smooth(0.50f, 1.0f, t) * dryness * 1.15f;
             float ink = Smooth(threshold - 0.09f, threshold + 0.09f, noise);
-            // Soft start and end of every bristle.
             ink *= Smooth(begin, begin + 0.012f, t) * (1.f - Smooth(limit - 0.035f, limit, t));
             const float press = (0.66f + 0.40f * std::sin(t * kPi * 0.9f + 0.2f)) * (0.80f + 0.35f * (1 - Smooth(0.f, 0.06f, t))) *
                                 (1.f - 0.70f * Smooth(0.70f, 1.f, t));
@@ -198,7 +197,7 @@ void BrushDash(const Canvas& c, float x, float y, float length) {
 
 bool LanguageFlag(const Canvas& c, ImVec2 center, float width, std::string_view language, float alpha) {
     if (language != "pt-BR" && language != "pt-br") return false;
-    // Brazil, in its 10:7 proportions: green field, yellow rhombus, blue disc.
+    // Brazil, 10:7.
     const float w = width, h = width * 0.7f, x0 = center.x - w / 2, y0 = center.y - h / 2;
     c.Rect(x0, y0, x0 + w, y0 + h, Rgb(0x009C3B, alpha), 3);
     const float mx = w * 0.085f, my = h * 0.12f;

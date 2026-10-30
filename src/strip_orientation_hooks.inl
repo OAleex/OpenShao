@@ -57,11 +57,34 @@ X86_FUNC(sub_00133110) {
 }
 
 X86_EXTERN_FUNC(__imp__sub_0017AA40);
+X86_EXTERN_FUNC(sub_0017A6B0);
 X86_FUNC(sub_0017AA40) {
     // Load phase 3 invokes the parser callback after decompression. Render-group
     // construction is too late: the parser has already translated material state.
     const uint32_t room = kernel::R32(0x505970);
-    if ((room == 0xA9 || room == 0xAA || room == 0xBB) && kernel::R32(0x695304) == 3) {
+    bool parsing = kernel::R32(0x695304) == 3;
+    static thread_local bool pipeline_wait = false;
+    static thread_local openshao::pipelines::LoadGate pipeline_gate;
+    static thread_local uint32_t waiting_record = 0;
+    const uint32_t load_record = kernel::R32(0x695310);
+    if (pipeline_wait) {
+        if (load_record == waiting_record && parsing && openshao::pipelines::PipelineLoadPending()) {
+            // The parser already completed. Keep servicing the loading presentation.
+            auto progress = ctx;
+            sub_0017A6B0(progress, base);
+            pipeline_gate.ReturnPending(ctx.esp);
+            return;
+        }
+        openshao::pipelines::EndPipelineLoad();
+        pipeline_wait = false;
+        pipeline_gate.Reset();
+        if (load_record == waiting_record && parsing) kernel::W32(0x695304, 4);
+        parsing = kernel::R32(0x695304) == 3;
+    }
+    if (parsing && !pipeline_wait) openshao::pipelines::BeginPipelineLoad();
+    // The room's recorded pipelines go to the front of the precompile queue while its assets load.
+    openshao::pipelines::RoomLoading(room);
+    if ((room == 0xA9 || room == 0xAA || room == 0xBB) && parsing) {
         const uint32_t record = kernel::R32(0x695310);
         if (record && record <= 0xFFFFFFEFu) {
             const uint32_t data = kernel::R32(record + 8), size = kernel::R32(record + 12);
@@ -75,6 +98,15 @@ X86_FUNC(sub_0017AA40) {
         }
     }
     __imp__sub_0017AA40(ctx, base);
+    if (parsing && kernel::R32(0x695304) == 4) {
+        openshao::pipelines::SealPipelineLoad();
+        if (openshao::pipelines::PipelineLoadPending()) {
+            pipeline_wait = true;
+            pipeline_gate.Parsed(load_record);
+            waiting_record = load_record;
+            kernel::W32(0x695304, 3);
+        } else openshao::pipelines::EndPipelineLoad();
+    }
 }
 
 X86_EXTERN_FUNC(__imp__sub_00120790);

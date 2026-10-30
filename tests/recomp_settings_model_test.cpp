@@ -10,9 +10,20 @@ int main() {
     check(model.Rows()[5].key=="settings.save" && model.Rows()[6].key=="settings.discard","Enhancements must have a separate main-menu entry");
     model.Enter(5);check(model.CurrentPage()==Page::Home,"Saving must not enter a configuration category");
     model.Go(Page::Enhancements);
-    check(model.Title()=="recomp.enhancements" && model.Rows().size()==3 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
-          model.Rows()[1].key=="settings.save" && model.Rows()[2].key=="settings.discard",
-          "The main-menu Enhancements page must expose its toggle and explicit Save/Discard actions");
+    check(model.Title()=="recomp.enhancements" && model.Rows().size()==5 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
+          model.Rows()[1].key=="settings.restore_dialogue" && model.Rows()[1].value=="value.on" &&
+          model.Rows()[2].key=="settings.cinematic_bars" && model.Rows()[2].value=="value.off" &&
+          model.Rows()[3].key=="settings.save" && model.Rows()[4].key=="settings.discard",
+          "The main-menu Enhancements page must expose its toggles and explicit Save/Discard actions");
+    model.Change(2,1);
+    check(openshao::launcher::Merge({},model.Draft())["enhancements"]["cinematic_bars"].value_or(false) && model.Dirty(),
+          "The cinematic bar row must enable and persist the enhancement");
+    model.Discard();model.Go(Page::Enhancements);
+    check(model.Rows()[2].value=="value.off","Discard must restore the cinematic bar preference");
+    model.Change(1,1);
+    check(!model.Draft().restore_dialogue && model.Rows()[1].value=="value.off" && model.Dirty(),
+          "Players must be able to choose the original dialogue behavior");
+    model.Discard();model.Go(Page::Enhancements);
     model.Change(0,1);
     check(openshao::launcher::Merge({},model.Draft())["enhancements"]["scorpion_unfiltered"].value_or(false) && model.Dirty(),
           "Enabling the Scorpion voice preference must edit the settings draft");
@@ -78,6 +89,25 @@ int main() {
     model.Go(Page::Controller);model.Change(0,1);
     check(model.Draft().bindings[0]!="b" && model.Conflict(0).empty(),"Controller cycling must skip inputs owned by other actions");
     model.Discard();check(model.Draft()==original,"Discard must restore the complete opening settings snapshot");
+    model.Go(Page::Graphics);
+    check(model.Rows()[5].value=="value.display_refresh","VSync must identify the display refresh as its output target");
+    model.Change(5,1);
+    check(model.Draft().fps_cap==original.fps_cap,"The inactive software limit must not change while VSync follows the monitor");
+    model.Change(2,1);
+    const auto graphics=model.Rows();
+    const auto rate=std::find_if(graphics.begin(),graphics.end(),[](const auto& row){return row.key=="settings.frame_rate";});
+    check(rate!=graphics.end(),"Graphics must expose the frame rate in Konfigure Recompilation");
+    if(rate!=graphics.end()) {
+        const auto row=size_t(rate-graphics.begin());
+        check(rate->value=="60 FPS","The frame rate row must start at 60 FPS");
+        model.Change(row,1);
+        check(model.Rows()[row].value=="120 FPS" && openshao::launcher::Merge({},model.Draft())["fps_cap"].value_or(0)==120,
+              "The frame rate row must select and persist 120 FPS");
+        check(!model.Draft().vsync,"Changing frame rate must preserve the disabled VSync preference");
+        model.Change(row,1);check(model.Rows()[row].value=="60 FPS","The frame rate must wrap to 60 FPS");
+        model.Change(row,-1);check(model.Rows()[row].value=="120 FPS","The frame rate must wrap backward to 120 FPS");
+        model.Discard();check(model.Draft()==original,"Discard must restore the opening frame rate");
+    }
     for(const auto page:{Page::Display,Page::Graphics,Page::Controls,Page::Controller,Page::Keyboard,Page::KeyboardAlternate,Page::Mouse,Page::Audio,Page::Language}) {
         model.Go(page);
         for(size_t row=0;row<model.Rows().size();++row)for(int repeat=0;repeat<60;++repeat)model.Change(row,repeat%2?1:-1);

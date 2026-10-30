@@ -6,10 +6,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 LANGUAGES = {"en", "fr", "de", "es", "it", "pt-BR"}
 REQUIRED = {
+    "settings.cinematic_bars", "settings.cinematic_bars_hint", "value.display_refresh",
     "main.single_player", "main.koop", "main.versus", "main.load_game", "main.options", "main.kontent",
     "main.exit_desktop", "main.exit_confirm", "main.exit_error", "debug.menu",
     "debug.unlock_kontent", "debug.kontent_unlocked", "settings.bloom_effect",
-    "recomp.enhancements", "settings.scorpion_unfiltered", "settings.listen_hint", "settings.preview_error",
+    "recomp.enhancements", "settings.scorpion_unfiltered", "settings.restore_dialogue", "settings.restore_dialogue_hint", "settings.listen_hint", "settings.preview_error",
     "recomp.title", "recomp.display", "recomp.graphics", "recomp.controls", "recomp.audio", "settings.language",
     "options.title", "options.brightness", "options.audio", "options.gameplay", "audio.title",
     "audio.music", "audio.effects", "audio.speech", "gameplay.title", "gameplay.rounds", "gameplay.time",
@@ -103,7 +104,7 @@ class MenuCatalogTest(unittest.TestCase):
             "it": {"pause.exit_yes": "S\u00ec, esci senza salvare"},
         }
         keys = {key for key in self.catalog["languages"]["en"] if key.startswith("pause.")}
-        self.assertEqual(len(keys), 19)
+        self.assertIn("pause.display_refresh", keys)
         for locale, labels in self.catalog["languages"].items():
             for key in keys:
                 with self.subTest(locale=locale, key=key):

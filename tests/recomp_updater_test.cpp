@@ -24,7 +24,6 @@ std::string Release(const std::string& tag, const std::string& digest, bool chec
 int main(int argc, char** argv) {
     const auto base = fs::temp_directory_path() / ("openshao-updater-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     try {
-        // Release metadata.
         const std::string hash(64, 'a');
         auto parsed = update::ParseLatest(Release("v0.3.1", "sha256:" + std::string(64, 'A'), true));
         Require(parsed.version == "0.3.1", "The tag prefix must be removed");

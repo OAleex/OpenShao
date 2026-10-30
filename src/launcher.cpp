@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +33,7 @@
 #include "controller.h"
 #include "core/log.h"
 #include "file_ops.h"
+#include "frame_rate.h"
 #include "game_setup.h"
 #include "host.h"
 #include "keyboard.h"
@@ -42,6 +44,7 @@
 #include "mouse.h"
 #include "performance_overlay.h"
 #include "runtime_paths.h"
+#include "support_report.h"
 #include "updater.h"
 
 namespace fs = std::filesystem;
@@ -67,7 +70,9 @@ void Apply(const Settings& s, bool save) {
     host.display_mode = s.display_mode == "fullscreen" ? app::DisplayMode::Fullscreen :
                         s.display_mode == "windowed" ? app::DisplayMode::Windowed : app::DisplayMode::Borderless;
     host.width = s.width; host.height = s.height; host.render_percent = s.render_percent;
+    // native_frames raises the cap only while it produces output frames.
     host.fps_cap = FrameRate; host.vsync = s.vsync; host.aniso = s.aniso;
+    frames::Configure(s.fps_cap,s.vsync);
     auto table = Merge({}, s);
     controller::Load(&table);
     mouse::Configure(s.mouse);
@@ -102,7 +107,6 @@ bool PlayWithSavedSettings() {
     return true;
 }
 
-// ---------------------------------------------------------------- platform helpers
 void OpenLocation(const std::string& target) {
 #ifdef _WIN32
     ShellExecuteW(nullptr, L"open", Wide(target).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -158,12 +162,12 @@ bool ChooseGameSource(fs::path& path, bool folder) {
 #endif
 }
 
-// ---------------------------------------------------------------- session
 // Game is the source selection page. It replaces the tabs until a usable game is chosen.
-enum class Page { Play, Mods, Files, About, Game };
+enum class Page { Play, Mods, Files, Support, About, Game };
 const char* PageName(Page page) {
     switch (page) {
         case Page::Mods: return "mods"; case Page::Files: return "files"; case Page::About: return "about";
+        case Page::Support: return "support";
         case Page::Game: return "game"; default: return "play";
     }
 }
@@ -224,7 +228,29 @@ struct Session {
     Page game_return = Page::Play;
     std::unique_ptr<GamePreparation> preparing;
     std::string game_error;
+    std::future<support::Report> report_job;
+    support::Report report;
+    bool report_scanned = false;
     float reveal = 0.f;  // the ensō draws itself once when the launcher opens
+
+    void GenerateReport() {
+        if (report_job.valid()) return;
+        logx::Flush();
+        const auto& log = logx::Path();
+        const support::Source source{paths::Root(), files::FromUtf8(log), mods::RecompVersion};
+        report_job = std::async(std::launch::async, [source] { return support::Generate(source); });
+    }
+    void PollReport() {
+        if (!report_scanned) {
+            report_scanned = true; std::error_code ec;
+            for (const auto& entry : fs::directory_iterator(paths::Root()/"reports",ec)) {
+                if (entry.path().extension() != ".zip" || !entry.is_regular_file(ec)) continue;
+                if (report.zip.empty() || entry.last_write_time(ec) > fs::last_write_time(report.zip,ec)) report.zip = entry.path();
+            }
+        }
+        if (report_job.valid() && report_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+            report = report_job.get();
+    }
 
     void Message(std::string title, std::string text, bool close_after = false) {
         popup = Popup{std::move(title), std::move(text), {}, {}, close_after};
@@ -274,7 +300,6 @@ struct Session {
         result = 0;
     }
 
-    // Opens the selection page, or checks the given path directly and remembers it.
     void ChangeGame(const fs::path& chosen = {}) {
         if (chosen.empty()) {
             if (page != Page::Game) game_return = page;
@@ -327,6 +352,9 @@ struct Session {
 
     void RestoreVideo() {
         auto safe = settings;
+#ifdef _WIN32
+        safe.renderer = "d3d12";
+#endif
         safe.display_mode = "borderless"; safe.width = safe.height = 0; safe.render_percent = 100;
         safe.aspect_ratio = "original"; safe.vsync = true;
         std::string error;
@@ -334,6 +362,17 @@ struct Session {
         catch (const std::exception& e) { Message("Cannot restore video settings", e.what()); return; }
         settings = safe;
         Message("Video settings restored", "The game starts borderless at your desktop resolution with the original aspect ratio.");
+    }
+    void SetRenderer(const std::string& renderer) {
+#ifdef _WIN32
+        if(renderer!="d3d12" && renderer!="vulkan")return;
+        if(settings.renderer==renderer)return;
+        auto desired=settings;desired.renderer=renderer;
+        std::string error;
+        try { if(!Write(paths::Config(),Merge(Disk(),desired),error))throw std::runtime_error(error); }
+        catch(const std::exception& e){Message("Cannot save graphics API",e.what());return;}
+        settings=std::move(desired);
+#endif
     }
     void MoveFolder(bool data, const fs::path& chosen = {}) {
         fs::path selected = chosen;
@@ -372,6 +411,7 @@ struct Session {
 
     bool Animating() const {
         if (reveal < 1.f) return true;
+        if (report_job.valid()) return true;
         if (mods && mods->View().busy) return true;
         if (preparing) return true;
         if (updater) { const auto state = updater->Get().state; return state == update::State::Checking || state == update::State::Downloading; }
@@ -379,7 +419,6 @@ struct Session {
     }
 };
 
-// ---------------------------------------------------------------- drawing
 using art::Canvas;
 using art::Rgb;
 using art::Weight;
@@ -419,14 +458,19 @@ bool Link(const char* id, const Canvas& c, float x, float y, const char* label, 
 }
 
 void TopBar(Session& s, const Canvas& c, float W) {
-    if (s.page == Page::Game) return;
-    const Page pages[] = {Page::Play, Page::Mods, Page::Files, Page::About};
-    const char* labels[] = {"Play", "Mods", "Files", "About"};
+    if (s.page == Page::Game || s.game_required) {
+        const bool support = s.page == Page::Support;
+        if (Link("Support##selection", c, W-40, 28, support ? "Choose game" : "Support", true))
+            s.page = support ? Page::Game : Page::Support;
+        return;
+    }
+    const Page pages[] = {Page::Play, Page::Mods, Page::Files, Page::Support, Page::About};
+    const char* labels[] = {"Play", "Mods", "Files", "Support", "About"};
     float x = W - 40;
-    float xs[4];
-    for (int i = 3; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[i]).x; xs[i] = x; x -= 34; }
+    float xs[5];
+    for (int i = 4; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[i]).x; xs[i] = x; x -= 34; }
     const bool updates = s.mods->View().updates;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         const float width = c.Measure(Weight::Medium, 19, labels[i]).x;
         const auto hit = Item(labels[i], c, xs[i] - 8, 18, xs[i] + width + 8, 56);
         if (hit.clicked) s.page = pages[i];
@@ -439,8 +483,12 @@ void TopBar(Session& s, const Canvas& c, float W) {
 
 void PlayPage(Session& s, const Canvas& c, float W, float H) {
     const float footer = H - 76;
-    const ImVec2 center{W / 2, 96 + (footer - 96) / 2};
-    const float R = std::clamp((footer - 130) * 0.40f, 90.f, 170.f);
+    float content_footer=footer;
+#ifdef _WIN32
+    content_footer-=64;
+#endif
+    const ImVec2 center{W / 2, 96 + (content_footer - 96) / 2};
+    const float R = std::clamp((content_footer - 130) * 0.40f, 90.f, 170.f);
     const float stroke = R * 0.2f;
     const auto view = s.updater ? s.updater->Get() : update::View{};
     const bool updating = view.state == update::State::Downloading || view.state == update::State::Ready;
@@ -463,6 +511,12 @@ void PlayPage(Session& s, const Canvas& c, float W, float H) {
         c.TextCentered(Weight::Regular, 18.5f, center.x + 4, center.y + 22, Rgb(color::Mist), ("Updating to " + view.release.version).c_str());
     }
 
+#ifdef _WIN32
+    const float api_y=footer-48, api_x=W/2-208;
+    c.Text(Weight::Medium,19,api_x,api_y+10,Rgb(color::Mist),"Graphics API");
+    if(Button("##renderer-d3d12",c,api_x+138,api_y,api_x+278,api_y+40,"Direct3D 12",s.settings.renderer=="d3d12",!updating))s.SetRenderer("d3d12");
+    if(Button("##renderer-vulkan",c,api_x+290,api_y,api_x+416,api_y+40,"Vulkan",s.settings.renderer=="vulkan",!updating))s.SetRenderer("vulkan");
+#endif
     c.Rule(40, W - 40, footer);
     const float y = H - 50;
     const bool ready = !s.source.empty();
@@ -526,7 +580,6 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         if (ChooseModArchive(file)) s.InstallModFile(file);
     }
     float top = 200;
-    // Operation status: progress while busy, or the last error.
     if (view.busy && !view.checking) {
         c.Text(Weight::Medium, 18.5f, 48, 176, Rgb(color::Paper), view.status.c_str());
         if (Link("Cancel##modop", c, right, 176, "Cancel", true)) s.mods->Cancel();
@@ -626,8 +679,8 @@ void FilesPage(Session& s, const Canvas& c, float W, float) {
     if (Button("Move##data", c, right - 84, y + 16, right, y + 50, "Move", false, !locked)) s.MoveFolder(true);
     if (Button("Open##data", c, right - 180, y + 16, right - 96, y + 50, "Open", false)) OpenLocation(files::Utf8(paths::Root()));
     y += 66;
-    row("Logs", "Include the latest log when you report a problem.", 1);
-    if (Button("Open##logs", c, right - 84, y + 16, right, y + 50, "Open", false)) OpenLocation(files::Utf8(paths::Logs()));
+    row("Reports", "Generate a diagnostic ZIP in Support.", 1);
+    if (Button("Support##files", c, right - 84, y + 16, right, y + 50, "Support", false)) s.page = Page::Support;
     y += 66;
     row("Video", "Restore the display settings if the game does not start correctly.", 1);
     if (Button("Restore##video", c, right - 84, y + 16, right, y + 50, "Restore", false)) s.RestoreVideo();
@@ -638,6 +691,31 @@ void FilesPage(Session& s, const Canvas& c, float W, float) {
     const auto toggle = Item("##check-updates", c, right - 38, y + 22, right, y + 44);
     art::Toggle(c, right - 38, y + 22, s.check_updates, toggle.hovered);
     if (toggle.clicked) s.SetCheckUpdates(!s.check_updates);
+}
+
+void SupportPage(Session& s, const Canvas& c, float W, float) {
+    Header(c, "Support", "Create a diagnostic ZIP and attach it to your GitHub issue.");
+    const float right = W-48;
+    const bool busy = s.report_job.valid();
+    c.Rule(48,right,200);
+    c.Text(Weight::SemiBold,22,48,224,Rgb(color::Paper),"Diagnostic report");
+    c.Text(Weight::Regular,19,48,260,Rgb(color::Mist),
+        "Includes session logs, selected settings, mod versions, and the latest available crash dump.", right-48);
+    c.Text(Weight::Regular,19,48,310,Rgb(color::Mist),
+        "Text logs filter account and computer names, personal paths and credentials.\nSaves, game files and screenshots are excluded.", right-48);
+    if(Button("Generate##support",c,48,382,244,424,busy?"Generating...":"Generate report",true,!busy)) s.GenerateReport();
+    if(Button("Folder##support",c,260,382,432,424,"Open reports",false)) {
+        const auto folder=paths::Root()/"reports";std::error_code ec;fs::create_directories(folder,ec);
+        OpenLocation(files::Utf8(folder));
+    }
+    c.Rule(48,right,450);
+    if(!s.report.error.empty()) c.Text(Weight::Regular,19,48,470,Rgb(color::Warning),s.report.error.c_str(),right-48);
+    else if(!s.report.zip.empty()) {
+        c.Text(Weight::Medium,19,48,470,Rgb(color::Paper),c.Fit(Weight::Medium,19,right-210,files::Utf8(s.report.zip.filename())).c_str());
+        if(Link("Show##support",c,right,470,"Show ZIP",true)) support::OpenReport(s.report.zip);
+    } else c.Text(Weight::Regular,19,48,470,Rgb(color::Mist),"No diagnostic ZIP has been generated yet.");
+    c.Text(Weight::Regular,19,48,518,Rgb(color::Mist),"Describe what happened and how to reproduce it.",right-250);
+    if(Button("Report##support",c,right-166,512,right,554,"Report a bug",false)) OpenLocation("https://github.com/OAleex/OpenShao/issues/new");
 }
 
 void AboutPage(Session&, const Canvas& c, float W, float) {
@@ -740,11 +818,9 @@ void GamePage(Session& s, const Canvas& c, float W, float H) {
         c.Rect(48, y + 24, 104, y + 80, Rgb(color::Slate), 12);
         const ImU32 ink = Rgb(color::Ember, hit.hovered ? 1.f : 0.85f);
         if (choice.folder) {
-            // A folder: tab and body.
             c.Rect(62, y + 39, 76, y + 46, ink, 2);
             c.Rect(62, y + 43, 90, y + 64, ink, 3);
         } else {
-            // A disc with its centre hole.
             c.list->AddCircleFilled(c.P(76, y + 52), c.S(16), ink, 40);
             c.list->AddCircleFilled(c.P(76, y + 52), c.S(4.5f), Rgb(color::Slate), 24);
             c.list->AddCircle(c.P(76, y + 52), c.S(9), Rgb(color::Slate, 0.35f), 32, c.S(1));
@@ -752,7 +828,6 @@ void GamePage(Session& s, const Canvas& c, float W, float H) {
         const float text_x = 124, button_w = c.Measure(Weight::SemiBold, 19, choice.action).x + 40;
         c.Text(Weight::SemiBold, 22, text_x, y + 24, Rgb(color::Paper), choice.title);
         c.Text(Weight::Regular, 19, text_x, y + 56, Rgb(color::Mist), c.Fit(Weight::Regular, 19, right - text_x - button_w - 24, choice.text).c_str());
-        // The game file is the usual choice; the folder button is secondary.
         const float by = y + (row_h - 38) / 2;
         if (!choice.folder) c.Rect(right - button_w, by, right, by + 38, Rgb(hit.hovered ? 0xE8826C : color::Ember), 9);
         else c.Outline(right - button_w, by, right, by + 38, Rgb(hit.hovered ? color::Dim : color::Line), 9);
@@ -767,6 +842,7 @@ void GamePage(Session& s, const Canvas& c, float W, float H) {
 
 void Draw(Session& s, float scale) {
     s.PollGame();
+    s.PollReport();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float W = viewport->Size.x / scale, H = viewport->Size.y / scale;
     ImGui::SetNextWindowPos(viewport->Pos);
@@ -783,12 +859,12 @@ void Draw(Session& s, float scale) {
         case Page::Play: PlayPage(s, c, W, H); break;
         case Page::Mods: ModsPage(s, c, W, H); break;
         case Page::Files: FilesPage(s, c, W, H); break;
+        case Page::Support: SupportPage(s, c, W, H); break;
         case Page::About: AboutPage(s, c, W, H); break;
         case Page::Game: GamePage(s, c, W, H); break;
     }
     ImGui::EndDisabled();
     ImGui::End();
-    // The popup has its own window, above the page and its scrolling list.
     if (modal) {
         ImGui::SetNextWindowPos(viewport->Pos);
         ImGui::SetNextWindowSize(viewport->Size);
@@ -809,11 +885,10 @@ void Draw(Session& s, float scale) {
     } else if (!modal && !io.NavVisible) {
         if (s.page == Page::Play && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) s.Play();
         else if (s.page == Page::Game && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) s.LeaveGame();
-        else if (s.page != Page::Play && s.page != Page::Game && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) s.page = Page::Play;
+        else if (s.page != Page::Play && s.page != Page::Game && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) s.page = s.game_required ? Page::Game : Page::Play;
     }
 }
 
-// ---------------------------------------------------------------- controller shortcuts
 // A, B and the shoulder buttons work in the launcher. The game configures controllers again when it starts.
 class Gamepads {
 public:
@@ -844,13 +919,20 @@ public:
             return;
         }
         if (s.page == Page::Game) {
+            if (pressed[2] || pressed[3]) { s.page = Page::Support; return; }
             if (pressed[0]) s.ChooseGame(false);
             if (pressed[1]) s.LeaveGame();
             return;
         }
+        if (s.game_required) {
+            if (pressed[1] || pressed[2] || pressed[3]) s.page = Page::Game;
+            else if (pressed[0] && s.page == Page::Support) s.GenerateReport();
+            return;
+        }
         if (pressed[0] && s.page == Page::Play) s.Play();
+        else if (pressed[0] && s.page == Page::Support) s.GenerateReport();
         if (pressed[1]) s.page = Page::Play;
-        if (pressed[2] || pressed[3]) s.page = Page((int(s.page) + (pressed[3] ? 1 : 3)) % 4);
+        if (pressed[2] || pressed[3]) s.page = Page((int(s.page) + (pressed[3] ? 1 : 4)) % 5);
     }
 private:
     bool active_ = false;
@@ -858,7 +940,6 @@ private:
     bool previous_[4] = {};
 };
 
-// ---------------------------------------------------------------- automated checks
 // --launcher-test runs the launcher without a window. Tests append commands to commands.txt
 // and read state.json, which reflects every frame.
 class Automation {
@@ -883,7 +964,13 @@ public:
             << "\",\"popup\":";
         if (s.popup) out << "{\"title\":\"" << Escape(s.popup->title) << "\",\"text\":\"" << Escape(s.popup->text) << "\"}";
         else out << "null";
-        out << ",\"mods_busy\":" << (view.busy ? "true" : "false") << ",\"mods_error\":\"" << Escape(view.error) << "\",\"mods\":[";
+        out << ",\"renderer\":\"" << s.settings.renderer << "\",\"renderer_selectable\":"
+#ifdef _WIN32
+            << "true"
+#else
+            << "false"
+#endif
+            << ",\"mods_busy\":" << (view.busy ? "true" : "false") << ",\"mods_error\":\"" << Escape(view.error) << "\",\"mods\":[";
         bool first = true;
         for (const auto& mod : mods::DisplayMods(view)) {
             const mods::Installed* installed = nullptr;
@@ -893,7 +980,8 @@ public:
             first = false;
         }
         out << "],\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
-            << ",\"game_error\":\"" << Escape(s.game_error) << "\"}";
+            << ",\"game_error\":\"" << Escape(s.game_error) << "\",\"report_busy\":" << (s.report_job.valid()?"true":"false")
+            << ",\"report_path\":\"" << Escape(files::Utf8(s.report.zip)) << "\",\"report_error\":\"" << Escape(s.report.error) << "\"}";
         const auto text = out.str();
         if (text == last_) return;
         // A test that is reading the file can block the replacement; the next frame tries again.
@@ -917,10 +1005,11 @@ private:
         const auto argument = space == line.npos ? std::string{} : line.substr(space + 1);
         LOGI("launcher test: %s", line.c_str());
         if (command == "page") {
-            // The tabs are hidden while a game is required.
-            if (!s.game_required)
+            if (argument == "support") s.page = Page::Support;
+            else if (!s.game_required)
                 for (Page page : {Page::Play, Page::Mods, Page::Files, Page::About}) if (argument == PageName(page)) s.page = page;
         }
+        else if (command == "generate-report") s.GenerateReport();
         else if (command == "play") s.Play();
         else if (command == "close") s.Close();
         else if (command == "confirm") s.Accept();
@@ -928,6 +1017,7 @@ private:
         else if (command == "choose-game") s.ChangeGame(argument.empty() ? fs::path{} : files::FromUtf8(argument));
         else if (command == "game-back") s.LeaveGame();
         else if (command == "restore-video") s.RestoreVideo();
+        else if (command == "renderer") s.SetRenderer(argument);
         else if (command == "check-updates") s.SetCheckUpdates(argument == "on");
         else if (command == "mods-refresh") s.mods->Refresh();
         else if (command == "mod-install") s.InstallMod(argument);
@@ -947,7 +1037,6 @@ bool CheckUpdatesEnabled() {
     try { return Disk()["launcher"]["check_updates"].value_or(true); } catch (...) { return true; }
 }
 
-// Runs the launcher without a window for --launcher-test.
 bool RunAutomated(Session& s) {
     s.mods = std::make_unique<mods::Browser>(paths::Mods());
     if (!paths::MoveWarning().empty()) s.Message("Folder move", paths::MoveWarning());
@@ -1049,6 +1138,7 @@ bool ShouldPersist() { return persist.load(); }
 void Load(const void* raw) {
     const auto& table = *static_cast<const toml::table*>(raw);
     current = Read(table); app::Get().fps_cap = FrameRate;
+    frames::Configure(current.fps_cap,current.vsync);
     controller::Load(raw); keyboard::Configure(current.keyboard); mouse::Configure(current.mouse); performance::SetVisible(current.show_fps);
     if (!options.language_pack.empty() && !options.resume_main_menu) current.language = "pt-BR";
     Publish();
@@ -1056,6 +1146,7 @@ void Load(const void* raw) {
 void Save(void* raw) {
     std::lock_guard guard(settings_mutex);
     auto& table = *static_cast<toml::table*>(raw);
+    table.insert_or_assign("renderer",current.renderer);
     table.insert_or_assign("language", requested_language.empty()?current.language:requested_language); table.insert_or_assign("master_volume", current.master_volume);
     table.insert_or_assign("voice_language",requested_voice_language.empty()?current.voice_language:requested_voice_language);
     table.erase("blur"); table.erase("bloom");
@@ -1093,12 +1184,14 @@ bool ApplyInGame(const Settings& settings,bool save,std::string& error) {
     current=settings;
     // Resource archives and font atlases stay coherent until the next boot.
     current.language=previous.language;current.voice_language=previous.voice_language;
+    current.renderer=previous.renderer;
     Publish();
     auto& host=app::Get();
     host.display_mode=settings.display_mode=="fullscreen"?app::DisplayMode::Fullscreen:
         settings.display_mode=="windowed"?app::DisplayMode::Windowed:app::DisplayMode::Borderless;
     host.width=settings.width;host.height=settings.height;host.render_percent=settings.render_percent;
     host.vsync=settings.vsync;host.aniso=settings.aniso;
+    frames::Configure(settings.fps_cap,settings.vsync);
     controller::Configure(settings);keyboard::Configure(settings.keyboard);mouse::Configure(settings.mouse);performance::SetVisible(settings.show_fps);
     if(previous.display_mode!=settings.display_mode || previous.width!=settings.width || previous.height!=settings.height)
         app::ApplyDisplay();

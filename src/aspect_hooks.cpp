@@ -1,4 +1,5 @@
 #include "aspect_ratio.h"
+#include "launcher.h"
 #include "menu_renderer.h"
 #include "recomp_settings.h"
 #include "cpu/x86_context.h"

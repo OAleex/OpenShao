@@ -1,4 +1,5 @@
 #pragma once
+#include <bitset>
 #include <cstdint>
 #include <string_view>
 struct X86Context;
@@ -11,6 +12,8 @@ void MainExtraLabel(X86Context& ctx,uint32_t first,uint32_t end,bool selected,bo
 void MainRowAnchor(uint32_t first,uint32_t end);
 void DimMenuLabel(uint32_t first,uint32_t end,bool selected);
 void BeginFrame();
+std::bitset<512> FrameArrows();
+void SetFrameArrows(const std::bitset<512>& arrows);
 bool ViewportArrow(uint32_t index);
 void BeginScene();
 void EndScene(X86Context& ctx);

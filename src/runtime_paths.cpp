@@ -16,6 +16,7 @@
 #include <memory>
 #include <toml++/toml.hpp>
 #include "runtime_paths.h"
+#include "support_report.h"
 #include "core/log.h"
 #include "host.h"
 #include "legacy_folders.h"
@@ -139,45 +140,17 @@ std::string Description() {
     stream << toml::json_formatter{values};
     return stream.str();
 }
-std::wstring ErrorText(const std::wstring& reason, const fs::path& dump) {
-    std::wstring message = reason;
-    const auto& log = logx::Path();
-    if (log.empty()) message += L"\n\nThe session log is unavailable.";
-    else message += L"\n\nLog:\n" + fs::path(std::u8string(log.begin(), log.end())).wstring();
-    if (!dump.empty()) message += L"\n\nCrash report:\n" + dump.wstring();
-    message += L"\n\nApplication data:\n" + Root().wstring();
-    message += L"\n\nClose this message to open the application data folder.\nInclude the log when you report this problem.";
-    return message;
-}
 void ReportError(const std::wstring& reason, const fs::path& dump) {
+    LOGE("Application error: %s", Utf8(fs::path(reason)).c_str());
+    logx::Flush();
     static std::atomic_flag displayed = ATOMIC_FLAG_INIT;
     if (options.background || displayed.test_and_set()) return;
-    const auto message = ErrorText(reason, dump);
-#ifndef _WIN32
-    const auto text = Utf8(fs::path(message));
-    std::fprintf(stderr, "%s\n", text.c_str());
-    linux_platform::ShowError("OpenShao", text);
+    support::StopMonitor();
+    const auto text = Utf8(fs::path(reason));
+    const auto& path = logx::Path();
+    const auto report = support::Generate({Root(), fs::path(std::u8string(path.begin(),path.end())), OPENSHAO_RECOMP_VERSION, "error", text, dump});
+    support::ShowReport(report, text);
+    LOGR("Error dialog closed.");
     logx::Flush();
-    LOGR("Error dialog closed. Application data folder: %s", Utf8(Root()).c_str());
-    linux_platform::OpenFolder(Root());
-    return;
-#else
-    // A diagnostic on a private desktop must not open Explorer on the user's desktop.
-    wchar_t current[256]{}, input[256]{}; DWORD needed = 0;
-    const auto desktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
-    const bool interactive = desktop &&
-        GetUserObjectInformationW(GetThreadDesktop(GetCurrentThreadId()), UOI_NAME, current, sizeof(current), &needed) &&
-        GetUserObjectInformationW(desktop, UOI_NAME, input, sizeof(input), &needed) && std::wstring(current) == input;
-    if (desktop) CloseDesktop(desktop);
-    DWORD foreground_process = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
-    if (interactive && foreground_process == GetCurrentProcessId()) ClipCursor(nullptr);
-    MessageBoxW(nullptr, message.c_str(), L"OpenShao", MB_OK | MB_ICONERROR);
-    logx::Flush();
-    LOGR("Error dialog closed. Application data folder: %s", Utf8(Root()).c_str());
-    if (interactive) {
-        ShellExecuteW(nullptr, L"open", Root().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    }
-#endif
 }
 }

@@ -110,12 +110,13 @@ Page CurrentPage(){return page;}
 bool Capturing(){return capturing;}
 unsigned RowCount() {
     switch(page) {
-    case Page::Categories:case Page::Controls:case Page::Controller:
+    case Page::Controls:case Page::Controller:
     case Page::Keyboard:case Page::KeyboardAlternate:return 6;
+    case Page::Categories:return 5;
     case Page::Mouse:return mapping_page==2?5:6;
-    case Page::Graphics:return 4;
-    case Page::Display:return 5;
-    case Page::Audio:case Page::Interface:case Page::DisplayConfirm:return 2;
+    case Page::Graphics:return MaxRows;
+    case Page::Display:return 4;
+    case Page::Audio:case Page::DisplayConfirm:return 2;
     }
     return 0;
 }
@@ -131,9 +132,8 @@ std::string RowText(unsigned row) {
        row<3 && capture_row==mapping_page*3+row)return Clip(status);
     switch(page) {
     case Page::Categories: {
-        static constexpr std::array<std::string_view,6> keys{
-            "recomp.controls","recomp.graphics","pause.video","recomp.audio",
-            "pause.interface","settings.back_hint"};
+        static constexpr std::array<std::string_view,5> keys{
+            "recomp.display","recomp.graphics","recomp.controls","recomp.audio","settings.back_hint"};
         return Clip(Local(keys[row]));
     }
     case Page::Controls:
@@ -147,9 +147,12 @@ std::string RowText(unsigned row) {
         }
     case Page::Graphics:
         switch(row) {
-        case 0:return pair(Local("settings.bloom_effect"),on(s.bloom_effect));
+        case 0:return pair(Local("pause.scale"),std::to_string(s.render_percent)+"%");
         case 1:return pair(Local("pause.aniso"),s.aniso?std::to_string(s.aniso)+"x":"0");
-        case 2:return pair(Local("pause.scale"),std::to_string(s.render_percent)+"%");
+        case 2:return pair(Local("settings.vsync"),on(s.vsync));
+        case 3:return pair(Local("settings.bloom_effect"),on(s.bloom_effect));
+        case 4:return pair(Local("settings.fps"),on(s.show_fps));
+        case 5:return pair(Local("settings.frame_rate"),s.vsync?Local("pause.display_refresh"):std::to_string(s.fps_cap)+" FPS");
         default:return back;
         }
     case Page::Display:
@@ -160,11 +163,9 @@ std::string RowText(unsigned row) {
         // caption may be clipped in the narrower retail SELECT frame.
         case 1:return pair(Local("pause.resolution"),s.width&&s.height?std::to_string(s.width)+"x"+std::to_string(s.height):Local("value.auto"));
         case 2:return pair(Local("pause.aspect"),s.aspect_ratio=="original"?"4:3":s.aspect_ratio);
-        case 3:return pair(Local("settings.vsync"),on(s.vsync));
         default:return back;
         }
     case Page::Audio:return row==0?pair(Local("settings.master"),std::to_string(s.master_volume)+"%"):back;
-    case Page::Interface:return row==0?pair(Local("settings.fps"),on(s.show_fps)):back;
     case Page::Controller:case Page::Keyboard:case Page::KeyboardAlternate: {
         if(row<3) {
             const auto action=mapping_page*3+row;
@@ -211,8 +212,8 @@ bool Back() {
 bool Choose(unsigned row) {
     if(row>=RowCount() || capturing)return false;
     if(page==Page::Categories) {
-        if(row==5)return true;
-        page=std::array{Page::Controls,Page::Graphics,Page::Display,Page::Audio,Page::Interface}[row];mapping_page=0;return false;
+        if(row==4)return true;
+        page=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio}[row];mapping_page=0;return false;
     }
     if(page==Page::DisplayConfirm) {
         if(row==1){UndoDisplay();return false;}
@@ -225,21 +226,21 @@ bool Choose(unsigned row) {
         }
         display_trial=false;page=Page::Display;return false;
     }
-    if((page==Page::Controls && row==5) || (page==Page::Graphics && row==3) ||
-       (page==Page::Display && row==4) || ((page==Page::Audio || page==Page::Interface) && row==1) ||
-       ((page==Page::Controller || page==Page::Keyboard || page==Page::KeyboardAlternate) && row==5) ||
-       (page==Page::Mouse && row==RowCount()-1))return Back();
+    if(row==RowCount()-1)return Back();
     auto next=launcher::Current();
     if(page==Page::Controls) {
         if(row<3){page=std::array{Page::Controller,Page::Keyboard,Page::Mouse}[row];mapping_page=0;return false;}
         if(row==3)next.deadzone=next.deadzone>=.5?0.:std::round((next.deadzone*100+5))/100.;
         if(row==4)next.rumble=!next.rumble;
     } else if(page==Page::Graphics) {
-        if(row==0)next.bloom_effect=!next.bloom_effect;
+        if(row==0)next.render_percent=next.render_percent>=400?25:std::min(400,next.render_percent+5);
         if(row==1)Cycle(next.aniso,std::array{0,2,4,8,16});
-        if(row==2)Cycle(next.render_percent,std::array{50,75,100,125,150,200});
+        if(row==2)next.vsync=!next.vsync;
+        if(row==3)next.bloom_effect=!next.bloom_effect;
+        if(row==4)next.show_fps=!next.show_fps;
+        if(row==5 && !next.vsync)Cycle(next.fps_cap,std::array{60,120});
     } else if(page==Page::Display) {
-        if(row==0)Cycle(next.display_mode,std::array<std::string,3>{"borderless","windowed","fullscreen"});
+        if(row==0)Cycle(next.display_mode,std::array<std::string,3>{"fullscreen","borderless","windowed"});
         if(row==1) {
             constexpr std::array<std::pair<int,int>,7> sizes{{{0,0},{640,480},{960,540},{1280,720},{1600,900},{1920,1080},{2560,1440}}};
             const auto it=std::find(sizes.begin(),sizes.end(),std::pair{next.width,next.height});
@@ -250,7 +251,6 @@ bool Choose(unsigned row) {
             auto it=std::find(modes.begin(),modes.end(),next.aspect_ratio);
             next.aspect_ratio=modes[it==modes.end()?0:size_t(it-modes.begin()+1)%modes.size()];
         }
-        if(row==3)next.vsync=!next.vsync;
         if(row<=2 && next!=launcher::Current()) {
             original_display=launcher::Current();proposed_display=next;
             if(Apply(next,false)) {
@@ -261,8 +261,6 @@ bool Choose(unsigned row) {
         }
     } else if(page==Page::Audio) {
         if(row==0)next.master_volume=next.master_volume>=100?0:next.master_volume+10;
-    } else if(page==Page::Interface) {
-        if(row==0)next.show_fps=!next.show_fps;
     } else if(page==Page::Controller || page==Page::Keyboard || page==Page::KeyboardAlternate) {
         if(row<3){BeginCapture(row);return false;}
         if(row==3){mapping_page=(mapping_page+7)%8;return false;}

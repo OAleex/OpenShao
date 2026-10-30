@@ -32,8 +32,8 @@ int main(){
     }
     settings.language="pt-BR";settings.voice_language="pt-BR";
     Open();
-    assert(RowCount()==6 && RowText(0)=="Controles" && RowText(5)=="Voltar");
-    assert(!Choose(0) && CurrentPage()==Page::Controls && RowCount()==6);
+    assert(RowCount()==5 && RowText(0)=="Tela" && RowText(4)=="Voltar");
+    assert(!Choose(2) && CurrentPage()==Page::Controls && RowCount()==6);
     const auto deadzone=settings.deadzone;
     Choose(3);assert(settings.deadzone!=deadzone && saves==1);
     Choose(4);assert(settings.rumble==false && saves==2);
@@ -65,11 +65,14 @@ int main(){
     assert(settings.mouse.bindings[0]!=mouse_before && saves==8);
     assert(!Back() && CurrentPage()==Page::Controls);
     assert(!Back() && CurrentPage()==Page::Categories);
-    Choose(1);assert(CurrentPage()==Page::Graphics && RowCount()==4);
-    Choose(0);assert(settings.bloom_effect && saves==9);
+    Choose(1);assert(CurrentPage()==Page::Graphics && RowCount()==7);
+    assert(RowText(0).find("Escala")!=std::string::npos && RowText(1).find("Aniso")!=std::string::npos);
+    assert(RowText(2).find("V-Sync")!=std::string::npos && RowText(3).find("Bloom")!=std::string::npos);
+    assert(RowText(4).find("FPS")!=std::string::npos && RowText(5).find("quadros")!=std::string::npos);
+    Choose(3);assert(settings.bloom_effect && saves==9);
     Choose(1);assert(settings.aniso==2 && saves==10);
-    Choose(2);assert(settings.render_percent==125 && saves==11);
-    Back();Choose(2);assert(CurrentPage()==Page::Display && RowCount()==5);
+    Choose(0);assert(settings.render_percent==105 && saves==11);
+    Back();Choose(0);assert(CurrentPage()==Page::Display && RowCount()==4);
     assert(RowText(1).find("Auto")!=std::string::npos);
     const auto before_mode=settings.display_mode;
     Choose(0);assert(CurrentPage()==Page::DisplayConfirm && RowCount()==2 && live==1 && saves==11);
@@ -78,15 +81,27 @@ int main(){
     Choose(0);assert(CurrentPage()==Page::Display && saves==12);
     Choose(2);assert(CurrentPage()==Page::DisplayConfirm && settings.aspect_ratio!="original");
     Close();assert(settings.aspect_ratio=="original" && !Capturing());
-    Open();Choose(2);Choose(3);assert(settings.vsync==false && saves==13);
+    Open();Choose(1);Choose(2);assert(settings.vsync==false && saves==13);
     Back();Choose(3);assert(RowCount()==2);
     Choose(0);assert(settings.master_volume==0 && saves==14);
-    Back();Choose(4);Choose(0);assert(settings.show_fps && saves==15);
+    Back();Choose(1);Choose(4);assert(settings.show_fps && saves==15);
     Back();assert(Back());
+    Open();Choose(1);
+    assert(RowText(5).find("60 FPS")!=std::string::npos);
+    const auto vsync=settings.vsync;
+    Choose(5);assert(settings.fps_cap==120 && RowText(5).find("120 FPS")!=std::string::npos && saves==16);
+    assert(settings.vsync==vsync);
+    Choose(5);assert(settings.fps_cap==60 && saves==17);
+    Choose(6);assert(CurrentPage()==Page::Categories);
+    settings.vsync=true;Choose(1);
+    assert(RowText(5).find("Monitor")!=std::string::npos);
+    const auto saved_before=saves;Choose(5);
+    assert(settings.fps_cap==60 && saves==saved_before);
+    Choose(2);assert(!settings.vsync);Choose(5);assert(settings.fps_cap==120);Back();
     for(const auto* locale:{"en","fr","de","es","it","pt-BR"}){
         settings.language=locale;
         Open();
-        for(unsigned category=0;category<5;++category){
+        for(unsigned category=0;category<4;++category){
             Choose(category);
             for(unsigned row=0;row<RowCount();++row)assert(RowText(row).size()<=24);
             Back();

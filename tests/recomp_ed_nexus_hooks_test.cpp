@@ -39,12 +39,12 @@ bool Exit(){++desktop_exits;return true;}
 void Open(){current=Page::Categories;}
 void Close(){current=Page::Categories;}
 Page CurrentPage(){return current;}
-unsigned RowCount(){return current==Page::Categories||current==Page::Controls?6:current==Page::Graphics?4:current==Page::Display?5:2;}
+unsigned RowCount(){return current==Page::Categories?5:current==Page::Controls?6:current==Page::Graphics?7:current==Page::Display?4:2;}
 std::string RowText(unsigned row){return "Entry "+std::to_string(unsigned(current))+" "+std::to_string(row)+" " +std::to_string(toggles);}
 bool Choose(unsigned row){
     if(current==Page::Categories){
-        if(row==5)return true;
-        current=std::array{Page::Controls,Page::Graphics,Page::Display,Page::Audio,Page::Interface}[row];return false;
+        if(row==4)return true;
+        current=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio}[row];return false;
     }
     if(row==RowCount()-1){current=Page::Categories;return false;}
     ++toggles;return false;
@@ -175,8 +175,8 @@ X86_FUNC(__imp__sub_00012BA8) {
             Check(result.esp==0x1004 && result.eax==0,"custom pause action preserves native event ABI");
         };
         event(2,4);
-        Check(memory[0x4064]==6 && memory[0x4054]!=rows && memory[0x406c]==0,
-              "recompilation settings opens a native six-row category submenu");
+        Check(memory[0x4064]==5 && memory[0x4054]!=rows && memory[0x406c]==0,
+              "recompilation settings opens the shared display, graphics, controls and audio groups");
         X86Context no_nexus;no_nexus.ecx=0x4ef3c8;memory[0x67c66a]=0x80;
         sub_000142EB(no_nexus,nullptr);
         Check(opens==0,"Nexus X shortcut does not interrupt pause recompilation settings");
@@ -184,26 +184,29 @@ X86_FUNC(__imp__sub_00012BA8) {
         X86Context fps_label;memory[fps_label.esp+4]=memory[submenu_rows];sub_00016992(fps_label,nullptr);
         Check(memory[fps_label.eax]==0x72746e45,
               "native label lookup exposes the first native pause category");
-        event(0,4);
+        event(2,4);
         Check(memory[0x4064]==6 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,
               "controls category opens with controller, keyboard, mouse, deadzone and rumble");
         event(3,4);event(4,4);
         Check(toggles==2,"deadzone and rumble options dispatch through the native menu");
         event(5,4);
-        Check(memory[0x4064]==6 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
+        Check(memory[0x4064]==5 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
               "return from controls restores category navigation");
         event(1,4);
-        Check(memory[0x4064]==4,"graphics category exposes bloom, anisotropy, render scale and back");
+        Check(memory[0x4064]==7,"graphics exposes all six shared controls plus Back");
+        const auto graphics_rows=memory[0x4054];
+        Check(memory[graphics_rows+7*8]==0xffffffff && memory[graphics_rows+7*8+4]==0,
+              "the seventh graphics row retains its own sentinel within expanded guest storage");
+        X86Context last_label;memory[last_label.esp+4]=memory[graphics_rows+6*8];sub_00016992(last_label,nullptr);
+        Check(memory[last_label.eax]==0x72746e45,"the seventh native row has valid owned text storage");
         event(0,4);event(1,4);event(2,4);
         Check(toggles==5,"three live graphics settings dispatch in place");
+        event(6,4);
+        event(0,4);Check(memory[0x4064]==4,"display category exposes screen controls and Back");
         event(3,4);
-        event(2,4);Check(memory[0x4064]==5,"video category exposes five rows");
-        event(4,4);
         event(3,4);Check(memory[0x4064]==2,"audio category exposes volume and back");
         event(1,4);
-        event(4,4);Check(memory[0x4064]==2,"interface category exposes show FPS and back");
-        event(1,4);
-        event(5,4);
+        event(4,4);
         Check(memory[0x4054]==rows && memory[0x4064]==6 && memory[0x406c]==2,
               "Return action restores the original pause list and selection");
         event(4,4);
@@ -217,25 +220,26 @@ X86_FUNC(__imp__sub_00012BA8) {
         sub_00015687(cancel,nullptr);
         Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==4,
               "cancel leaves desktop confirmation and returns to pause");
-        event(2,4);
+        event(2,4);event(2,4);
+        Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,"Back fixture starts inside controls");
         cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
-        Check(memory[0x4064]==6 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
+        Check(memory[0x4064]==5 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
               "custom settings Back event returns to categories before leaving the native menu");
         cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
         Check(memory[0x4054]==rows,"second Back event restores the native pause root");
-        event(2,4);event(0,4);
+        event(2,4);event(2,4);
         const auto before_b=native_pause_events;
         X86Context submenu_b;memory[submenu_b.esp+4]=0x4000;memory[submenu_b.esp+8]=8;
         sub_00015687(submenu_b,nullptr);
-        Check(submenu_b.eax==0 && submenu_b.esp==0x1004 &&
+        Check(submenu_b.eax==1 && submenu_b.esp==0x1004 &&
               openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories &&
               native_pause_events==before_b,
               "B inside controls navigates to categories without closing gameplay pause");
         submenu_b={};memory[submenu_b.esp+4]=0x4000;memory[submenu_b.esp+8]=8;
         sub_00015687(submenu_b,nullptr);
-        Check(memory[0x4054]==rows && native_pause_events==before_b,
+        Check(submenu_b.eax==1 && memory[0x4054]==rows && native_pause_events==before_b,
               "B from categories restores native pause root without leaving gameplay");
         // The pause root uses a distinct retail event handler from the Nexus list.
         const auto pause_events=native_pause_events;

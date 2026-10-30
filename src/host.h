@@ -14,6 +14,7 @@ struct Options {
     bool no_launcher = false;
     bool configure_only = false;
     bool paths = false;
+    bool support_report = false;
     bool validate_disc = false;
     bool register_disc = false;
     bool validate_language_pack = false;

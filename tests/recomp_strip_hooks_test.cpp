@@ -1,4 +1,5 @@
 #include "strip_orientation.h"
+#include "pipeline_assets.h"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +11,15 @@
 static std::array<uint8_t, 0x10000> memory{};
 static uint32_t room = 0xA7;
 static uint32_t load_phase = 0, load_record = 0;
+// The hook's parser/ABI test has no asynchronous compilation work. The actual
+// queue and load gate have their own dependency/completion regression tests.
+namespace openshao::pipelines {
+void RoomLoading(uint32_t){}
+void BeginPipelineLoad(){}
+void SealPipelineLoad(){}
+bool PipelineLoadPending(){return false;}
+void EndPipelineLoad(){}
+}
 static void Check(bool value, const char* text) {
     if (!value) { std::fprintf(stderr, "FAIL: %s\n", text); std::exit(1); }
 }

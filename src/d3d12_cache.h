@@ -9,6 +9,7 @@
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+#include <mutex>
 
 namespace openshao::graphics {
 uint64_t PipelineKey(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, uint64_t root_hash);
@@ -26,11 +27,13 @@ public:
     void StoreShader(uint64_t key, ID3DBlob* blob, double milliseconds);
     HRESULT CreatePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** result);
     void Report() const;
-    const CacheStats& Statistics() const { return stats_; }
+    // Thread safe: precompile workers share the cache with the render thread.
+    CacheStats Statistics() const { std::lock_guard lock(stats_mutex_); return stats_; }
 private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     std::unique_ptr<CacheFile> shaders_, pipelines_;
     uint64_t root_hash_ = 0;
+    mutable std::mutex stats_mutex_;
     CacheStats stats_;
 };
 }

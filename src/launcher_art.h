@@ -23,7 +23,6 @@ struct Canvas {
     ImVec2 origin{};
     ImVec2 P(float x, float y) const { return {origin.x + x * scale, origin.y + y * scale}; }
     float S(float v) const { return v * scale; }
-    // Logical size of the text.
     ImVec2 Measure(Weight weight, float size, const char* text, float wrap = 0.f) const;
     void Text(Weight weight, float size, float x, float y, ImU32 color, const char* text, float wrap = 0.f) const;
     void TextCentered(Weight weight, float size, float cx, float y, ImU32 color, const char* text) const;
@@ -41,10 +40,9 @@ void Background(const Canvas& canvas, float width, float height, ImVec2 light);
 // red body to coral and amber tips; otherwise the stroke uses `rgb`.
 void Enso(const Canvas& canvas, ImVec2 center, float radius, float width, float drawn, float alpha = 1.f,
           uint32_t seed = 11, int bristles = 44, bool flame = true, uint32_t rgb = color::Paper);
-// The warm light around a flame ensō.
 void Glow(const Canvas& canvas, ImVec2 center, float radius, float strength);
 void BrushDash(const Canvas& canvas, float x, float y, float length);
-// Draws the flag of a language pack's language. Returns false when the language has no flag here.
+// Returns false when the language has no flag.
 bool LanguageFlag(const Canvas& canvas, ImVec2 center, float width, std::string_view language, float alpha = 1.f);
 void Toggle(const Canvas& canvas, float x, float y, bool on, bool hovered);
 void ProgressBar(const Canvas& canvas, float x0, float x1, float y, float value);

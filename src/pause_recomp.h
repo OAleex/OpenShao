@@ -8,9 +8,10 @@ enum class Item : uint32_t {
     OpenSettings, OpenExit, ShowFps, Vsync, Bloom, Return, Warning, No, Yes, Count
 };
 enum class Page : uint8_t {
-    Categories, Controls, Graphics, Display, Audio, Interface,
+    Categories, Controls, Graphics, Display, Audio,
     Controller, Keyboard, KeyboardAlternate, Mouse, DisplayConfirm
 };
+inline constexpr unsigned MaxRows=7;
 std::string Text(Item item);
 // Game-font encoded label from the shared localized JSON catalog.
 std::string Localized(std::string_view id);

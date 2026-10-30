@@ -15,30 +15,19 @@ set(OPENSHAO_SHARED_SOURCES
     src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp
     src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
-    src/recomp_settings_model.cpp src/recomp_settings.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
-    src/mouse_state.cpp src/raster_compat.cpp src/ed_nexus.cpp src/pause_recomp.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp
+    src/recomp_settings_model.cpp src/recomp_settings.cpp src/native_frames.cpp src/frame_rate.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
+    src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp
     src/language_pack.cpp src/language_archive.cpp src/language_credits.cpp src/virtual_file.cpp src/mods/runtime.cpp)
 
 # Vulkan: the Khronos headers and glslang's HLSL front end, both pinned. The
 # Vulkan loader itself is opened at run time through SDL, so the executable
 # does not link against libvulkan.
-FetchContent_Declare(vulkan_headers GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-    GIT_TAG 2cd90f9d20df57eac214c148f3aed885372ddcfe)  # v1.4.321
-set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
-set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
-set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
-set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
-set(ENABLE_HLSL ON CACHE BOOL "" FORCE)
-set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(glslang GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
-    GIT_TAG 8a85691a0740d390761a1008b4696f57facd02c4)  # 15.4.0
-FetchContent_MakeAvailable(vulkan_headers glslang)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Vulkan.cmake")
 
 set(OPENSHAO_LINUX_SOURCES
     src/linux/linux_main.cpp src/linux/linux_platform.cpp src/linux/linux_input.cpp
     src/linux/linux_audio.cpp src/linux/linux_launcher_window.cpp src/linux/gpu_select.cpp src/linux/gpu_null.cpp
-    src/linux/vk/vk_api.cpp src/linux/vk/vk_shader.cpp src/linux/vk/vk_backend.cpp src/linux/vk/bc_decode.cpp
+    src/linux/vk/vk_api.cpp src/linux/vk/vk_window.cpp src/linux/vk/vk_shader.cpp src/linux/vk/vk_backend.cpp src/linux/vk/bc_decode.cpp
     "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp")
 
 add_executable(OpenShao ${XBE_RUNTIME_SOURCES} ${OPENSHAO_IMGUI_CORE} ${GEN_SOURCES}
@@ -57,7 +46,7 @@ set_source_files_properties(src/linux/linux_main.cpp PROPERTIES COMPILE_DEFINITI
 target_compile_options(OpenShao PRIVATE -fno-strict-aliasing -march=x86-64-v2)
 # libstdc++ and libgcc go into the executable: the player's distribution only has to supply glibc
 target_link_options(OpenShao PRIVATE -fuse-ld=lld -static-libstdc++ -static-libgcc)
-target_link_libraries(OpenShao PRIVATE openshao_mods miniz tomlplusplus::tomlplusplus SDL3::SDL3-static Threads::Threads
+target_link_libraries(OpenShao PRIVATE openshao_support openshao_mods miniz tomlplusplus::tomlplusplus SDL3::SDL3-static Threads::Threads
     Vulkan::Headers glslang::glslang glslang::glslang-default-resource-limits ${CMAKE_DL_LIBS})
 
 # Regression tests that do not depend on Windows.
@@ -83,8 +72,9 @@ openshao_linux_test(recomp_mouse SOURCES tests/recomp_mouse_test.cpp src/mouse_s
 openshao_linux_test(recomp_sfd_lock SOURCES tests/recomp_sfd_lock_test.cpp)
 openshao_linux_test(recomp_vblank SOURCES tests/recomp_vblank_test.cpp)
 openshao_linux_test(recomp_input_mode SOURCES tests/recomp_input_mode_test.cpp)
+openshao_linux_test(recomp_versus_input SOURCES tests/recomp_versus_input_test.cpp src/versus_input.cpp)
 openshao_linux_test(recomp_aspect SOURCES tests/recomp_aspect_test.cpp)
-openshao_linux_test(recomp_aspect_hooks SOURCES tests/recomp_aspect_hooks_test.cpp src/aspect_ratio.cpp LIBS tomlplusplus::tomlplusplus)
+openshao_linux_test(recomp_aspect_hooks SOURCES tests/recomp_aspect_hooks_test.cpp src/aspect_ratio.cpp src/launcher_settings.cpp LIBS tomlplusplus::tomlplusplus)
 openshao_linux_test(recomp_menu_text SOURCES tests/recomp_menu_text_test.cpp src/menu_text.cpp src/mods/json.cpp)
 target_include_directories(recomp_menu_text_test PRIVATE "${GEN}")
 openshao_linux_test(recomp_menu_renderer SOURCES tests/recomp_menu_renderer_test.cpp src/menu_renderer.cpp src/menu_text.cpp src/mods/json.cpp LIBS tomlplusplus::tomlplusplus)
@@ -105,6 +95,7 @@ openshao_linux_test(recomp_portal_hooks SOURCES tests/recomp_portal_hooks_test.c
 openshao_linux_test(recomp_survival5_recovery SOURCES tests/recomp_survival5_recovery_test.cpp)
 add_test(NAME language_pack_preparation COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/language_pack_test.py")
 add_test(NAME recomp_package COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_package_test.py")
+add_test(NAME recomp_renderer_launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_renderer_launcher_test.py" --exe "$<TARGET_FILE:OpenShao>")
 
 install(TARGETS OpenShao RUNTIME DESTINATION .)
 install(FILES resources/readme.txt DESTINATION .)

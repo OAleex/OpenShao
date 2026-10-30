@@ -140,7 +140,7 @@ bool PrepareDirectory(const fs::path& legacy, const fs::path& destination, std::
             if (!fs::is_directory(destination)) throw std::runtime_error("save destination is not a directory");
             // An empty destination must not hide an unmigrated legacy campaign.
             if (legacy.empty() || !fs::exists(legacy) || fs::is_empty(legacy)) return true;
-            if (!fs::is_empty(destination)) return true; // Preserve existing progress.
+            if (!fs::is_empty(destination)) return true;
         }
         fs::create_directories(destination.parent_path());
         staging = destination.parent_path() / (destination.filename().wstring() + L".migrating-" + Unique());
@@ -207,7 +207,9 @@ bool DirectoryLock::Acquire(const fs::path& root, std::string& error, bool* in_u
 #else
 fs::path SavedGamesRoot(std::string& error, bool create) {
     PWSTR path = nullptr;
-    const auto result = SHGetKnownFolderPath(FOLDERID_SavedGames, create ? KF_FLAG_CREATE : KF_FLAG_DEFAULT, nullptr, &path);
+    // A fresh profile may not have created Saved Games yet. Resolve its location
+    // without touching disk; PrepareDirectory creates the selected save root.
+    const auto result = SHGetKnownFolderPath(FOLDERID_SavedGames, create ? KF_FLAG_CREATE : KF_FLAG_DONT_VERIFY, nullptr, &path);
     if (FAILED(result)) { error = "Windows Saved Games folder unavailable (" + std::to_string(result) + ")"; return {}; }
     fs::path out(path); CoTaskMemFree(path); return out / L"OpenShao";
 }

@@ -13,7 +13,7 @@ int main(){
     Check(Near(Resolve("auto",3440,1440),3440.f/1440),"automatic mode uses the actual pixel ratio, not a rounded 21:9 label");
     Check(Near(Resolve("auto",1500,1000),1.5f) && Near(Resolve("auto",1000,1500),2.f/3),"automatic mode supports 3:2 and portrait windows");
     Check(Near(Resolve("auto",0,0),4.f/3),"zero-sized outputs have a safe startup ratio");
-    Check(Near(CameraScale(16.f/9),4.f/3) && Near(CameraScale(32.f/9),8.f/3),"camera scale expands horizontal vision while retaining vertical FOV");
+    Check(Near(CameraScale(4.f/3),4.f/3) && Near(CameraScale(16.f/9),16.f/9) && Near(CameraScale(32.f/9),32.f/9),"camera aspect matches the output ratio (retail 640/480 at 4:3)");
     auto rect=Fit(1920,1080,4.f/3);
     Check(Near(rect.x,240) && Near(rect.y,0) && Near(rect.w,1440) && Near(rect.h,1080),"4:3 presentation is pillarboxed inside 16:9");
     rect=Fit(640,480,32.f/9);

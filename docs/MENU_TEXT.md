@@ -55,11 +55,12 @@ The ornament pointer and selection sparkle share the same row origin after nativ
 
 SELECT retains the original Continue, Options and Exit Game actions. It also offers **Konfigure Recompilation** and **Exit to Desktop**.
 The pause settings use the same embedded JSON catalog and original menu font as the main-menu settings.
-Their five categories are **Controls**, **Graphics**, **Video & Screen**, **Audio** and **Interface**.
+Their categories follow the main menu's order: **Display**, **Graphics**, **Controls** and **Audio**.
 
 Controls offers controller and primary/alternate keyboard remapping, mouse settings, dead zone and vibration.
-Graphics offers Bloom Effect, anisotropic filtering and render scale. Video & Screen offers display mode, resolution, aspect ratio and V-Sync.
-Audio offers master volume. Interface offers Show FPS.
+Graphics follows the main menu's order: render scale, anisotropic filtering, V-Sync, Bloom Effect, Show FPS and frame rate.
+With V-Sync enabled, frame rate shows the display target and retains the stored software cap for later use.
+Display offers display mode, resolution and aspect ratio. Audio offers master volume.
 Pause settings apply and save immediately; they do not use the main-menu draft's Save Changes and Discard and Return actions.
 Controller and keyboard capture reject conflicting bindings. Mouse buttons and wheel mappings cycle through available actions.
 Display mode, resolution and aspect ratio preview changes for 15 seconds and revert unless confirmed.

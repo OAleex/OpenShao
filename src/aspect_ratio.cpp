@@ -35,9 +35,39 @@ void CorrectUiVertices(void* vertices,uint32_t count,uint32_t stride,bool cover)
     }
 }
 bool ExpandViewportTint(void* vertices,uint32_t count,uint32_t stride) {
-    if(!screen_sprite_depth || !vertices || count!=4 || stride!=20)return false;
+    if((!screen_sprite_depth && font_anchor==UiAnchor::None) || !vertices || count!=4 || stride!=20)return false;
     auto* bytes=static_cast<uint8_t*>(vertices);
     float xy[4][2];uint32_t color=0;
+    if(cinematic_sprite) {
+        const auto scale=CanvasScale(Current());
+        for(unsigned i=0;i<4;++i) {
+            std::memcpy(xy[i],bytes+i*stride,8);
+            if(!std::isfinite(xy[i][0]) || !std::isfinite(xy[i][1]))return false;
+        }
+        // The retail masks own their fade and slide animation. Undo only the
+        // fitted UI projection so their black bands span the output viewport.
+        for(unsigned i=0;i<4;++i) {
+            xy[i][0]=(xy[i][0]+.5f)/scale.x-.5f;
+            xy[i][1]=(xy[i][1]+.5f)/scale.y-.5f;
+            std::memcpy(bytes+i*stride,xy[i],8);
+        }
+        return true;
+    }
+    const auto anchor=screen_sprite_depth?sprite_anchor:font_anchor;
+    if(anchor!=UiAnchor::None) {
+        const float ratio=Current();
+        auto offset=AnchorOffset(anchor,ratio);
+        if(anchor==UiAnchor::TutorialPrompt)offset.x-=tutorial_portrait_inset;
+        for(unsigned i=0;i<4;++i) {
+            std::memcpy(xy[i],bytes+i*stride,8);
+            if(!std::isfinite(xy[i][0]) || !std::isfinite(xy[i][1]))return false;
+        }
+        for(unsigned i=0;i<4;++i) {
+            xy[i][0]+=offset.x+SpreadX(anchor,xy[i][0],ratio);xy[i][1]+=offset.y;
+            std::memcpy(bytes+i*stride,xy[i],8);
+        }
+        return true;
+    }
     for(unsigned i=0;i<4;++i) {
         std::memcpy(xy[i],bytes+i*stride,8);
         uint32_t c;std::memcpy(&c,bytes+i*stride+12,4);
@@ -64,9 +94,11 @@ bool ExpandViewportTint(void* vertices,uint32_t count,uint32_t stride) {
     if(tutorial_sprite!=TutorialSprite::None) {
         // Close the native half-pixel band/portrait gap before projection to avoid seams at fractional scales.
         const float extra=320.f*(1/scale.x-1);
+        const float bottom=240.f*(1/scale.y-1);
         for(unsigned i=0;i<4;++i) {
             xy[i][0]+=tutorial_sprite==TutorialSprite::Panel && i<2?-extra:
                 extra-tutorial_portrait_inset+(tutorial_sprite==TutorialSprite::Panel?.5f:0);
+            xy[i][1]+=bottom;
             std::memcpy(bytes+i*stride,xy[i],8);
         }
         return true;

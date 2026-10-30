@@ -10,6 +10,7 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 #include <algorithm>
+#include <exception>
 #include <string>
 #include "launcher_window.h"
 #include "core/log.h"
@@ -21,6 +22,11 @@ namespace {
 constexpr UINT kFrames = 2;
 constexpr wchar_t kClass[] = L"OpenShaoLauncher";
 template <class T> void Release(T*& object) { if (object) { object->Release(); object = nullptr; } }
+bool Succeeded(HRESULT result, const char* operation) {
+    if (SUCCEEDED(result)) return true;
+    LOGE("Launcher: %s failed (HRESULT %08lX)", operation, result);
+    return false;
+}
 }
 
 struct Window::State {
@@ -37,13 +43,14 @@ struct Window::State {
     IDXGISwapChain3* swap = nullptr;
     ID3D12Resource* targets[kFrames] = {};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv[kFrames] = {};
-    bool imgui = false, win32 = false, dx12 = false, closing = false, occluded = false, resized = false;
+    bool imgui = false, win32 = false, dx12 = false, closing = false, occluded = false, resized = false, failed = false;
     float scale = 1.f;
 
     bool Device();
-    void Targets();
+    bool Targets();
     void ReleaseTargets();
-    void Wait();
+    bool Wait();
+    bool Check(HRESULT result, const char* operation);
     void Render();
 };
 
@@ -75,12 +82,13 @@ LRESULT CALLBACK Procedure(HWND window, UINT message, WPARAM wp, LPARAM lp) {
 
 bool Window::State::Device() {
     IDXGIFactory4* factory = nullptr;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
+    if (!Succeeded(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1")) return false;
     // A software adapter keeps the launcher usable on systems without a Direct3D 12 driver.
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+        LOGR("Launcher: hardware Direct3D 12 is unavailable; trying WARP");
         IDXGIAdapter* warp = nullptr;
-        if (SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)))) {
-            D3D12CreateDevice(warp, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
+        if (Succeeded(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "EnumWarpAdapter")) {
+            Succeeded(D3D12CreateDevice(warp, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "D3D12CreateDevice WARP");
             warp->Release();
         }
     }
@@ -88,13 +96,13 @@ bool Window::State::Device() {
     if (ok) {
         D3D12_COMMAND_QUEUE_DESC desc{};
         desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        ok = SUCCEEDED(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue)));
+        ok = Succeeded(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue)), "CreateCommandQueue");
     }
     if (ok) {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         desc.NumDescriptors = kFrames;
-        ok = SUCCEEDED(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&rtv_heap)));
+        ok = Succeeded(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&rtv_heap)), "CreateDescriptorHeap RTV");
         if (ok) {
             const auto step = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
             auto handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
@@ -106,13 +114,13 @@ bool Window::State::Device() {
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         desc.NumDescriptors = 1;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        ok = SUCCEEDED(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&srv_heap)));
+        ok = Succeeded(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&srv_heap)), "CreateDescriptorHeap SRV");
     }
     for (UINT i = 0; ok && i < kFrames; ++i)
-        ok = SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators[i])));
-    if (ok) ok = SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[0], nullptr, IID_PPV_ARGS(&list))) &&
-                 SUCCEEDED(list->Close());
-    if (ok) ok = SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+        ok = Succeeded(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators[i])), "CreateCommandAllocator");
+    if (ok) ok = Succeeded(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[0], nullptr, IID_PPV_ARGS(&list)), "CreateCommandList") &&
+                 Succeeded(list->Close(), "Close initial command list");
+    if (ok) ok = Succeeded(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "CreateFence");
     if (ok) ok = (fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr)) != nullptr;
     if (ok) {
         DXGI_SWAP_CHAIN_DESC1 desc{};
@@ -123,32 +131,43 @@ bool Window::State::Device() {
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         desc.Scaling = DXGI_SCALING_STRETCH;
         IDXGISwapChain1* chain = nullptr;
-        ok = SUCCEEDED(factory->CreateSwapChainForHwnd(queue, window, &desc, nullptr, nullptr, &chain)) &&
-             SUCCEEDED(chain->QueryInterface(IID_PPV_ARGS(&swap)));
+        ok = Succeeded(factory->CreateSwapChainForHwnd(queue, window, &desc, nullptr, nullptr, &chain), "CreateSwapChainForHwnd") &&
+             Succeeded(chain->QueryInterface(IID_PPV_ARGS(&swap)), "QueryInterface swap chain");
         Release(chain);
         if (ok) factory->MakeWindowAssociation(window, DXGI_MWA_NO_ALT_ENTER);
     }
     factory->Release();
-    if (ok) Targets();
-    return ok;
+    return ok && Targets();
 }
 
-void Window::State::Targets() {
+bool Window::State::Check(HRESULT result, const char* operation) {
+    if (Succeeded(result, operation)) return true;
+    failed = closing = true;
+    return false;
+}
+
+bool Window::State::Targets() {
     for (UINT i = 0; i < kFrames; ++i) {
-        swap->GetBuffer(i, IID_PPV_ARGS(&targets[i]));
+        if (!Check(swap->GetBuffer(i, IID_PPV_ARGS(&targets[i])), "GetBuffer")) return false;
         device->CreateRenderTargetView(targets[i], nullptr, rtv[i]);
     }
+    return true;
 }
 
-void Window::State::Wait() {
-    if (!queue || !fence) return;
+bool Window::State::Wait() {
+    if (!queue || !fence || !fence_event) return true;
     const UINT64 value = ++last_fence;
-    queue->Signal(fence, value);
+    if (!Check(queue->Signal(fence, value), "Signal idle fence")) return false;
     if (fence->GetCompletedValue() < value) {
-        fence->SetEventOnCompletion(value, fence_event);
-        WaitForSingleObject(fence_event, INFINITE);
+        if (!Check(fence->SetEventOnCompletion(value, fence_event), "SetEventOnCompletion idle")) return false;
+        if (!fence_event || WaitForSingleObject(fence_event, 10000) != WAIT_OBJECT_0) {
+            LOGE("Launcher: GPU idle wait failed (device HRESULT %08lX)", device->GetDeviceRemovedReason());
+            failed = closing = true;
+            return false;
+        }
     }
     for (auto& v : fence_values) v = 0;
+    return true;
 }
 
 void Window::State::ReleaseTargets() {
@@ -157,20 +176,24 @@ void Window::State::ReleaseTargets() {
 }
 
 void Window::State::Render() {
+    if (failed) return;
     if (resized) {
         resized = false;
         ReleaseTargets();
-        if (FAILED(swap->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0))) return;
-        Targets();
+        if (failed || !Check(swap->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0), "ResizeBuffers") || !Targets()) return;
     }
     if (occluded && swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) return;
     const UINT index = swap->GetCurrentBackBufferIndex();
     if (fence_values[index] && fence->GetCompletedValue() < fence_values[index]) {
-        fence->SetEventOnCompletion(fence_values[index], fence_event);
-        WaitForSingleObject(fence_event, INFINITE);
+        if (!Check(fence->SetEventOnCompletion(fence_values[index], fence_event), "SetEventOnCompletion frame")) return;
+        if (WaitForSingleObject(fence_event, 10000) != WAIT_OBJECT_0) {
+            LOGE("Launcher: GPU frame wait failed (device HRESULT %08lX)", device->GetDeviceRemovedReason());
+            failed = closing = true;
+            return;
+        }
     }
-    allocators[index]->Reset();
-    list->Reset(allocators[index], nullptr);
+    if (!Check(allocators[index]->Reset(), "Reset command allocator") ||
+        !Check(list->Reset(allocators[index], nullptr), "Reset command list")) return;
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = targets[index];
@@ -187,20 +210,23 @@ void Window::State::Render() {
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     list->ResourceBarrier(1, &barrier);
-    list->Close();
+    if (!Check(list->Close(), "Close frame command list")) return;
     ID3D12CommandList* lists[] = {list};
     queue->ExecuteCommandLists(1, lists);
-    occluded = swap->Present(1, 0) == DXGI_STATUS_OCCLUDED;
+    const auto presented = swap->Present(1, 0);
+    if (!Check(presented, "Present")) return;
+    occluded = presented == DXGI_STATUS_OCCLUDED;
     fence_values[index] = ++last_fence;
-    queue->Signal(fence, last_fence);
+    Check(queue->Signal(fence, last_fence), "Signal frame fence");
 }
 
 Window::Window() : s_(new State) {}
 Window::~Window() { Close(); delete s_; }
 float Window::Scale() const { return s_->scale; }
 
-bool Window::Open(const char* title, int width, int height, const std::function<void(float)>& prepare) {
+bool Window::Open(const char* title, int width, int height, const std::function<void(float)>& prepare) try {
     State& s = *s_;
+    s.failed = s.closing = false;
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc{sizeof(wc)};
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -210,7 +236,6 @@ bool Window::Open(const char* title, int width, int height, const std::function<
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kClass;
     RegisterClassExW(&wc);
-    // Size the window for the monitor that will show it.
     POINT cursor{};
     GetCursorPos(&cursor);
     HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
@@ -257,10 +282,21 @@ bool Window::Open(const char* title, int width, int height, const std::function<
         Close(); return false;
     }
     s.dx12 = true;
+    // The backend normally delays fonts and pipelines until NewFrame, after the
+    // window is visible. Validate them now so the native-selector fallback works.
+    if (!ImGui_ImplDX12_CreateDeviceObjects()) {
+        LOGE("Launcher: renderer resources could not be initialized (device HRESULT %08lX)", s.device->GetDeviceRemovedReason());
+        Close(); return false;
+    }
+    LOGR("Launcher: graphics and font resources are ready");
     ShowWindow(s.window, SW_SHOWNORMAL);
     UpdateWindow(s.window);
     SetForegroundWindow(s.window);
     return true;
+} catch (const std::exception& error) {
+    LOGE("Launcher: initialization failed: %s", error.what());
+    Close();
+    return false;
 }
 
 bool Window::BeginFrame(bool animate) {

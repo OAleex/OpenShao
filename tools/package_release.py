@@ -80,7 +80,7 @@ def linux_package(root, exe, output, version):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--exe', required=True, type=Path)
-    parser.add_argument('--version', default='0.3.0')
+    parser.add_argument('--version', default='0.4.0')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]

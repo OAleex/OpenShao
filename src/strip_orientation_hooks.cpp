@@ -1,7 +1,10 @@
 #include "strip_orientation.h"
+#include "pipeline_precompile.h"
+#include "pipeline_assets.h"
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
 #include "core/log.h"
 
 #include "strip_orientation_hooks.inl"
+#include "pipeline_asset_hooks.inl"
 #include "portal_effect_hooks.inl"

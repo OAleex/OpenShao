@@ -104,15 +104,20 @@ bool D3D12Cache::LoadShader(uint64_t key, ComPtr<ID3DBlob>& blob) {
     const auto bytes = shaders_->Get(key);
     if (bytes.empty() || FAILED(D3DCreateBlob(bytes.size(), &blob))) return false;
     std::memcpy(blob->GetBufferPointer(), bytes.data(), bytes.size());
+    std::lock_guard lock(stats_mutex_);
     stats_.shader_hits++;
     return true;
 }
 
 void D3D12Cache::StoreShader(uint64_t key, ID3DBlob* blob, double milliseconds) {
-    stats_.shader_compiles++;
-    stats_.shader_ms += milliseconds;
+    uint64_t compiles;
+    {
+        std::lock_guard lock(stats_mutex_);
+        compiles = ++stats_.shader_compiles;
+        stats_.shader_ms += milliseconds;
+    }
     if (blob && shaders_) shaders_->Put(key, {static_cast<const uint8_t*>(blob->GetBufferPointer()), blob->GetBufferSize()});
-    if (milliseconds >= 8 && stats_.shader_compiles <= 64)
+    if (milliseconds >= 8 && compiles <= 64)
         LOGR("graphics cache: shader %016llx compiled in %.2f ms", static_cast<unsigned long long>(key), milliseconds);
 }
 
@@ -125,22 +130,28 @@ HRESULT D3D12Cache::CreatePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* des
     ComPtr<ID3D12PipelineState> state;
     HRESULT hr = device_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&state));
     const bool hit = !bytes.empty() && SUCCEEDED(hr);
-    if (FAILED(hr) && !bytes.empty()) {
-        stats_.pipeline_rejects++;
+    const bool rejected = FAILED(hr) && !bytes.empty();
+    if (rejected) {
         d.CachedPSO = {};
         state.Reset();
         hr = device_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&state));
     }
-    if (hit) stats_.pipeline_hits++;
-    else stats_.pipeline_creates++;
     const double elapsed = Milliseconds(start);
-    stats_.pipeline_ms += elapsed;
+    uint64_t made;
+    {
+        std::lock_guard lock(stats_mutex_);
+        stats_.pipeline_rejects += rejected;
+        if (hit) stats_.pipeline_hits++;
+        else stats_.pipeline_creates++;
+        stats_.pipeline_ms += elapsed;
+        made = stats_.pipeline_creates + stats_.pipeline_hits;
+    }
     if (SUCCEEDED(hr) && !hit && pipelines_) {
         ComPtr<ID3DBlob> cached;
         if (SUCCEEDED(state->GetCachedBlob(&cached)) && cached && cached->GetBufferSize())
             pipelines_->Put(key, {static_cast<const uint8_t*>(cached->GetBufferPointer()), cached->GetBufferSize()});
     }
-    if (elapsed >= 8 && stats_.pipeline_creates + stats_.pipeline_hits <= 64)
+    if (elapsed >= 8 && made <= 64)
         LOGR("graphics cache: pipeline %016llx %s in %.2f ms", static_cast<unsigned long long>(key), hit ? "restored" : "created", elapsed);
     if (FAILED(hr)) { *result = nullptr; return hr; }
     return state.CopyTo(iid, result);
@@ -148,10 +159,11 @@ HRESULT D3D12Cache::CreatePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* des
 
 void D3D12Cache::Report() const {
     if (!shaders_ || !pipelines_) return;
+    const CacheStats stats = Statistics();
     LOGR("graphics cache: session shaders hit=%llu compiled=%llu compile_ms=%.2f; pipelines hit=%llu created=%llu rejected=%llu create_ms=%.2f; saved shaders=%llu pipelines=%llu io_errors=%llu",
-         static_cast<unsigned long long>(stats_.shader_hits), static_cast<unsigned long long>(stats_.shader_compiles), stats_.shader_ms,
-         static_cast<unsigned long long>(stats_.pipeline_hits), static_cast<unsigned long long>(stats_.pipeline_creates),
-         static_cast<unsigned long long>(stats_.pipeline_rejects), stats_.pipeline_ms,
+         static_cast<unsigned long long>(stats.shader_hits), static_cast<unsigned long long>(stats.shader_compiles), stats.shader_ms,
+         static_cast<unsigned long long>(stats.pipeline_hits), static_cast<unsigned long long>(stats.pipeline_creates),
+         static_cast<unsigned long long>(stats.pipeline_rejects), stats.pipeline_ms,
          static_cast<unsigned long long>(shaders_->Saved()), static_cast<unsigned long long>(pipelines_->Saved()),
          static_cast<unsigned long long>(shaders_->Errors() + pipelines_->Errors()));
 }

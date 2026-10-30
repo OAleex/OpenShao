@@ -126,7 +126,7 @@ def main():
                         observed.add(title)
                         if title == 'OpenShao':
                             user.EnumChildWindows(window, child_callback, 0)
-                            if str(data / 'logs') in '\n'.join(texts):
+                            if 'Diagnostic ZIP:' in '\n'.join(texts):
                                 dialogs.append(window)
                     return True
 
@@ -142,16 +142,16 @@ def main():
                                      (root / 'process.log').read_text(encoding='utf-8', errors='replace')[-4000:])
                     logs = list((data / 'logs').glob('*.log'))
                     assert len(logs) == 1, 'The session log is missing'
-                    assert str(logs[0]) in '\n'.join(texts), ('The dialog must identify the actual session log', texts)
-                    assert 'Application data:\n' + str(data) in '\n'.join(texts), (
-                        'The dialog must identify the application data folder', texts)
-                    assert 'Close this message to open the application data folder.' in '\n'.join(texts), texts
+                    archives = list((data / 'reports').glob('*.zip'))
+                    assert len(archives)==1 and str(archives[0]) in '\n'.join(texts), ('The ZIP must exist before the dialog opens',texts)
+                    assert 'OpenShao > Support > Report a bug' in '\n'.join(texts), texts
+                    assert 'Click OK to open the folder with this ZIP selected.' in '\n'.join(texts), texts
                     # The private desktop suppresses Explorer while exercising
                     # the same dismissal path used by the interactive dialog.
                     assert user.PostMessageW(dialogs[0], 0x0010, 0, 0), ctypes.get_last_error()
                     assert process.wait(timeout=5) != 0, 'The invalid source must still fail startup'
                     log = logs[0].read_text(encoding='utf-8', errors='replace')
-                    assert 'Error dialog closed. Application data folder: ' + str(data) in log, log
+                    assert 'Error dialog closed.' in log and str(data) not in log, log
                     assert 'Error dialog closed. Log folder:' not in log, log
                 finally:
                     if process.poll() is None:
@@ -162,7 +162,7 @@ def main():
     finally:
         user.SetThreadDesktop(original_desktop)
         user.CloseDesktop(desktop)
-    print('PASS: the real error dialog identifies the log and application data folder without using the user desktop')
+    print('PASS: the real error dialog identifies the completed ZIP and Support without using the user desktop')
 
 
 if __name__ == '__main__':

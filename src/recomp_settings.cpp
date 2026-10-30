@@ -318,7 +318,8 @@ void Draw(X86Context& ctx) {
     const auto rows=Snapshot().rows;const auto page=model.CurrentPage();
     const bool binding=(page==Page::Controller || page==Page::Keyboard || page==Page::KeyboardAlternate) && selection<24;
     const bool preview=page==Page::Enhancements && selection==0 && !trial;
-    const bool adjustable=selection<rows.size() && (!rows[selection].action || binding) && !preview;
+    const bool adjustable=selection<rows.size() && (!rows[selection].action || binding) && !preview &&
+        !(page==Page::Graphics && selection==5 && model.Draft().vsync);
     if(preview) {
         menu::NativeButton(ctx,250,footer_y,menu::Button::Preview);
         menu::NativeLabel(ctx,272,float(footer_y),Translate("settings.listen_hint"),.9f,254,false,true,160);
@@ -331,7 +332,11 @@ void Draw(X86Context& ctx) {
     auto message=notice;
     if(trial)message=Translate("settings.keep_display")+" "+std::to_string(std::max(0,int(std::chrono::duration_cast<std::chrono::seconds>(trial_until-std::chrono::steady_clock::now()).count())));
     else if(!exit_prompt && page==Page::Language)message="settings.restart";
-    else if(!exit_prompt && page==Page::Enhancements && message.empty())message="settings.scorpion_hint";
+    else if(!exit_prompt && page==Page::Enhancements && message.empty()) {
+        if(selection==0)message="settings.scorpion_hint";
+        else if(selection==1)message="settings.restore_dialogue_hint";
+        else if(selection==2)message="settings.cinematic_bars_hint";
+    }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }
 bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t end) {

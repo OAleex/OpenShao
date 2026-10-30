@@ -45,14 +45,17 @@ uint64_t last_device_scan=0;
 float deadzone=.15f;
 bool rumble_enabled=true;
 bool multiplayer=false;
-int auto_reserved=-1, auto_keyboard=0;
+int auto_keyboard=0;
 std::array<SDL_Joystick*,4> fixtures{};
 bool Enabled() { return !openshao::options.background || openshao::options.virtual_gamepads; }
 int PhysicalPort(int port) {
-    if (port<0 || port>=4 || port==auto_reserved) return -1;
-    return port-(auto_reserved>=0 && port>auto_reserved);
+    return port>=0 && port<int(slots.size())?port:-1;
 }
-int LogicalPort(int index) { return index+(auto_reserved>=0 && index>=auto_reserved); }
+void UpdateKeyboardPort() {
+    const int port=multiplayer && slots[0].device?-1:0;
+    if(auto_keyboard!=port)LOGI("input: keyboard=%d after controller topology change",port+1);
+    auto_keyboard=port;
+}
 bool StandbyPort(int port) {
     return port==1 && !multiplayer && slots[0].device;
 }
@@ -67,20 +70,25 @@ void Sticks(int16_t raw_x,int16_t raw_y,int16_t& x,int16_t& y) {
 void Add(SDL_JoystickID id) {
     for (auto& s:slots) if (s.device && SDL_GetGamepadID(s.device)==id) return;
     auto it=std::find_if(slots.begin(),slots.end(),[](const Slot& s){return !s.device;});
+    // A new Ko-op session starts with keyboard P1. Later devices fill the
+    // missing controller player without changing any connected player's port.
+    if(multiplayer && !slots[0].device && !slots[1].device)it=slots.begin()+1;
     if (it==slots.end()) return;
     auto* pad=SDL_OpenGamepad(id);
     if (!pad) { LOGW("input: cannot open controller: %s",SDL_GetError()); return; }
     it->device=pad;
     it->rumble=SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad),SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN,false);
+    UpdateKeyboardPort();
     LOGI("input: port=%d name=%s type=%s connection=%d vendor=%04X product=%04X rumble=%d",
-         LogicalPort(int(it-slots.begin())),SDL_GetGamepadName(pad),SDL_GetGamepadStringForType(SDL_GetGamepadType(pad)),
+         int(it-slots.begin()),SDL_GetGamepadName(pad),SDL_GetGamepadStringForType(SDL_GetGamepadType(pad)),
          int(SDL_GetGamepadConnectionState(pad)),SDL_GetGamepadVendor(pad),SDL_GetGamepadProduct(pad),it->rumble);
 }
 void Remove(SDL_JoystickID id) {
     for (auto& s:slots) if (s.device && SDL_GetGamepadID(s.device)==id) {
         SDL_CloseGamepad(s.device); s={};
-        LOGI("input: port=%d disconnected",LogicalPort(int(&s-slots.data())));
+        LOGI("input: port=%d disconnected",int(&s-slots.data()));
     }
+    UpdateKeyboardPort();
 }
 void AttachFixture(unsigned index) {
     if (fixtures[index]) return;
@@ -105,20 +113,18 @@ namespace openshao::controller {
 void SetMultiplayer(bool enabled) {
     std::lock_guard guard(lock);
     if (multiplayer==enabled) return;
-    multiplayer=enabled;auto_reserved=-1;auto_keyboard=0;
-    if (enabled) {
-        const auto count=std::count_if(slots.begin(),slots.end(),[](const Slot& s){return s.device!=nullptr;});
-        if (count<2) {
-            // With one gamepad, the keyboard owns P1 in Ko-op regardless of menu input.
-            auto_reserved=0;
-        } else {
-            // Two gamepads own the Ko-op players; keyboard input must not take over either player.
-            auto_keyboard=-1;
-        }
-    }
+    multiplayer=enabled;
+    const auto count=std::count_if(slots.begin(),slots.end(),[](const Slot& s){return s.device!=nullptr;});
+    // Compact only at a mode boundary: a surviving controller may occupy any
+    // slot, but one controller must enter Ko-op on P2 and return to solo on P1.
+    std::array<Slot,4> assigned{};
+    int port=enabled && count<2?1:0;
+    for(const auto& s:slots)if(s.device)assigned[port++]=s;
+    slots=assigned;
+    UpdateKeyboardPort();
     // Mode changes run on the guest thread; defer SDL motor updates to the window thread.
     for (auto& s:slots) s.desired[0]=s.desired[1]=0;
-    LOGI("input: multiplayer=%d keyboard=%d reserved_port=%d",enabled,auto_keyboard+1,auto_reserved);
+    LOGI("input: multiplayer=%d keyboard=%d reserved_port=%d",enabled,auto_keyboard+1,enabled && auto_keyboard==0?0:-1);
 }
 int KeyboardPort() {
     std::lock_guard guard(lock);
@@ -136,7 +142,7 @@ void Load(const void* raw) {
     deadzone=std::isfinite(value)?float(std::clamp(value,0.0,.5)):.15f;
     rumble_enabled=c["rumble"].value_or(true);
     if(!rumble_enabled)for(auto& s:slots)s.desired[0]=s.desired[1]=0;
-    multiplayer=false;auto_reserved=-1;auto_keyboard=0;
+    multiplayer=false;auto_keyboard=0;
     controller_bindings=openshao::bindings::controller_defaults;
     for(size_t i=0;i<controller_bindings.size();++i)if(auto name=c["bindings"][openshao::bindings::keys[i]].value<std::string>()) {
         if(openshao::bindings::ValidSource(*name))controller_bindings[i]=openshao::bindings::CanonicalSource(*name);
@@ -182,22 +188,25 @@ void Update() {
     if (now-last_device_scan>=750) {
         int count=0;
         if (SDL_JoystickID* ids=SDL_GetGamepads(&count)) {
-            for (int i=0;i<count;++i) Add(ids[i]);
-            SDL_free(ids);
+            // Release stale ports before opening replacements from the same scan.
             for (auto& s:slots) if (s.device && !SDL_GamepadConnected(s.device)) {
                 const auto index=int(&s-slots.data());
                 SDL_CloseGamepad(s.device); s={};
-                LOGI("input: port=%d disconnected (device scan)",LogicalPort(index));
+                LOGI("input: port=%d disconnected (device scan)",index);
             }
+            UpdateKeyboardPort();
+            for (int i=0;i<count;++i) Add(ids[i]);
+            SDL_free(ids);
         }
         last_device_scan=now;
     }
+    std::string raw_source;
+    uint32_t raw_buttons=0;
     for (auto& s:slots) {
         const auto previous=s.state;s.state={}; auto* pad=s.device;
         if (!pad || !SDL_GamepadConnected(pad)) continue;
         auto& p=s.state; p.connected=true;
         if (focused) {
-            std::string raw_source;uint32_t raw_buttons=0;
             for(int button=0;button<SDL_GAMEPAD_BUTTON_COUNT;++button)if(SDL_GetGamepadButton(pad,SDL_GamepadButton(button))) {
                 if(raw_source.empty())if(const auto* name=SDL_GetGamepadStringForButton(SDL_GamepadButton(button)))raw_source=name;
                 switch(button) {
@@ -215,7 +224,6 @@ void Update() {
                     if(axis==1)raw_buttons|=value<0?0x1000:0x4000;
                 }
             }
-            if(&s==slots.data())openshao::recomp::raw::Controller(raw_source,raw_buttons);
             int16_t lx=0,ly=0,rx=0,ry=0;
             Sticks(SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_LEFTX),SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_LEFTY),lx,ly);
             Sticks(SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_RIGHTX),SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_RIGHTY),rx,ry);
@@ -244,7 +252,7 @@ void Update() {
             if (changed) {
                 if (now-s.activity_logged>=200) {
                     LOGI("input: gamepad port=%d buttons=%04X A=%u B=%u left=%d,%d",
-                        LogicalPort(int(&s-slots.data())),p.buttons,p.analog[0],p.analog[1],p.lx,p.ly);
+                        int(&s-slots.data()),p.buttons,p.analog[0],p.analog[1],p.lx,p.ly);
                     s.activity_logged=now;
                 }
             }
@@ -257,6 +265,9 @@ void Update() {
             s.sent[0]=low; s.sent[1]=high; s.refreshed=now;
         }
     }
+    // Publish one combined snapshot so idle pads cannot release or repeat
+    // another pad's menu buttons. An empty device list also releases input.
+    recomp::raw::Controller(raw_source,raw_buttons);
 }
 void Shutdown() {
     if (!initialized || GetCurrentThreadId()!=owner_thread) return;
@@ -270,7 +281,7 @@ void Shutdown() {
     }
     for (unsigned i=0;i<fixtures.size();++i) DetachFixture(i);
     SDL_QuitSubSystem(SDL_INIT_GAMEPAD); initialized=false; game_window=nullptr;
-    multiplayer=false;auto_reserved=-1;auto_keyboard=0;last_device_scan=0;
+    multiplayer=false;auto_keyboard=0;last_device_scan=0;
 }
 void Window(void* hwnd) {
     mouse::Window(hwnd);

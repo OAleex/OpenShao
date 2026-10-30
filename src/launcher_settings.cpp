@@ -11,6 +11,9 @@
 namespace openshao::launcher {
 Settings Read(const toml::table& table) {
     Settings s;
+#ifdef _WIN32
+    if(table["renderer"].value_or(std::string{})=="vulkan")s.renderer="vulkan";
+#endif
     s.language = table["language"].value_or(s.language);
     // Convert older preferences to a fixed supported voice language before publishing settings.
     const auto matching=std::find_if(voice_languages.begin(),voice_languages.end(),[&](auto code){return mods::SameLanguage(code,s.language);});
@@ -21,6 +24,8 @@ Settings Read(const toml::table& table) {
     s.aspect_ratio = table["aspect_ratio"].value_or(s.aspect_ratio);
     s.width = table["width"].value_or(s.width); s.height = table["height"].value_or(s.height);
     s.render_percent = table["render_percent"].value_or(s.render_percent);
+    const auto frame_rate = table["fps_cap"].value_or(FrameRate);
+    s.fps_cap = frame_rate == 120 ? 120 : FrameRate;
     s.aniso = table["anisotropic_filtering"].value_or(s.aniso);
     s.master_volume = table["master_volume"].value_or(s.master_volume);
     s.vsync = table["vsync"].value_or(s.vsync);
@@ -28,6 +33,8 @@ Settings Read(const toml::table& table) {
     s.bloom_effect = table["bloom_effect"].value_or(table["blur"].value_or(table["bloom"].value_or(s.bloom_effect)));
     s.show_fps = table["show_fps"].value_or(s.show_fps);
     s.scorpion_unfiltered = table["enhancements"]["scorpion_unfiltered"].value_or(s.scorpion_unfiltered);
+    s.restore_dialogue = table["enhancements"]["restore_dialogue"].value_or(s.restore_dialogue);
+    s.cinematic_bars = table["enhancements"]["cinematic_bars"].value_or(s.cinematic_bars);
     const auto g = table["game"];
     s.original_override = g["override_original"].value_or(s.original_override);
     s.camera_reverse = g["camera_reverse"].value_or(s.camera_reverse);
@@ -53,17 +60,24 @@ Settings Read(const toml::table& table) {
     return s;
 }
 toml::table Merge(toml::table table, const Settings& s) {
+#ifdef _WIN32
+    table.insert_or_assign("renderer",s.renderer);
+#else
+    table.erase("renderer");
+#endif
     table.insert_or_assign("voice_language",s.voice_language);
     table.insert_or_assign("language", s.language); table.insert_or_assign("display_mode", s.display_mode);
     table.insert_or_assign("aspect_ratio",s.aspect_ratio);
     table.insert_or_assign("width", s.width); table.insert_or_assign("height", s.height);
-    table.insert_or_assign("render_percent", s.render_percent); table.insert_or_assign("fps_cap", FrameRate);
+    table.insert_or_assign("render_percent", s.render_percent); table.insert_or_assign("fps_cap", s.fps_cap);
     table.insert_or_assign("anisotropic_filtering", s.aniso); table.insert_or_assign("master_volume", s.master_volume);
     table.insert_or_assign("vsync", s.vsync); table.erase("bloom"); table.erase("blur");
     table.insert_or_assign("bloom_effect", s.bloom_effect);
     table.insert_or_assign("show_fps", s.show_fps);
     auto enhancements = table["enhancements"].as_table() ? *table["enhancements"].as_table() : toml::table{};
     enhancements.insert_or_assign("scorpion_unfiltered", s.scorpion_unfiltered);
+    enhancements.insert_or_assign("restore_dialogue", s.restore_dialogue);
+    enhancements.insert_or_assign("cinematic_bars", s.cinematic_bars);
     table.insert_or_assign("enhancements", enhancements);
     toml::table c, b;
     for (size_t i = 0; i < s.bindings.size(); ++i) b.insert_or_assign(binding_keys[i], s.bindings[i]);
@@ -95,6 +109,7 @@ bool Validate(const Settings& s, std::string& error) {
     else if ((s.width == 0) != (s.height == 0) || s.width < 0 || s.height < 0 || s.width > 16384 || s.height > 16384 ||
              (s.width && (s.width < 320 || s.height < 240))) error = "Set both resolution fields to zero, or select a resolution from 320 x 240 to 16384 x 16384.";
     else if (s.render_percent < 25 || s.render_percent > 400) error = "Render scale must be from 25 to 400 percent.";
+    else if (s.fps_cap != 60 && s.fps_cap != 120) error = "Select 60 or 120 FPS.";
     else if (s.aniso != 0 && s.aniso != 2 && s.aniso != 4 && s.aniso != 8 && s.aniso != 16) error = "Select an anisotropic filtering level.";
     else if (s.master_volume < 0 || s.master_volume > 100) error = "Master volume must be from 0 to 100 percent.";
     else if (s.mouse.motion!="right_stick" && s.mouse.motion!="left_stick" && s.mouse.motion!="none") error="Select a mouse movement target.";

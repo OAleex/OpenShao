@@ -45,6 +45,133 @@ static SDL_JoystickID Attach(const char* name) {
     d.name=name; d.Rumble=Motor;
     return SDL_AttachVirtualJoystick(&d);
 }
+static void TestControllerHandoff() {
+    const toml::table automatic;
+    unsigned failures=0;
+    auto expect=[&](bool ok,const char* text) {
+        if(!ok){++failures;std::fprintf(stderr,"FAIL: %s\n",text);}
+    };
+    keyboard_active=true;
+    for(bool before_entry:{true,false}) {
+        openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
+        auto host=Attach("OpenShao departing host");auto guest=Attach("OpenShao remaining guest");
+        auto* guest_joy=SDL_OpenJoystick(guest);
+        Check(host && guest && guest_joy,"attach host and guest handoff devices");Tick();
+        SDL_SetJoystickVirtualButton(guest_joy,SDL_GAMEPAD_BUTTON_SOUTH,true);
+        SDL_SetJoystickVirtualButton(guest_joy,SDL_GAMEPAD_BUTTON_DPAD_LEFT,true);
+        SDL_SetJoystickVirtualAxis(guest_joy,SDL_GAMEPAD_AXIS_LEFTX,32767);
+        SDL_SetJoystickVirtualAxis(guest_joy,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767);Tick();
+        if(!before_entry)openshao::controller::SetMultiplayer(true);
+        SDL_DetachVirtualJoystick(host);Tick();
+        if(before_entry)openshao::controller::SetMultiplayer(true);
+        const auto guest_state=input::Poll(1);
+        expect(openshao::controller::KeyboardPort()==0 && input::Poll(0).connected,
+               before_entry?"host unplug before Ko-op keeps keyboard P1":
+                            "host unplug during Ko-op restores keyboard P1");
+        expect(guest_state.connected && guest_state.analog[0]==255 && guest_state.analog[7]==255 &&
+               (guest_state.buttons&4) && guest_state.lx>32000 && !input::Poll(2).connected,
+               before_entry?"remaining controller enters Ko-op as P2 with all buttons and axes":
+                            "host unplug preserves the guest's P2 buttons and axes");
+        expect(!openshao::controller::HasRumble(0) && openshao::controller::HasRumble(1),
+               "handoff keeps vibration capabilities on the guest controller");
+        openshao::keyboard::Key('W',true);
+        expect(input::Poll(0).ly==32767 && !input::Poll(0).analog[0] && !input::Poll(1).ly,
+               "keyboard recovery controls only P1 while the guest keeps P2");
+        openshao::keyboard::ReleaseAll();
+        host=Attach("OpenShao returning host");Tick();
+        expect(openshao::controller::KeyboardPort()==-1 && input::Poll(0).connected &&
+               !input::Poll(0).analog[0] && input::Poll(1).analog[0]==255 && !input::Poll(2).connected,
+               "returning host fills P1 without moving the guest to another player");
+        SDL_DetachVirtualJoystick(host);Tick();
+        openshao::controller::SetMultiplayer(false);
+        expect(input::Poll(0).analog[0]==255 && !input::Poll(1).analog[0],
+               "returning to solo shares the remaining controller with keyboard P1");
+        SDL_CloseJoystick(guest_joy);SDL_DetachVirtualJoystick(guest);Tick();
+        openshao::controller::Shutdown();
+    }
+    openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
+    openshao::controller::SetMultiplayer(true);
+    auto guest=Attach("OpenShao first late Ko-op controller");auto* guest_joy=SDL_OpenJoystick(guest);
+    Check(guest && guest_joy,"attach late guest for handoff");
+    SDL_SetJoystickVirtualButton(guest_joy,SDL_GAMEPAD_BUTTON_EAST,true);Tick();
+    auto host=Attach("OpenShao second late Ko-op controller");Tick();
+    expect(input::Poll(0).connected && input::Poll(1).analog[1]==255 && !input::Poll(2).connected &&
+           openshao::controller::KeyboardPort()==-1,
+           "second late controller fills P1 while the first controller retains P2");
+    SDL_DetachVirtualJoystick(host);SDL_CloseJoystick(guest_joy);SDL_DetachVirtualJoystick(guest);Tick();
+    expect(openshao::controller::KeyboardPort()==0 && input::Poll(0).connected && !input::Poll(1).connected,
+           "disconnecting both controllers preserves keyboard P1");
+    guest=Attach("OpenShao guest after both disconnect");guest_joy=SDL_OpenJoystick(guest);
+    Check(guest && guest_joy,"reconnect guest after both disconnect");
+    SDL_SetJoystickVirtualButton(guest_joy,SDL_GAMEPAD_BUTTON_NORTH,true);Tick();
+    expect(input::Poll(1).analog[3]==255 && !input::Poll(0).analog[3],
+           "first reconnect after both disconnect restores keyboard P1 and controller P2");
+    SDL_CloseJoystick(guest_joy);SDL_DetachVirtualJoystick(guest);Tick();openshao::controller::Shutdown();
+    // Reconcile a host replacement when both SDL hot-plug events were missed.
+    openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
+    host=Attach("OpenShao missed-event host");guest=Attach("OpenShao missed-event guest");
+    guest_joy=SDL_OpenJoystick(guest);Check(host && guest && guest_joy,"attach missed-event handoff controllers");
+    SDL_SetJoystickVirtualButton(guest_joy,SDL_GAMEPAD_BUTTON_SOUTH,true);Tick();
+    openshao::controller::SetMultiplayer(true);
+    SDL_DetachVirtualJoystick(host);host=Attach("OpenShao missed-event host replacement");
+    Check(host!=0,"attach host replacement before device reconciliation");
+    SDL_PumpEvents();SDL_Event missed{};
+    while(SDL_PeepEvents(&missed,1,SDL_GETEVENT,SDL_EVENT_GAMEPAD_ADDED,SDL_EVENT_GAMEPAD_STEAM_HANDLE_UPDATED)==1) {}
+    SDL_Delay(800);Tick();
+    expect(openshao::controller::KeyboardPort()==-1 && input::Poll(0).connected &&
+           input::Poll(1).analog[0]==255 && !input::Poll(2).connected,
+           "device reconciliation releases the stale host slot before assigning its replacement");
+    SDL_DetachVirtualJoystick(host);SDL_CloseJoystick(guest_joy);SDL_DetachVirtualJoystick(guest);Tick();
+    openshao::controller::Shutdown();
+    Check(failures==0,"automatic controller handoff regressions");
+}
+static void TestMenuControllers() {
+    using namespace openshao::recomp::raw;
+    unsigned failures=0;
+    auto expect=[&](bool ok,const char* text) {
+        if(!ok){++failures;std::fprintf(stderr,"FAIL: %s\n",text);}
+    };
+    const toml::table automatic;
+    openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
+    auto first=Attach("OpenShao first menu controller");auto second=Attach("OpenShao second menu controller");
+    auto* first_joy=SDL_OpenJoystick(first);auto* second_joy=SDL_OpenJoystick(second);
+    Check(first && second && first_joy && second_joy,"attach both menu controllers");
+    FocusLost();Active(true);Tick();Navigation();
+    SDL_SetJoystickVirtualButton(second_joy,SDL_GAMEPAD_BUTTON_SOUTH,true);Tick();
+    expect(Navigation()==0x40 && ControllerButtons()==0x40,
+           "second controller can confirm in the custom menu");
+    Tick();Tick();
+    expect(Navigation()==0,"idle first controller cannot repeat a held second-controller confirm");
+    SDL_SetJoystickVirtualButton(first_joy,SDL_GAMEPAD_BUTTON_DPAD_UP,true);Tick();
+    expect(Navigation()==0x1000 && ControllerButtons()==0x1040,
+           "menu combines buttons from both controllers without losing held state");
+    SDL_SetJoystickVirtualButton(first_joy,SDL_GAMEPAD_BUTTON_DPAD_UP,false);Tick();Navigation();
+    SDL_SetJoystickVirtualButton(second_joy,SDL_GAMEPAD_BUTTON_SOUTH,false);Tick();Navigation();
+    Begin(Device::Controller);Tick();
+    SDL_SetJoystickVirtualAxis(second_joy,SDL_GAMEPAD_AXIS_RIGHTX,32767);Tick();
+    const auto captured=Take();
+    expect(captured.device==Device::Controller && captured.source=="rightx+",
+           "controller binding capture accepts the second controller's stick");
+    Cancel();SDL_SetJoystickVirtualAxis(second_joy,SDL_GAMEPAD_AXIS_RIGHTX,0);Tick();Navigation();
+    SDL_CloseJoystick(first_joy);SDL_DetachVirtualJoystick(first);Tick();
+    SDL_SetJoystickVirtualButton(second_joy,SDL_GAMEPAD_BUTTON_EAST,true);Tick();
+    expect(Navigation()==0x20 && ControllerButtons()==0x20,
+           "remaining controller can go back after the first controller disconnects");
+    openshao::controller::SetFocused(false);
+    expect(ControllerButtons()==0 && Navigation()==0,"focus loss clears buttons from every menu controller");
+    SDL_SetJoystickVirtualButton(second_joy,SDL_GAMEPAD_BUTTON_EAST,false);
+    openshao::controller::SetFocused(true);Tick();Navigation();
+    auto replacement=Attach("OpenShao replacement menu controller");auto* replacement_joy=SDL_OpenJoystick(replacement);
+    Check(replacement && replacement_joy,"attach replacement menu controller");Tick();
+    SDL_SetJoystickVirtualButton(replacement_joy,SDL_GAMEPAD_BUTTON_SOUTH,true);Tick();Navigation();
+    SDL_CloseJoystick(replacement_joy);SDL_DetachVirtualJoystick(replacement);Tick();
+    expect(ControllerButtons()==0 && Navigation()==0,"disconnect clears a held menu button even with another idle controller");
+    replacement=Attach("OpenShao neutral menu reconnect");Tick();
+    expect(ControllerButtons()==0 && Navigation()==0,"menu reconnection cannot replay the disconnected controller's button");
+    SDL_DetachVirtualJoystick(replacement);SDL_CloseJoystick(second_joy);SDL_DetachVirtualJoystick(second);Tick();
+    Cancel();Active(false);FocusLost();openshao::controller::Shutdown();
+    Check(failures==0,"all-controller menu input regressions");
+}
 int main() {
     // Override normal backend hints before SDL_Init: hardware cannot be touched.
     for (const char* hint : {SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_WGI,SDL_HINT_XINPUT_ENABLED,
@@ -345,6 +472,8 @@ int main() {
         SDL_CloseJoystick(handoff);SDL_DetachVirtualJoystick(id);Tick();
     }
     openshao::recomp::raw::FocusLost();openshao::controller::Shutdown();
+    TestControllerHandoff();
+    TestMenuControllers();
     Check(openshao::bindings::VirtualKey(SDL_SCANCODE_Z)=='Z' && openshao::bindings::VirtualKey(SDL_SCANCODE_RCTRL)==VK_RCONTROL &&
           openshao::bindings::VirtualKey(SDL_SCANCODE_KP_7)==0x67,"SDL keyboard translation includes remapped letters, modifiers and numpad");
     std::puts("PASS: virtual controller mapping, deadzone, rumble and independent hot-plug ports");

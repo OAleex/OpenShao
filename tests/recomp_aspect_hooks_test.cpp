@@ -4,6 +4,7 @@
 #include "core/log.h"
 #include <array>
 #include <bit>
+#include <bitset>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,8 @@ static float notice_scale=0;
 void MainControllerNotice(X86Context&,uint32_t text,unsigned alpha,float scale){controller_notice=text;notice_alpha=alpha;notice_scale=scale;}
 void BeginFrame(){viewport_arrow=512;}
 bool ViewportArrow(uint32_t index){return index==viewport_arrow;}
+std::bitset<512> FrameArrows(){std::bitset<512> arrows;if(viewport_arrow<512)arrows.set(viewport_arrow);return arrows;}
+void SetFrameArrows(const std::bitset<512>& arrows){viewport_arrow=512;for(uint32_t i=0;i<512;++i)if(arrows[i]){viewport_arrow=i;break;}}
 void BeginScene(){}
 void EndScene(X86Context&){}
 bool ReplaceGraphic(X86Context&,uint32_t,uint32_t,uint32_t){return false;}
@@ -44,12 +47,16 @@ void Return(X86Context& ctx,uint32_t value,int args){ctx.eax=value;ctx.esp+=4+ar
 static unsigned sprites=0;
 static bool expanded_red=false;
 static bool tutorial_drawing=false;
+static bool cinematic_drawing=false;
+static bool health_drawing=false;
 static bool artwork_drawing=false,artwork_clipped=false;
 static uint32_t queued_text_y=0;
 static std::array<float,8> tutorial_drawn{};
 static uint32_t gui_sprite_result=0x5100;
 static float prompt_drawn_x=0;
+static float prompt_drawn_y=0;
 static bool prompt_clipped=false;
+static bool queue_fixture=false;
 static float sprite_vertices[4]={-.5f,-.5f,639.5f,479.5f};
 static void OriginalResult(X86Context& ctx,unsigned args=0){ctx.eax=0x1234;ctx.ecx=0x5678;ctx.guard=0x9876;ctx.esp+=4+args*4;}
 X86_FUNC(__imp__sub_0011B290){kernel::W32(0x2020,std::bit_cast<uint32_t>(1.f));OriginalResult(ctx);}
@@ -62,6 +69,13 @@ X86_FUNC(__imp__sub_0011D000){
         const bool portrait=openshao::aspect::tutorial_sprite==openshao::aspect::TutorialSprite::Portrait;
         fill[i].x=i<2?(portrait?112.f:-320.5f):(portrait?351.f:111.5f);
         fill[i].y=i%2?(portrait?240.5f:239.5f):(portrait?70.5f:116.5f);fill[i].color=0x7F004488;
+    }
+    if(health_drawing)for(unsigned i=0;i<4;++i) {
+        fill[i].x=i<2?-290.5f:109.5f;fill[i].y=i%2?-150.5f:-210.5f;
+        fill[i].color=0x7F808080;fill[i].uv=0x12345678;
+    }
+    if(cinematic_drawing)for(unsigned i=0;i<4;++i) {
+        fill[i].y=i%2?-168.5f:-240.5f;fill[i].color=0x7F000000;
     }
     if(artwork_drawing)for(unsigned i=0;i<4;++i) {
         fill[i].x=i<2?-288.f:300.f;fill[i].y=i%2?240.f:-240.f;fill[i].color=0x7F808080;
@@ -76,9 +90,57 @@ X86_FUNC(__imp__sub_0011D000){
 }
 X86_FUNC(__imp__sub_00016866){OriginalResult(ctx,13);ctx.eax=gui_sprite_result;}
 X86_FUNC(__imp__sub_000165C3){OriginalResult(ctx,1);}
-X86_FUNC(__imp__sub_00152AE0){queued_text_y=kernel::R32(ctx.esp+8);OriginalResult(ctx);}
+X86_FUNC(sub_001EE580);
+static void QueueFixture() {
+    X86Context enqueue;enqueue.esp=0x1800;enqueue.ecx=0x7800;
+    kernel::W32(enqueue.esp+4,0x7A00);sub_001EE580(enqueue,nullptr);
+}
+X86_FUNC(__imp__sub_00014A2A){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00015321){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00013DB4){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00012E14){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00011DD4){QueueFixture();OriginalResult(ctx);}
+static bool combo_bonus_fixture=false;
+X86_FUNC(sub_00152CE0);
+X86_FUNC(__imp__sub_000133A0){
+    if(combo_bonus_fixture) {
+        X86Context popup;kernel::W32(popup.esp,0x7C480);sub_00152CE0(popup,nullptr);
+    } else QueueFixture();
+    OriginalResult(ctx);
+}
+X86_FUNC(__imp__sub_000149FD){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00016267){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_00152CE0){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_000123BA){QueueFixture();OriginalResult(ctx,4);}
+X86_FUNC(__imp__sub_001EE580){
+    const auto queue=ctx.ecx,index=kernel::R32(queue),command=kernel::R32(ctx.esp+4);
+    std::memcpy(kernel::HostPtr(queue+8+index*0x54),kernel::HostPtr(command),0x54);
+    kernel::W32(queue,index+1);OriginalResult(ctx,1);ctx.eax=1;
+}
+X86_FUNC(__imp__sub_001EEC70){
+    const auto command=kernel::R32(ctx.esp+4),index=kernel::R32(ctx.esp+8);
+    std::memcpy(kernel::HostPtr(command),kernel::HostPtr(ctx.ecx+8+index*0x54),0x54);
+    OriginalResult(ctx,2);ctx.eax=command;
+}
+X86_FUNC(__imp__sub_00152AE0){
+    queued_text_y=kernel::R32(ctx.esp+8);
+    if(queue_fixture) {
+        kernel::W32(0x7A00,std::bit_cast<uint32_t>(float(kernel::R32(ctx.esp+4))));
+        kernel::W32(0x7A04,std::bit_cast<uint32_t>(float(queued_text_y)));
+        kernel::W32(0x7A34,kernel::R32(ctx.esp+20));QueueFixture();
+    }
+    OriginalResult(ctx);
+}
 X86_FUNC(__imp__sub_001EF210){
-    prompt_drawn_x=std::bit_cast<float>(kernel::R32(kernel::R32(ctx.esp+4)));
+    // The retail font clamps authored X to 40 before it emits its glyph quad.
+    // Anchor the submitted quad after that clamp, so ultrawide positions survive.
+    const auto command=kernel::R32(ctx.esp+4);
+    const float x=std::max(40.f,std::bit_cast<float>(kernel::R32(command)))-320;
+    const float y=std::bit_cast<float>(kernel::R32(command+4))-240;
+    struct Glyph {float x,y,z;uint32_t color,uv;};
+    Glyph glyph[4]={{x,y,0,0xFFFFFFFF,0},{x,y+16,0,0xFFFFFFFF,0},{x+10,y,0,0xFFFFFFFF,0},{x+10,y+16,0,0xFFFFFFFF,0}};
+    openshao::aspect::ExpandViewportTint(glyph,4,20);
+    prompt_drawn_x=glyph[0].x+320;prompt_drawn_y=glyph[0].y+240;
     struct State {uint32_t scissor_count=0;std::array<uint32_t,32> scissors{};} state;
     openshao::aspect::WithCanvasClip(state,[&]{prompt_clipped=state.scissor_count!=0;});
     OriginalResult(ctx,1);
@@ -128,6 +190,7 @@ X86_FUNC(__imp__sub_00100B44){
     for(unsigned i=0;i<16;++i)kernel::W32(matrix+i*4,std::bit_cast<uint32_t>(i==0?2.f/640:i==5?2.f/480:float(i)));
     OriginalResult(ctx,5);
 }
+static float mesh_top=-.5f;
 X86_FUNC(__imp__sub_0013FFB0){
     const unsigned index=kernel::R32(0x63F5E0);
     if(gallery_mesh) {
@@ -138,7 +201,7 @@ X86_FUNC(__imp__sub_0013FFB0){
             kernel::W32(record,0x01010101);kernel::W32(record+0x68,0x81870000);
             for(unsigned v=0;v<3;++v) {
                 const unsigned c=corners[t][v];
-                const float x=c%2?639.5f:-.5f,y=c/2?479.5f:-.5f;
+                const float x=c%2?639.5f:-.5f,y=c/2?479.5f:mesh_top;
                 kernel::W32(record+0x10+v*16,std::bit_cast<uint32_t>(x));
                 kernel::W32(record+0x14+v*16,std::bit_cast<uint32_t>(y));
                 kernel::W32(record+0x18+v*16,std::bit_cast<uint32_t>(.75f));
@@ -209,17 +272,67 @@ int main(){
     Check(tutorial_drawn[0]==-288 && tutorial_drawn[4]==300,
           "the same native image owner keeps its original geometry outside the open viewer");
     artwork_drawing=false;kernel::W32(0x5984B0,0);kernel::W32(0x59847C,0);sprites=0;
+    // The retail campaign bar callback identifies the complete health widget,
+    // independently of its texture, color, current fill and animation position.
+    settings.aspect_ratio="16:9";health_drawing=true;
+    kernel::W32(0x4008,0x5000);kernel::W32(0x5000+0x1FC,0x12EF5);
+    X86Context health;kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(expanded_red && Near(tutorial_drawn[0],-290.5f-320.f/3) &&
+          Near(tutorial_drawn[4]-tutorial_drawn[0],400) && Near(tutorial_drawn[1],-210.5f),
+          "campaign health stays at the viewport left edge without changing widget proportions");
+    settings.aspect_ratio="auto";openshao::aspect::Output(1000,1500);
+    health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(expanded_red && Near(tutorial_drawn[1],-450.5f),
+          "campaign health stays at the top of a tall Automatic viewport");
+    // Ko-op: each player's pieces follow their own corner; a quad crossing the
+    // center widens by the same amount on both sides (21:9 spreads by 240).
+    settings.aspect_ratio="21:9";kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,2);
+    kernel::W32(0x5000+0x1FC,0x12FFE);
+    health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(!expanded_red && Near(tutorial_drawn[0],-290.5f),"Versus keeps its native HUD composition");
+    kernel::W32(0x790088,1);
+    for(const auto callback:{0x12FFEu,0x13ED6u,0x127E3u,0x15AFBu,0x11AB4u}) {
+        kernel::W32(0x5000+0x1FC,callback);
+        health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+        Check(expanded_red && Near(tutorial_drawn[0],-290.5f-240) && Near(tutorial_drawn[4],109.5f+240) &&
+              Near(tutorial_drawn[1],-210.5f),"Ko-op pieces split toward their own top corners");
+    }
+    kernel::W32(0x5000+0x1FC,0x12E14);
+    health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(expanded_red && Near(tutorial_drawn[0],-290.5f-240) && Near(tutorial_drawn[4],109.5f+240*109.5f/213) &&
+          Near(tutorial_drawn[1],-210.5f),"the shared Ko-op bar stretches linearly so its fill stays proportional");
+    settings.aspect_ratio="original";kernel::W32(0x5000+0x1FC,0x12FFE);
+    health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(Near(tutorial_drawn[0],-290.5f) && Near(tutorial_drawn[4],109.5f),"Ko-op keeps its native layout at 4:3");
+    settings.aspect_ratio="auto";openshao::aspect::Output(1000,1500);kernel::W32(0x5000+0x1FC,0x12E14);
+    health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+    Check(Near(tutorial_drawn[0],-290.5f) && Near(tutorial_drawn[1],-450.5f),"Ko-op stays at the top of a tall viewport");
+    kernel::W32(0x5ACEBC,0);kernel::W32(0x790088,0);
+    for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
+        settings.aspect_ratio=mode;openshao::aspect::Output(480,800);
+        const float ratio=openshao::aspect::Current();
+        const float left=-320.f*(1/openshao::aspect::CanvasScale(ratio).x-1);
+        for(const auto callback:{0x15321u,0x161FEu}) {
+            kernel::W32(0x5000+0x1FC,callback);
+            health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
+            Check(Near(tutorial_drawn[0],-290.5f+(callback==0x15321?left:0)) &&
+                  Near(tutorial_drawn[1],-210.5f) && Near(tutorial_drawn[6]-tutorial_drawn[0],400),
+                  "common enemy bars follow the left edge while boss bars retain their position, size and baseline in every aspect");
+        }
+    }
+    kernel::W32(0x5000+0x1FC,0);health_drawing=false;sprites=0;
+
     settings.aspect_ratio="32:9";
     kernel::W32(0x639224,0x3000);kernel::W32(0x3308,0x2000);
     kernel::W32(0x201C,0xCAFEBABE);kernel::W32(0x2024,0xDEADBEEF);kernel::W32(0x202C,0x3F800000);
     X86Context ctx;sub_0011B290(ctx,nullptr);
-    Check(Near(F32(0x2020),8.f/3) && kernel::R32(0x201C)==0xCAFEBABE && kernel::R32(0x2024)==0xDEADBEEF && kernel::R32(0x202C)==0x3F800000,
+    Check(Near(F32(0x2020),32.f/9) && kernel::R32(0x201C)==0xCAFEBABE && kernel::R32(0x2024)==0xDEADBEEF && kernel::R32(0x202C)==0x3F800000,
           "camera changes only the retail aspect field, preserving adjacent data and FOV");
     Check(ctx.esp==0x1004 && ctx.eax==0x1234 && ctx.ecx==0x5678 && ctx.guard==0x9876,"camera hook preserves the original return context");
     settings.aspect_ratio="auto";openshao::aspect::Output(3440,1440);ctx={};sub_0015AFA0(ctx,nullptr);
-    Check(Near(F32(0x2020),3440.f/1440/openshao::aspect::Original),"automatic mode follows real output dimensions on the guest thread");
+    Check(Near(F32(0x2020),3440.f/1440),"automatic mode follows real output dimensions on the guest thread");
     openshao::aspect::Output(1000,1500);ctx={};sub_0015AFA0(ctx,nullptr);
-    Check(Near(F32(0x2020),.5f),"automatic projection follows a window aspect change");
+    Check(Near(F32(0x2020),1000.f/1500),"automatic projection follows a window aspect change");
     settings.aspect_ratio="16:9";ctx={};kernel::W32(ctx.esp+4,0x4000);kernel::W32(0x4008,0x5000);
     sub_0011D000(ctx,nullptr);
     Check(sprites==1 && Near(sprite_vertices[0],-.5f) && !openshao::aspect::canvas_depth,
@@ -242,7 +355,20 @@ int main(){
     }
     kernel::W32(0x6CE8A0,0x5000);ctx={};kernel::W32(ctx.esp+4,0x4000);sub_0011D000(ctx,nullptr);
     Check(sprites==1 && ctx.esp==0x1008,"widened cutscenes omit only their original cinematic mask sprites with RET4");
-    settings.aspect_ratio="original";ctx={};sub_0011D000(ctx,nullptr);Check(sprites==2,"original mode retains the cinematic masks");
+    for(const char* ratio:{"original","16:9","16:10","21:9","32:9"}) {
+        settings.aspect_ratio=ratio;
+        const auto before=sprites;
+        ctx={};sub_0011D000(ctx,nullptr);
+        Check(sprites==before && ctx.esp==0x1008,"Disabled cinematic bars omit only mask sprites at every aspect ratio");
+        settings=openshao::launcher::Read(toml::parse("[enhancements]\ncinematic_bars=true\n"));settings.aspect_ratio=ratio;
+        cinematic_drawing=true;ctx={};sub_0011D000(ctx,nullptr);cinematic_drawing=false;
+        const auto scale=openshao::aspect::CanvasScale(openshao::aspect::Current());
+        Check(sprites==before+1 && Near(tutorial_drawn[0],-320.f/scale.x-.5f) &&
+              Near(tutorial_drawn[4],320.f/scale.x-.5f) && Near(tutorial_drawn[1],-240.f/scale.y-.5f) &&
+              Near(tutorial_drawn[3],-168.f/scale.y-.5f),
+              "Enabled cinematic bars fill the viewport width and retain their native animation and height");
+        settings=openshao::launcher::Read({});
+    }
     settings.aspect_ratio="16:9";kernel::W32(0x63F5E0,1);kernel::W32(0x63F5E4+0x10,0x3F800000);
     ctx={};sub_0013FFB0(ctx,nullptr);const auto poly=0x63F5E4+0x6C+0x10;
     Check(Near(F32(poly),79.5f) && Near(F32(poly+16),559.5f) && Near(F32(poly+8),7) &&
@@ -322,13 +448,18 @@ int main(){
           "the native sky animation fills widescreen with proportional cover scaling");
     // These are the retail scene instances used by character selection,
     // Options, Kontent and save selection; their text is drawn separately.
-    for(const uint32_t background:{0x58E4F0u,0x591628u,0x58F210u,0x5936F8u}) {
+    for(const uint32_t background:{0x58E4F0u,0x591628u,0x58F210u}) {
         kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=background;sub_001B2C40(ctx,nullptr);
         Check(Near(F32(0x63F5F4),-.5f) && Near(F32(0x63F5F8),-80.5f) && !openshao::aspect::flash_polygons[0],
               "submenu scenery covers the viewport without fitted canvas clipping");
         Check(!openshao::aspect::backdrop_depth && ctx.esp==0x101C && ctx.eax==0x1234,
               "background routing restores scope and preserves the animation ABI");
     }
+    // Level Select's frame and vortex must match its fitted arena preview.
+    kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x5936F8;sub_001B2C40(ctx,nullptr);
+    Check(Near(F32(0x63F5F4),79.5f) && Near(F32(0x63F5F8),-.5f) && openshao::aspect::flash_polygons[0] &&
+          !openshao::aspect::backdrop_depth && ctx.esp==0x101C && ctx.eax==0x1234,
+          "Level Select scenery keeps the 4:3 composition of its arena preview");
     for(const uint32_t foreground:{0x591CB8u,0x5933B0u,0x58F8A0u,0x594F50u,0x592000u}) {
         kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=foreground;sub_001B2C40(ctx,nullptr);
         Check(Near(F32(0x63F5F4),79.5f) && Near(F32(0x63F5F8),-.5f) && openshao::aspect::flash_polygons[0],
@@ -441,6 +572,18 @@ int main(){
     kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x7600;kernel::W32(ctx.esp+12,0x001C000D);sub_001B2C40(ctx,nullptr);
     Check(kernel::R32(0x63F5E0)==2 && openshao::aspect::flash_polygons[0],
           "gallery margin expansion is restricted to the original gallery wall scene");
+    settings.aspect_ratio="16:9";openshao::aspect::Output(1280,720);
+    kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x5936F8;kernel::W32(ctx.esp+12,0x001C000D);sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x63F5E0)>2 && Near(F32(0x63F5E4+0x10),79.5f) && Near(F32(0x63F5E4+0x14),-.5f) &&
+          !openshao::aspect::flash_polygons[0],
+          "the Level Select wall keeps its 4:3 size and extends to the viewport with decorative repeats");
+    // The arena-entry snapshot comes from the Level Select control (another
+    // scene) and starts at y=0.047; it extends like the wall.
+    mesh_top=0.046875f;kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598C90);
+    kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x7600;kernel::W32(ctx.esp+12,0x001C000D);sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x63F5E0)>2 && Near(F32(0x63F5E4+0x10),79.5f) && !openshao::aspect::flash_polygons[0],
+          "the arena-entry snapshot extends past the 4:3 box with the same decorative repeats");
+    kernel::W32(0x6C9308,0);kernel::W32(0x6C930C,0);mesh_top=-.5f;
     gallery_mesh=false;kernel::W32(0x58F210+0x2E8,0);settings.aspect_ratio="16:9";
     kernel::W32(0x7B4C,0x6280E35F);kernel::W32(0x63F5E0,0);ctx={};kernel::W32(ctx.esp+12,0x001C000D);
     sub_0013FFB0(ctx,nullptr);
@@ -512,6 +655,17 @@ int main(){
         ctx={};kernel::W32(ctx.esp+4,0x4000);sub_0011D000(ctx,nullptr);
         Check(!expanded_red,"other GUI managers and message artwork retain their existing layout");
     }
+    settings.aspect_ratio="16:9";
+    for(const auto owner:{0x5100u,0x5200u}) {
+        gui_sprite_result=owner;kernel::W32(owner+0x1D8,0x7E00);kernel::W32(owner+0xC0,std::bit_cast<uint32_t>(551.5f));
+        ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,0x9D);sub_00016866(ctx,nullptr);
+    }
+    for(const auto owner:{0x5100u,0x5200u}) {
+        kernel::W32(0x4008,owner);ctx={};kernel::W32(ctx.esp+4,0x4000);sub_0011D000(ctx,nullptr);
+        Check(expanded_red && Near(tutorial_drawn[0],80.5f+320.f/3),
+              "every cached instance of a tutorial image receives the same viewport placement");
+    }
+    gui_sprite_result=0x5100;kernel::W32(0x4008,0x5100);
     tutorial_drawing=false;
     settings.aspect_ratio="auto";openshao::aspect::Output(1080,720);
     ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,0x9D);sub_00016866(ctx,nullptr);
@@ -528,22 +682,139 @@ int main(){
           "seam closure preserves native opacity, atlas coordinates, layer order and portrait height");
     ctx={};ctx.ecx=0x4E6E20;sub_000165C3(ctx,nullptr);
     Check(openshao::aspect::tutorial_portrait_inset==0,"message reset clears the previous portrait's inset");
+    settings.aspect_ratio="auto";openshao::aspect::Output(1000,1500);
+    band=std::array<TintVertex,4>{{{-320.5f,116.5f,121,0x3C7F7F7F,0x1234},{-320.5f,239.5f,121,0x3C7F7F7F,0x1234},
+                                  {111.5f,116.5f,121,0x3C7F7F7F,0x1234},{111.5f,239.5f,121,0x3C7F7F7F,0x1234}}};
+    {openshao::aspect::SpriteScope sprite(false,openshao::aspect::TutorialSprite::Panel);openshao::aspect::ExpandViewportTint(band.data(),4,20);}
+    Check(Near(band[0].y,356.5f) && Near(band[1].y,479.5f) && band[0].uv==0x1234,
+          "the tutorial band follows the bottom of a tall viewport with its authored height and atlas coordinates");
+
+    // Exercise the actual native producer -> queue slot -> copied command ->
+    // deferred font hook. A new unanchored command must erase the slot's tag.
+    auto render_queue=[&] {
+        X86Context copy;copy.ecx=0x7800;kernel::W32(copy.esp+4,0x7D00);kernel::W32(copy.esp+8,0);
+        sub_001EEC70(copy,nullptr);
+        openshao::aspect::CanvasScope fonts;
+        X86Context draw;kernel::W32(draw.esp+4,0x7D00);sub_001EF210(draw,nullptr);
+        Check(Near(F32(0x7D00),F32(0x7A00)) && Near(F32(0x7D04),F32(0x7A04)) && draw.esp==0x1008,
+              "anchoring restores the copied font command and preserves its native return context");
+    };
+    kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
+    kernel::W32(0x7A04,std::bit_cast<uint32_t>(60.f));kernel::W32(0x7A34,0x7C00);kernel::W32(0x7C00,0x1234);
+    ctx={};sub_00014A2A(ctx,nullptr);render_queue();
+    Check(Near(prompt_drawn_x,100) && Near(prompt_drawn_y,-180) && !prompt_clipped,
+          "deferred health labels remain attached to their bar after a tall-window resize");
+    settings.aspect_ratio="16:9";kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
+    ctx={};sub_00014A2A(ctx,nullptr);render_queue();
+    Check(Near(prompt_drawn_x,100.f-320.f/3) && !prompt_clipped,"solo labels survive the original font's left clamp in widescreen");
+    kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,1);
+    for(const float x:{100.f,450.f}) {
+        kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(x));
+        ctx={};sub_00012E14(ctx,nullptr);render_queue();
+        Check(Near(prompt_drawn_x,x+(x<320?-1:1)*320.f/3) && !prompt_clipped,"Ko-op labels follow their player's top corner");
+    }
+    kernel::W32(0x5ACEBC,0);kernel::W32(0x790088,0);
+    for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
+        settings.aspect_ratio=mode;openshao::aspect::Output(480,800);
+        const auto scale=openshao::aspect::CanvasScale(openshao::aspect::Current());
+        const float offset=320.f*(1/scale.x-1);
+        kernel::W32(0x7A04,std::bit_cast<uint32_t>(404.f));
+        kernel::W32(0x7A00,std::bit_cast<uint32_t>(49.f));kernel::W32(0x7800,0);
+        ctx={};sub_00015321(ctx,nullptr);render_queue();
+        Check(Near(prompt_drawn_x,49-offset) && Near(prompt_drawn_y,404) && !prompt_clipped,
+              "the common enemy's deferred name follows its bar without moving the boss baseline");
+        kernel::W32(0x7A00,std::bit_cast<uint32_t>(500.f));kernel::W32(0x7800,0);
+        ctx={};sub_00013DB4(ctx,nullptr);render_queue();
+        Check(Near(prompt_drawn_x,500+offset) && Near(prompt_drawn_y,404) && !prompt_clipped,
+              "player two's common enemy name retains its right-edge placement");
+    }
+    kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
+    kernel::W32(0x7800,0);QueueFixture();render_queue();
+    Check(Near(prompt_drawn_x,100) && prompt_clipped,"ordinary text reusing a health queue slot keeps its original layout and clipping");
+    // The three retail combo producers enqueue separate praise, count and
+    // multiplier commands. Every glyph must retain its offset from solo health,
+    // including long labels that cross the authored canvas midpoint.
+    kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,0);
+    for(const auto producer:{sub_000133A0,sub_000149FD,sub_00016267}) {
+        for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
+            settings.aspect_ratio=mode;
+            for(const auto output:{std::pair{3440u,1440u},std::pair{480u,800u}}) {
+                openshao::aspect::Output(output.first,output.second);
+                const auto offset=openshao::aspect::AnchorOffset(openshao::aspect::UiAnchor::TopLeft,openshao::aspect::Current());
+                for(const float x:{125.f,215.f,350.f}) {
+                    kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(x));
+                    kernel::W32(0x7A04,std::bit_cast<uint32_t>(145.f));
+                    ctx={};producer(ctx,nullptr);render_queue();
+                    Check(Near(prompt_drawn_x,x+offset.x) && Near(prompt_drawn_y,145+offset.y) && !prompt_clipped,
+                          "solo combo praise, hits and multiplier follow the same corner as health in every aspect");
+                    Check(ctx.eax==0x1234 && ctx.ecx==0x5678 && ctx.guard==0x9876 && ctx.esp==0x1004 &&
+                          openshao::aspect::text_layout==openshao::aspect::TextLayout::None,
+                          "combo producer anchoring preserves native return state and restores the enclosing layout");
+                }
+            }
+        }
+        settings.aspect_ratio="32:9";
+        kernel::W32(0x790088,2);kernel::W32(0x7800,0);
+        ctx={};producer(ctx,nullptr);render_queue();
+        Check(Near(prompt_drawn_x,350) && Near(prompt_drawn_y,145) && prompt_clipped,
+              "Versus retains its original combo composition");
+        kernel::W32(0x790088,1);
+        for(const float x:{100.f,350.f}) {
+            kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(x));
+            ctx={};producer(ctx,nullptr);render_queue();
+            Check(Near(prompt_drawn_x,x<320?x-320.f*(32.f/12-1):x+320.f*(32.f/12-1)-openshao::aspect::KoopComboInset) &&
+                  Near(prompt_drawn_y,145) && !prompt_clipped,
+                  "each Ko-op combo follows its player's top corner");
+        }
+        kernel::W32(0x7A00,std::bit_cast<uint32_t>(350.f));
+        kernel::W32(0x790088,0);
+    }
+    settings.aspect_ratio="16:9";
+    kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(320.f));kernel::W32(0x7A04,std::bit_cast<uint32_t>(240.f));
+    combo_bonus_fixture=true;ctx={};sub_000133A0(ctx,nullptr);combo_bonus_fixture=false;render_queue();
+    Check(Near(prompt_drawn_x,320) && Near(prompt_drawn_y,240) && prompt_clipped,
+          "the combo producer's separate central experience reward stays centered");
+    kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,1);
+    for(const float x:{320.f,476.f}) {
+        kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(x));
+        combo_bonus_fixture=true;ctx={};sub_000133A0(ctx,nullptr);combo_bonus_fixture=false;render_queue();
+        Check(Near(prompt_drawn_x,x==320?320:x+320.f/3-openshao::aspect::KoopComboInset) && (x==320)==prompt_clipped,
+              "in Ko-op the shared call site keeps a centered reward and moves player two's count");
+    }
+    for(const uint32_t mode:{0u,1u}) {
+        kernel::W32(0x790088,mode);kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(476.f));
+        ctx={};sub_00011DD4(ctx,nullptr);render_queue();
+        Check(mode?Near(prompt_drawn_x,476+320.f/3-openshao::aspect::KoopComboInset) && !prompt_clipped:Near(prompt_drawn_x,476) && prompt_clipped,
+              "player two's Ko-op count follows the right corner and the producer is untouched outside Ko-op");
+    }
+    kernel::W32(0x5ACEBC,0);kernel::W32(0x790088,0);
+    kernel::W32(0x7A00,std::bit_cast<uint32_t>(320.f));
+    kernel::W32(0x7800,0);QueueFixture();render_queue();
+    Check(Near(prompt_drawn_x,320) && prompt_clipped,"unrelated text reusing a combo queue slot keeps the original layout");
+    settings.aspect_ratio="auto";openshao::aspect::Output(1000,1500);
+    kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(60.f));kernel::W32(0x7A04,std::bit_cast<uint32_t>(380.f));
+    kernel::W32(0x4E6E20+0x6D4,6);ctx={};ctx.ecx=0x4E6E20;sub_000123BA(ctx,nullptr);render_queue();
+    Check(Near(prompt_drawn_x,60) && Near(prompt_drawn_y,620) && !prompt_clipped,
+          "tutorial body text follows its band after the native producer has returned");
+    settings.aspect_ratio="21:9";render_queue();
+    Check(Near(prompt_drawn_x,-180) && Near(prompt_drawn_y,380),"queued tutorial text resolves anchoring again when the output ratio changes");
+    openshao::aspect::rendered_text={};
     settings.aspect_ratio="16:9";
     kernel::W32(0x4E6E20+0x6D4,6);kernel::W32(0x7C00,0x3D);kernel::W32(0x7C80,0x3D);
     ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,0x9D);sub_00016866(ctx,nullptr);
+    kernel::W32(0x7800,0);queue_fixture=true;
     ctx={};kernel::W32(ctx.esp,0x86714);kernel::W32(ctx.esp+4,590);kernel::W32(ctx.esp+8,396);
     kernel::W32(ctx.esp+20,0x7C00);sub_00152AE0(ctx,nullptr);
-    kernel::W32(0x7D00,std::bit_cast<uint32_t>(590.f));kernel::W32(0x7D04,std::bit_cast<uint32_t>(396.f));
-    kernel::W32(0x7D34,0x7C80);
-    {
-        openshao::aspect::CanvasScope fonts;
-        ctx={};kernel::W32(ctx.esp+4,0x7D00);sub_001EF210(ctx,nullptr);
-        Check(Near(prompt_drawn_x,590.f+320.f/3-31.5f) && !prompt_clipped,
-              "the deferred tutorial confirmation glyph follows the portrait beyond the old canvas edge");
-        Check(Near(F32(0x7D00),590) && ctx.esp==0x1008,"confirmation anchoring restores the font command and preserves RET4");
-        kernel::W32(0x7C80,0x5858);ctx={};kernel::W32(ctx.esp+4,0x7D00);sub_001EF210(ctx,nullptr);
-        Check(Near(prompt_drawn_x,590) && prompt_clipped,"other text at the same coordinates keeps its original fitting and clipping");
-    }
+    queue_fixture=false;render_queue();
+    Check(Near(prompt_drawn_x,590.f+320.f/3-31.5f) && !prompt_clipped,
+          "the deferred tutorial confirmation glyph follows the portrait beyond the old canvas edge");
+    settings.aspect_ratio="auto";openshao::aspect::Output(1000,1500);render_queue();
+    Check(Near(prompt_drawn_x,558.5f) && Near(prompt_drawn_y,636) && !prompt_clipped,
+          "the confirmation glyph follows the portrait to the bottom of a tall viewport");
+    kernel::W32(0x7800,0);QueueFixture();render_queue();
+    Check(Near(prompt_drawn_x,590) && Near(prompt_drawn_y,396) && prompt_clipped,
+          "an unrelated identical glyph at identical coordinates never inherits a tutorial anchor");
+    openshao::aspect::rendered_text={};settings.aspect_ratio="16:9";
     ctx={};kernel::W32(ctx.esp+4,0x6000);kernel::W32(ctx.esp+8,640);kernel::W32(ctx.esp+12,480);
     kernel::W32(0x50FB04,640);kernel::W32(0x50FB08,480);sub_00141BF0(ctx,nullptr);
     Check(Near(F32(0x6000),79.5f) && Near(F32(0x6018),559.5f) && kernel::R32(0x6010)==0xCD000004 && ctx.esp==0x1004,

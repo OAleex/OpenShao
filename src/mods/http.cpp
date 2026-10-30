@@ -67,7 +67,7 @@ void Download(std::string_view url,const std::filesystem::path& file,uint64_t ma
     if(!WinHttpCrackUrl(wide.c_str(),DWORD(wide.size()),0,&parts)||parts.nScheme!=INTERNET_SCHEME_HTTPS)throw std::runtime_error("Invalid HTTPS URL");
     const std::wstring host(parts.lpszHostName,parts.dwHostNameLength);
     std::wstring path(parts.lpszUrlPath,parts.dwUrlPathLength);path.append(parts.lpszExtraInfo,parts.dwExtraInfoLength);
-    Internet session(WinHttpOpen(L"OpenShao/0.3.0",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0));
+    Internet session(WinHttpOpen(L"OpenShao/0.4.0",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0));
     WinHttpSetTimeouts(session.handle,3000,3000,3000,3000);
     Internet connection(WinHttpConnect(session.handle,host.c_str(),parts.nPort,0));
     Internet request(WinHttpOpenRequest(connection.handle,L"GET",path.c_str(),nullptr,WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE));
@@ -86,7 +86,7 @@ void Download(std::string_view url,const std::filesystem::path& file,uint64_t ma
         const std::string address(url);
         auto set=[&](int option,auto value){if(curl.setopt(easy,option,value))throw std::runtime_error("Cannot configure HTTPS request");};
         // Stable libcurl easy-option ABI; no development headers or link dependency.
-        set(10002,address.c_str());set(10018,"OpenShao/0.3.0");set(52,1L);set(68,5L);
+        set(10002,address.c_str());set(10018,"OpenShao/0.4.0");set(52,1L);set(68,5L);
         set(181,2L);set(182,2L);set(99,1L);set(78,10L);set(19,1L);set(20,20L);
         set(20011,&Receive);set(10001,&out);set(43,0L);set(20219,&Tick);set(10057,&out);
         const auto status=curl.perform(easy);long code=0;curl.getinfo(easy,0x200002,&code);

@@ -38,9 +38,9 @@ def main():
     if args.accept:
         actions.extend([(31, 32, True), (31.4, 32, False)])
         actions.sort()
-    # Cold shader/driver caches and original-disc I/O can exceed eight seconds.
-    # Keep the actual Reset + controller assertions; allow startup to finish.
-    seconds = 40 if args.start else 15
+    # Cold pipeline preparation and original-disc I/O can outlast the old
+    # startup watchdog on slower CPUs. Retain the Reset and controller checks.
+    seconds = 40 if args.start else 45
     environment = os.environ.copy()
     if args.start:
         environment['XBE_CAPTURE_DIR'] = 'captures'

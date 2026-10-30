@@ -16,19 +16,34 @@ def main():
     parser.add_argument("--shadow-diagnostics", action="store_true", help="Include optional D3D12 shadow diagnostics")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    log = (args.sdk / "runtime/core/log.cpp").read_text(encoding="utf-8")
+    log = '#include "diagnostic_privacy.h"\n' + log
+    log = replace_once(log, '    va_end(ap);', '    va_end(ap);\n    const auto safe = openshao::privacy::Redact(msg);')
+    log = log.replace('size_t(tid), msg)', 'size_t(tid), safe.c_str())').replace(' : "", msg)', ' : "", safe.c_str())')
+    (args.out / "log.cpp").write_text(log, encoding="utf-8")
     text = (args.sdk / "runtime/app/main.cpp").read_text(encoding="utf-8")
-    text = '#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
+    text = '#include "support_report.h"\n#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
     text = replace_once(text, '#include <windows.h>', '#include <windows.h>\n#include <shobjidl.h>')
     text = replace_once(text, 'auto dir = ExeDir() / "CrashDumps";', 'auto dir = openshao::paths::Crashes();')
     text = replace_once(text, 'logx::Init((app::ExeDir() / "logs").string(), log, relaunched);',
         'logx::Init(openshao::paths::Logs().string(), log, relaunched);')
-    text = replace_once(text, '    else app::LogSystem();',
-        '    else app::LogSystem();\n    LOGR("OpenShao version: %s", OPENSHAO_RECOMP_VERSION);')
+    text = replace_once(text, '    else app::LogSystem();', '')
+    text = replace_once(text, '    // the dump holds no guest memory: the guest registers and return addresses go to the log\n',
+        '    if (openshao::support::NotifyCrash(e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0,\n'
+        '            e && e->ExceptionRecord ? reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress) : 0, e))\n'
+        '        return EXCEPTION_EXECUTE_HANDLER;\n'
+        '    // Native launcher failures have no guest thread yet. Log them independently.\n'
+        '    if (e && e->ExceptionRecord) {\n'
+        '        const auto* record = e->ExceptionRecord;\n'
+        '        LOGE("Native exception %08lX at %p (Windows thread %lu)", record->ExceptionCode, record->ExceptionAddress, GetCurrentThreadId());\n'
+        '        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2)\n'
+        '            LOGE("Access violation: operation=%llu address=%p", static_cast<unsigned long long>(record->ExceptionInformation[0]), reinterpret_cast<void*>(record->ExceptionInformation[1]));\n'
+        '    }\n')
     text = replace_once(text, '    CloseHandle(f);\n    logx::Flush();',
         '    CloseHandle(f);\n    logx::Flush();\n'
-        '    openshao::paths::ReportError(L"The game stopped because of an unexpected error.", dir / name);')
+        '    openshao::paths::ReportError(L"OpenShao stopped because of an unexpected error.", dir / name);')
     text = replace_once(text, 'if (f == INVALID_HANDLE_VALUE) return EXCEPTION_CONTINUE_SEARCH;',
-        'if (f == INVALID_HANDLE_VALUE) { openshao::paths::ReportError(L"The game stopped. A crash report could not be written."); return EXCEPTION_CONTINUE_SEARCH; }')
+        'if (f == INVALID_HANDLE_VALUE) { LOGE("Cannot create crash report (Windows error %lu)", GetLastError()); openshao::paths::ReportError(L"OpenShao stopped. A crash report could not be written."); return EXCEPTION_CONTINUE_SEARCH; }')
     message_callback = '    if (intptr_t result = 0; kGame.message && kGame.message(hwnd, msg, wp, lp, &result)) return result;'
     text = replace_once(text, message_callback + '\n', '')
     text = replace_once(text, 'LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {',
@@ -46,7 +61,14 @@ def main():
     text = replace_once(text, "case WM_ACTIVATE:", "case WM_ACTIVATE:\n            if (openshao::options.background) return 0;")
     text = replace_once(text, "case kOpenWindow:", "case kOpenWindow:\n            if (openshao::options.background) return 0;")
     text = replace_once(text, "int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {", "int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {\n    const int configured = openshao::Configure();\n    if (configured) return configured == 1 ? 0 : configured;")
-    text = replace_once(text, "app::Load();", "app::Load();\n    if (openshao::options.background) {\n        app::Get().display_mode = app::DisplayMode::Windowed;\n        app::Get().width = 640; app::Get().height = 480;\n    }\n    openshao::StartWatchdog();")
+    text = replace_once(text, "app::Load();",
+        'LOGR("OpenShao version: %s", OPENSHAO_RECOMP_VERSION);\n'
+        '    if (!openshao::options.background && openshao::options.launcher_test.empty() && !openshao::support::StartMonitor({openshao::paths::Root(), logx::Path(), OPENSHAO_RECOMP_VERSION}))\n'
+        '        LOGE("Automatic crash report worker is unavailable; using the local error handler.");\n'
+        '    LOGR("Startup stage: settings");\n'
+        '    app::Load();\n    app::LogSystem();\n'
+        '    LOGR("Startup stage: launcher");\n'
+        '    if (openshao::options.background) {\n        app::Get().display_mode = app::DisplayMode::Windowed;\n        app::Get().width = 640; app::Get().height = 480;\n    }\n    openshao::StartWatchdog();')
     text = replace_once(text, '    openshao::StartWatchdog();',
         '    if (openshao::options.configure_only || (!openshao::options.background && !openshao::options.validate_disc && !openshao::options.validate_language_pack && !openshao::options.setup && !openshao::options.no_launcher)) {\n'
         '        if (!openshao::launcher::Show()) return 0;\n'
@@ -310,7 +332,7 @@ uint32_t OpenOnDisc(''')
         '    else if (t.disc) FillNetworkInfo(a[1], *t.entry);')
     (args.out / "files.cpp").write_text(files, encoding="utf-8")
     boot = (args.sdk / "runtime/kernel/boot.cpp").read_text(encoding="utf-8")
-    boot = '#include "host.h"\n#include "runtime_paths.h"\n#include "language_pack.h"\n#include "mods/runtime.h"\n' + boot
+    boot = '#include "support_report.h"\n#include "host.h"\n#include "runtime_paths.h"\n#include "language_pack.h"\n#include "mods/runtime.h"\n' + boot
     boot = replace_once(boot, '    if (app::kGame.loaded) app::kGame.loaded();',
         '    std::string language_error;\n'
         '    if (!openshao::language::ApplyFonts(std::span<uint8_t>(g_base, X86ImageEnd), language_error)) {\n'
@@ -330,7 +352,7 @@ uint32_t OpenOnDisc(''')
     boot = replace_once(boot, 'return g_launch_file.substr(0, g_launch_file.find_last_of("/\\\\") + 1) + "display.bin";',
         'return (openshao::paths::Cache() / "display.bin").string();')
     boot = replace_once(boot, '    std::_Exit(code);',
-        '    if (code) openshao::paths::ReportError(L"The game stopped with error code " + std::to_wstring(code) + L".");\n    std::_Exit(code);')
+        '    if (code) openshao::paths::ReportError(L"The game stopped with error code " + std::to_wstring(code) + L".");\n    openshao::support::StopMonitor();\n    std::_Exit(code);')
     boot = replace_once(boot, "void Relaunch(const char* exe) {", "void Relaunch(const char* exe) {\n    if (openshao::options.background) { LOGE(\"Relaunch refused during isolated background test\"); Shutdown(50); }")
     (args.out / "boot.cpp").write_text(boot, encoding="utf-8")
     pads = (args.sdk / "runtime/core/input.cpp").read_text(encoding="utf-8")
@@ -447,6 +469,8 @@ uint32_t OpenOnDisc(''')
     d3d = replace_once(d3d,
         'openshao::aspect::WithCanvasClip(g_state, [&] { g_backend->Draw(g_state, prim, 0, count, nullptr); });',
         'openshao::aspect::WithCanvasClip(g_state, [&] { g_backend->Draw(g_state, prim, 0, count, nullptr); }, viewport_tint);')
+    from prepare_pipeline_precompile import adapt_d3d8 as adapt_pipeline_programs
+    d3d = adapt_pipeline_programs(d3d, replace_once)
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
     backend = (args.sdk / "runtime/gpu/d3d12.cpp").read_text(encoding="utf-8")
     backend = '#include "aspect_ratio.h"\n#include "host.h"\n#include "launcher.h"\n#include "bloom_effect_runtime.h"\n#include "runtime_paths.h"\n#include "raster_compat.h"\n#include "sfd_filter_compat.h"\n#include "shadow_depth_format.h"\n' + backend
@@ -485,6 +509,10 @@ uint32_t OpenOnDisc(''')
         '    if (!copied) return;')
     backend = replace_once(backend, '    bool tearing_ = false;',
         '    bool depth32_supported_ = false;\n    bool tearing_ = false;')
+    backend = replace_once(backend, '    tearing_ = tear;\n',
+        '    tearing_ = tear;\n'
+        '    // Without tearing support, a disabled VSync still presents at the display refresh rate.\n'
+        '    LOGR("D3D12 tearing support: %s", tearing_ ? "yes" : "no");\n')
     backend = replace_once(backend, '    if (adapter) adapter->GetDesc1(&ad);',
         '    if (adapter) adapter->GetDesc1(&ad);\n'
         '    D3D12_FEATURE_DATA_FORMAT_SUPPORT depth32{DXGI_FORMAT_D32_FLOAT}, sample32{DXGI_FORMAT_R32_FLOAT};\n'
@@ -713,6 +741,10 @@ uint32_t OpenOnDisc(''')
         backend = adapt_backend(backend, replace_once)
     from prepare_graphics_cache import adapt_backend as adapt_graphics_cache
     backend = adapt_graphics_cache(backend, replace_once)
+    from prepare_pipeline_precompile import adapt_backend as adapt_pipeline_precompile
+    backend = adapt_pipeline_precompile(backend, replace_once)
+    from prepare_perf_present import adapt_backend as adapt_perf_present
+    backend = adapt_perf_present(backend, replace_once)
     (args.out / "d3d12.cpp").write_text(backend, encoding="utf-8")
     # Linux builds the render thread from this copy; Windows still compiles the SDK file.
     threaded = (args.sdk / "runtime/gpu/render_thread.cpp").read_text(encoding="utf-8")
@@ -739,6 +771,8 @@ uint32_t OpenOnDisc(''')
         '    // allocations OR 1, and programmable shaders keep their own output.\n'
         '    return (s.vs_handle & 0xE) == 0x4 &&\n'
         '           (!(s.vs_handle & 1) || (s.vs && s.vs->program.empty()));')
+    from prepare_pipeline_layout import adapt_vertex as adapt_pipeline_layout
+    vertex = adapt_pipeline_layout(vertex, replace_once)
     (args.out / "vertex.cpp").write_text(vertex, encoding="utf-8")
     shaders = (args.sdk / "runtime/gpu/shaders.cpp").read_text(encoding="utf-8")
     shaders = '#include "raster_compat.h"\n' + shaders
@@ -774,6 +808,8 @@ uint32_t OpenOnDisc(''')
     # is one clip unit / target extent, multiplied by their homogeneous W.
     shaders = replace_once(shaders, '\n    o.pos = cp;\n',
         '\n    o.pos = cp;\n    o.pos.xy += float2(1 / surf.x, -1 / surf.y) * cp.w;\n')
+    from prepare_pipeline_pixel_key import adapt_shaders as adapt_pipeline_pixel_key
+    shaders = adapt_pipeline_pixel_key(shaders, replace_once)
     (args.out / "shaders.cpp").write_text(shaders, encoding="utf-8")
 
 

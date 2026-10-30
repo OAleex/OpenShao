@@ -129,7 +129,7 @@ int main() {
     ctx.esp=0x3000;ctx.ecx=0x598430;kernel::W32(0x4000,0);kernel::W32(0x4004,0x40);
     kernel::W32(0x598468,7);kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     check(MainInput(ctx,memory.data()) && Active() && model.CurrentPage()==Page::Enhancements &&
-          Snapshot().rows.size()==3 && !exit_prompt,
+          Snapshot().rows.size()==5 && !exit_prompt,
           "The new main-menu Enhancements row must open its standalone list rather than Exit");
     ctx.esp=0x3000;ctx.ecx=0x5985E8;release=false;Process(ctx,0,0x20);
     check(closing,"Leaving unchanged Enhancements must close the native Options scene");
@@ -164,7 +164,7 @@ int main() {
     release=false;Process(ctx,0,0x20);
     check(model.CurrentPage()==Page::Home && kernel::R32(0x6000+0x2A0)==34,"Returning from a custom category must use the original Audio-to-Options clip");
     animation.running=false;kernel::G<uint8_t>(0x6000+0x340)=1;
-    for(const auto [page,extension]:{std::pair{Page::Home,72.f},std::pair{Page::Display,24.f},std::pair{Page::Graphics,24.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-72.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,-24.f}}) {
+    for(const auto [page,extension]:{std::pair{Page::Home,72.f},std::pair{Page::Display,24.f},std::pair{Page::Graphics,48.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-72.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,24.f}}) {
         model.Go(page);selection=0;Quad(20,250,128,120);Graphic(ctx,0x6000,0,0,2);
         const float top=std::bit_cast<float>(kernel::R32(0x63F5E4+0x14)),bottom=std::bit_cast<float>(kernel::R32(0x63F5E4+0x24));
         check(std::abs(top-250-extension)<.01f && std::abs(bottom-top-120)<.01f,"Every settings category must size its ornament to the visible rows while preserving the carved cap proportions");
@@ -286,7 +286,7 @@ int main() {
     preview_succeeds=false;release=false;Process(ctx,0,0x80);
     check(notice=="settings.preview_error" && !closing,"A preview failure must keep the settings screen usable");
     const auto stopped=preview_stops;release=false;Process(ctx,0,0x20);
-    check(!closing && selection==1 && notice=="settings.unsaved" && preview_stops==stopped,
+    check(!closing && selection==3 && notice=="settings.unsaved" && preview_stops==stopped,
           "Unsaved Enhancements must select Save Changes before leaving");
     release=false;Process(ctx,0x4000,0);release=false;Process(ctx,0,0x40);
     check(closing && preview_stops>stopped,

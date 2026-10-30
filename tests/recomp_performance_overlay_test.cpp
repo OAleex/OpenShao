@@ -30,7 +30,7 @@ int main() {
     io.ClipboardUserData=&logged;
     io.SetClipboardTextFn=[](void* data,const char* text){*static_cast<std::string*>(data)=text;};
     ImGui::NewFrame();ImGui::LogToClipboard();Draw(60);ImGui::LogFinish();ImGui::Render();
-    check(logged.find("OpenShao 0.3.0")!=std::string::npos && logged.find("60.0 FPS")!=std::string::npos,
+    check(logged.find("OpenShao 0.4.0")!=std::string::npos && logged.find("60.0 FPS")!=std::string::npos,
         "The visible performance panel must identify the port version alongside the measured timing");
     check(!io.WantCaptureKeyboard && !io.WantCaptureMouse, "performance display must not consume gameplay input");
     check(Message(0x100, 0x78, 0) && !Visible(), "second F9 press must hide the overlay");

@@ -23,6 +23,7 @@
 #include "app/app.h"
 #include "performance_overlay.h"
 #include "runtime_paths.h"
+#include "support_report.h"
 #include "restart.h"
 #include "launcher_settings.h"
 #include <cerrno>
@@ -40,7 +41,7 @@ bool RequestExit() {
 #endif
 }
 
-// Another copy holds the data folder. Bring its window forward, or say that it is open; nothing here is an error.
+// Another instance holds the data folder: bring its window forward or say that it is open.
 void ShowAlreadyOpen() {
     std::fprintf(stderr, "OpenShao is already open.\n");
     if (options.background || !options.launcher_test.empty()) return;
@@ -70,6 +71,13 @@ int Configure() {
     int argc = int(pointers.size());
     wchar_t** argv = pointers.data();
 #endif
+    if (argc == 3 && std::wstring(argv[1]) == L"--support-worker") {
+        const auto task = std::filesystem::path(argv[2]);
+#ifdef _WIN32
+        LocalFree(argv);
+#endif
+        return support::RunWorker(task) == 0 ? 1 : 10;
+    }
     bool invalid = false, explicit_timeout = false;
     auto number=[&](const wchar_t* value,uint64_t maximum) {
         wchar_t* end=nullptr;errno=0;
@@ -97,6 +105,7 @@ int Configure() {
         else if (arg == L"--validate-language-pack") options.validate_language_pack = true;
         else if (arg == L"--language-pack" && i + 1 < argc) options.language_pack = argv[++i];
         else if (arg == L"--paths") options.paths = true;
+        else if (arg == L"--support-report") options.support_report = true;
         else if (arg == L"--data-dir" && i + 1 < argc) options.data_dir = argv[++i];
         else if ((arg == L"--register-disc" || arg == L"--validate-disc") && i + 1 < argc) {
             options.validate_disc = true;
@@ -159,14 +168,32 @@ int Configure() {
         return 1;
     }
     std::string error;
-    if (!paths::Initialize(app::ExeDir(), options.background, options.data_dir, error, options.paths || options.restart_parent!=0)) {
+    if (!paths::Initialize(app::ExeDir(), options.background, options.data_dir, error, options.paths || options.support_report || options.restart_parent!=0)) {
         if (paths::DataInUse()) { ShowAlreadyOpen(); return kAlreadyOpen; }
-        std::fprintf(stderr, "Cannot prepare application data: %s\n", error.c_str());
-        paths::ReportError(L"The application data folder could not be opened. Check its permissions.");
+        // The normal log cannot open until the data folder is ready.
+        try {
+            const auto fallback = std::filesystem::temp_directory_path() / "OpenShao" / "startup";
+#ifdef _WIN32
+            const auto name = "openshao-startup-" + std::to_string(GetCurrentProcessId());
+#else
+            const auto name = "openshao-startup-" + std::to_string(getpid());
+#endif
+            logx::Init(fallback.string(), name);
+        } catch (...) {}
+        LOGE("Cannot prepare application data: %s", error.c_str());
+        const auto detail = std::filesystem::path(std::u8string(error.begin(), error.end())).wstring();
+        paths::ReportError(L"The application folders could not be prepared.\n\n" + detail);
         return 6;
     }
     if (options.paths) {
         std::printf("%s\n", paths::Description().c_str());
+        return 1;
+    }
+    if (options.support_report) {
+        const auto report = support::Generate({paths::Root(), {}, OPENSHAO_RECOMP_VERSION});
+        if (report.zip.empty()) { std::fprintf(stderr, "%s\n", report.error.c_str()); return 10; }
+        const auto path = report.zip.u8string();
+        std::printf("%s\n", std::string(path.begin(), path.end()).c_str());
         return 1;
     }
     options.data_dir = paths::Root();

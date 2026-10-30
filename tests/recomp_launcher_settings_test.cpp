@@ -9,13 +9,33 @@ int main() {
     using namespace openshao::launcher;
     int failures = 0;
     const auto check = [&](bool good, const char* message) { if (!good) { ++failures; std::cerr << message << '\n'; } };
+#ifdef _WIN32
+    check(Merge({},Read({}))["renderer"].value_or(std::string{})=="d3d12",
+          "New and legacy Windows settings must start with D3D12");
+    check(Merge({},Read(toml::parse("renderer='vulkan'\n")))["renderer"].value_or(std::string{})=="vulkan",
+          "A Vulkan launcher selection must survive a complete settings load and save");
+    check(Merge({},Read(toml::parse("renderer='unknown'\n")))["renderer"].value_or(std::string{})=="d3d12",
+          "An unsupported renderer preference must recover to the Windows default");
+#else
+    check(!Merge(toml::parse("renderer='d3d12'\n"),Read(toml::parse("renderer='d3d12'\n"))).contains("renderer"),
+          "Linux must remove a copied renderer preference and retain its fixed Vulkan renderer");
+#endif
     auto table = toml::parse("custom = 42\n[controller]\ndeadzone = 0.23\ncustom = true\n[controller.bindings]\na = 'cross'\ncustom = 'keep'\n");
     auto config = Read(table);
     check(!Merge({}, Read({}))["enhancements"]["scorpion_unfiltered"].value_or(true),
           "New and legacy configurations must preserve the original Scorpion voice distribution by default");
     const auto enhanced = Read(toml::parse("[enhancements]\nscorpion_unfiltered = true\n"));
+    check(!Merge({},Read({}))["enhancements"]["cinematic_bars"].value_or(true),
+          "Cinematic bars must be an optional enhancement, disabled for existing and new settings");
+    for(bool enabled:{false,true})
+        check(Merge({},Read(toml::table{{"enhancements",toml::table{{"cinematic_bars",enabled}}}}))["enhancements"]["cinematic_bars"].value_or(!enabled)==enabled,
+              "Both cinematic bar choices must survive a complete configuration round trip");
     check(Merge({}, enhanced)["enhancements"]["scorpion_unfiltered"].value_or(false),
           "The Scorpion enhancement must survive configuration load and save");
+    check(Read({}).restore_dialogue && Merge({}, Read({}))["enhancements"]["restore_dialogue"].value_or(false),
+          "New and legacy configurations must restore dropped script dialogue by default");
+    check(!Merge({}, Read(toml::parse("[enhancements]\nrestore_dialogue = false\n")))["enhancements"]["restore_dialogue"].value_or(true),
+          "Choosing the original dialogue behavior must survive configuration load and save");
     check(Read({}).brightness == 50, "A new configuration must default to 50 percent brightness");
     for (const int brightness : {0, 23, 50, 100}) {
         const auto saved_brightness = Read(toml::table{{"game", toml::table{{"brightness", brightness}}}});
@@ -118,8 +138,17 @@ int main() {
     check(!Validate(Read(toml::parse("[mouse]\nmotion='invalid'\n")),error),"Invalid mouse motion targets must be rejected");
     auto overlap=openshao::bindings::Keyboard{};overlap.keys[0]={163,0};
     check(!openshao::bindings::KeyboardConflicts(overlap,0,0,163).empty(),"A side-specific modifier conflicts with a generic modifier binding");
-    check(Merge({},Settings{})["fps_cap"].value_or(0)==60,"The frame rate must be fixed at 60 FPS");
-    for(const int fps:{-1,0,29,30,45,60,61,120,1000}) {
+    check(Merge({},Settings{})["fps_cap"].value_or(0)==60,"New settings must default to 60 FPS");
+    for (const int fps : {60,120}) {
+        for (const bool vsync : {false,true}) {
+            const auto loaded=Read(toml::table{{"fps_cap",fps},{"vsync",vsync}});
+            const auto saved=Merge({},loaded);
+            check(saved["fps_cap"].value_or(0)==fps && saved["vsync"].value_or(!vsync)==vsync,
+                  "Supported frame rates must persist independently of VSync");
+            check(Read(saved)==loaded,"A supported frame rate must survive a complete round trip");
+        }
+    }
+    for(const int fps:{-1,0,29,30,45,61,144,240,1000}) {
         const toml::table legacy{{"fps_cap",fps}};
         const auto loaded=Read(legacy);
         check(loaded==Settings{},"Legacy frame-rate preferences must not change launcher settings");

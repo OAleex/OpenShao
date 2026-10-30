@@ -1,7 +1,13 @@
-#include "linux/vk/vk_api.h"
-
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#endif
+#include "linux/vk/vk_api.h"
 
 #include "core/log.h"
 
@@ -12,12 +18,18 @@ VkDevice device = VK_NULL_HANDLE;
 
 bool LoadGlobal() {
     if (vk.vkGetInstanceProcAddr) return true;
+#ifdef _WIN32
+    static HMODULE loader=LoadLibraryExW(L"vulkan-1.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!loader){LOGE("vulkan: system Vulkan loader unavailable (%lu)",GetLastError());return false;}
+    vk.vkGetInstanceProcAddr=reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(loader,"vkGetInstanceProcAddr"));
+#else
     // the window was made with SDL_WINDOW_VULKAN, which loads the library; this only adds a reference
     if (!SDL_Vulkan_LoadLibrary(nullptr)) {
         LOGE("vulkan: no Vulkan loader (%s)", SDL_GetError());
         return false;
     }
     vk.vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+#endif
     if (!vk.vkGetInstanceProcAddr) return false;
 #define OPENSHAO_VK_LOAD(name) vk.name = reinterpret_cast<PFN_##name>(vk.vkGetInstanceProcAddr(nullptr, #name));
     OPENSHAO_VK_GLOBAL(OPENSHAO_VK_LOAD)

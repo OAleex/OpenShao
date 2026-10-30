@@ -14,13 +14,21 @@ inline constexpr std::array<const char*, 6> languages{"en", "fr", "de", "es", "i
 inline constexpr std::array<const char*,6> voice_languages{"en","fr","de","es","it","pt-BR"};
 inline constexpr auto binding_keys = bindings::keys;
 struct Settings {
+#ifdef _WIN32
+    std::string renderer = "d3d12";
+#else
+    std::string renderer = "vulkan";
+#endif
     std::string voice_language = "en";
     std::string language = "en", display_mode = "borderless", aspect_ratio = "original";
     int width = 0, height = 0, render_percent = 100, aniso = 0;
+    int fps_cap = FrameRate;
     int master_volume = 100;
     double deadzone = .15;
     bool vsync = true, bloom_effect = false, show_fps = false, rumble = true;
     bool scorpion_unfiltered = false;
+    bool restore_dialogue = true;
+    bool cinematic_bars = false;
     mouse::Settings mouse;
     bool original_override = false, camera_reverse = false;
     int music_volume = 90, effects_volume = 90, speech_volume = 90;

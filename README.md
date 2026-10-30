@@ -56,12 +56,16 @@ The first start of 0.3.0 moves the data and saves of earlier releases to the new
 ## Features
 
 - **Launcher** with game selection, mods, folders and automatic updates.
+- **Graphics API** selection on the launcher's Play page: Direct3D 12 by default or Vulkan on Windows. Linux uses Vulkan.
 - **Konfigure Recompilation**, an in-game settings menu for display, graphics, controls, audio and language.
 - **Pause menu** with Continue, Options, Konfigure Recompilation, Exit Game and Exit to Desktop. Exit Game returns to the main menu.
 - **Widescreen** at 16:9, 16:10, 21:9, 32:9 or the window's own shape, with the original 4:3 as default.
 - **Render scale** from 25% to 400%, anisotropic filtering and V-Sync.
+- **Cinematic Bars** in the main menu's Enhancements adds animated black bands to in-game cutscenes. It is off by default.
+- **Frame rate** follows the current monitor with V-Sync enabled. With V-Sync disabled, select 60 or 120 FPS. Simulation runs at 60 Hz.
 - **Remappable controls** for controllers, keyboard and mouse, with mouse camera support.
 - **Local Ko-op** with keyboard and mouse plus one controller, or two controllers.
+- **Restore Lost Dialogue** in the main menu's Enhancements, on by default. It recovers overlapping story lines, Johnny Cage's ledge instruction and wheel reactions, missing Goro's Lair dialogue and tutorial cues, solo/Ko-op escape warnings, the Living Forest acid hints, Kitana's laugh variations and captive threat, and Shang Tsung's unused combat taunts. It also adds unused takes to matching boss encounters and voices selected tutorial captions. It uses the selected voice language and the original recordings available for each cue.
 - **Separate text and voice languages**, including Brazilian Portuguese through a language pack.
 - **Mods** from the [OpenShao-Mods catalog](https://github.com/OAleex/OpenShao-Mods), installed and updated in the launcher.
 
@@ -69,7 +73,7 @@ The first start of 0.3.0 moves the data and saves of earlier releases to the new
 
 - Most graphical issues have been fixed, but some can still appear. Any problem is worth reporting: [open an issue](https://github.com/OAleex/OpenShao/issues) with a screenshot.
 - Mortal Kombat II and The Suffering demo do not run.
-- A scene can pause briefly the first time it is shown while its shaders compile.
+- Shaders and pipelines for supported assets are prepared while an area loads, including on the first run. Common menu, particle and screen-effect pipelines are prepared when their shaders load. Other effects can still pause briefly on first use. Observed pipelines are also prepared in the background in later sessions.
 
 ## FAQ
 
@@ -113,6 +117,8 @@ Change them in **Konfigure Recompilation > Controls**. Each action has a primary
 Xbox, PlayStation and other SDL-compatible controllers work. The game shows Xbox buttons.
 In single player, the keyboard, mouse and first controller all control player 1.
 In Ko-op, the keyboard and mouse are player 1 and a controller is player 2. With two controllers, each controller is one player.
+If player 1's controller disconnects during Ko-op, the keyboard and mouse take over player 1. Connected controllers keep their player slots, and a replacement fills an empty slot.
+Any connected controller can navigate Konfigure Recompilation and remap controls.
 
 For a controller without a mapping, put an SDL `gamecontrollerdb.txt` in the data folder.
 
@@ -123,7 +129,7 @@ Then choose the language in **Konfigure Recompilation > Language**. Mod authors 
 
 ### How can I improve performance?
 
-Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate. The game is limited to 60 FPS.
+Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate. V-Sync uses the monitor's refresh rate as its target; output can fall below it when rendering is slow or an extra frame cannot be safely produced.
 
 ### Why does OpenShao bring the open window forward instead of starting?
 
@@ -141,11 +147,16 @@ Only one copy can run at a time with the same data folder.
 | `--save-dir <path>` | Use another saves folder for this session |
 | `--portable-saves` | Keep saves in `hdd` next to the executable |
 | `--paths` | Print the folders in use |
+| `--support-report` | Create a filtered diagnostic ZIP without opening the launcher |
 
 ### How do I report a problem?
 
-[Open an issue](https://github.com/OAleex/OpenShao/issues) with the steps that cause it and the latest log from **Files > Logs > Open**.
-Include a screenshot for graphical problems. Do not attach game files.
+Open **Support** in the launcher. Select **Generate report** to create a diagnostic ZIP, then **Report a bug** to open GitHub.
+Attach the ZIP and describe the steps that cause the problem. Reports are saved in the data folder under `reports`.
+
+Reports contain up to three session logs, selected settings and installed mod versions. Manual reports include the latest completed crash dump when available. Automatic crash reports include the dump captured for that crash when one can be created. New session logs and exported text logs filter account and computer names, personal paths, network addresses and credentials. ZIP reports exclude saves, game files and screenshots. Add a screenshot separately for graphical problems.
+
+An unexpected launcher or game exit creates a ZIP automatically. The error message shows its location and reporting instructions. Select **OK** to open the reports folder. You do not need to reopen the launcher to create the crash report.
 
 ## Building
 

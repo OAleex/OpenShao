@@ -1,5 +1,5 @@
 #pragma once
-// Load Vulkan through SDL so the executable can start without libvulkan.
+// Open the system Vulkan loader only when this renderer is selected.
 #ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES
 #endif

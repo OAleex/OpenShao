@@ -32,6 +32,7 @@
 #include "linux/virtual_keys.h"
 #include "performance_overlay.h"
 #include "runtime_paths.h"
+#include "support_report.h"
 #include "restart.h"
 
 namespace app {
@@ -95,6 +96,9 @@ void PushEvent(EventCode code, bool apply = false) {
 }
 
 void CrashSignal(int signal) {
+    if (openshao::support::NotifyCrash(uint32_t(signal))) {
+        std::signal(signal, SIG_DFL); raise(signal); return;
+    }
     if (kernel::Thread* t = kernel::Current(); t && t->ctx) {
         LOGE("signal %d on guest thread %X", signal, t->id);
         kernel::LogGuestStack(*t->ctx, 256);
@@ -293,6 +297,9 @@ int main(int argc, char** argv) {
     std::string log = app::kGame.log;
     if (app::Instance() > 1) log += "-" + std::to_string(app::Instance());
     logx::Init(openshao::paths::Logs().string(), log, relaunched);
+    if (!openshao::options.background && openshao::options.launcher_test.empty() &&
+        !openshao::support::StartMonitor({openshao::paths::Root(), logx::Path(), OPENSHAO_RECOMP_VERSION}))
+        LOGE("Automatic crash report worker is unavailable; using the local error handler.");
     app::Load();
     {std::string error;if(!openshao::restart::ContinueStartup(error)){LOGE("Language restart: %s",error.c_str());return 8;}}
     if (openshao::options.background) {

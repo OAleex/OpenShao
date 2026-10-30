@@ -22,6 +22,5 @@ void ReleaseDataLock();
 // True after Initialize failed because another OpenShao process uses the data folder.
 bool DataInUse();
 std::string Description();
-std::wstring ErrorText(const std::wstring& reason, const std::filesystem::path& dump = {});
 void ReportError(const std::wstring& reason, const std::filesystem::path& dump = {});
 }

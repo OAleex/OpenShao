@@ -1,4 +1,8 @@
 #include "linux/vk/vk_api.h"
+#include "linux/vk/vk_window.h"
+#ifdef _WIN32
+#include <backends/imgui_impl_win32.h>
+#endif
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -15,7 +19,9 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <dxgiformat.h>
@@ -36,6 +42,9 @@
 #include "kernel/kernel.h"
 #include "linux/vk/bc_decode.h"
 #include "linux/vk/vk_shader.h"
+#include "pipeline_precompile.h"
+#include "pipeline_assets.h"
+#include "pipeline_source_cache.h"
 #include "raster_compat.h"
 #include "runtime_paths.h"
 #include "sfd_filter_compat.h"
@@ -526,9 +535,11 @@ struct Attachments {
     }
 };
 
-class VulkanBackend final : public Backend {
+class VulkanBackend final : public Backend, public openshao::pipelines::Builder {
 public:
     ~VulkanBackend() override;
+    bool BuildPipeline(const openshao::pipelines::Recipe& r, std::span<const uint32_t> program) override;
+    bool DescribeCandidate(const openshao::pipelines::PipelineCandidate& c, openshao::pipelines::Recipe& r);
     bool Init(uint32_t width, uint32_t height) override;
     void Clear(const State& s, uint32_t count, const uint8_t* rects, uint32_t flags, uint32_t color, float z,
                uint32_t stencil) override;
@@ -604,6 +615,9 @@ private:
     void BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k);
     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
     VkPipeline EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkShaderModule ps);
+    // Thread safe: the render thread and the precompile workers share it.
+    VkPipeline MakePipeline(const PsoKey& k, VkShaderModule vs, VkShaderModule ps, VkShaderModule points,
+                            VkShaderModule atlas) const;
     float PointScale() const;
     void UploadConstants(const State& s, const DrawShaders& sh, const PsoKey& k, const DrawTextures& stages,
                          GuestExtent size, DrawConstants& c, Bindings& b);
@@ -642,7 +656,7 @@ private:
             blend.colorWriteMask = 0xF;
         }
     };
-    VkPipeline CreatePipeline(const PipelineParts& p);
+    VkPipeline CreatePipeline(const PipelineParts& p) const;
     VkPipeline EnsureBlitPipeline(VkFormat rtv, bool over = false);
     bool CreateInstance();
     bool PickDevice();
@@ -660,6 +674,7 @@ private:
     void DrawFrame(Target* t, uint32_t bi);
     void BlitFrame(Target& t);
     void RenderUi();
+    void CaptureFrame(Target& target);
     void ReleaseOldTextures();
     void ResetFrame();
     void CountFps();
@@ -743,6 +758,19 @@ private:
     std::unordered_map<uint64_t, uint64_t> shader_src_;  // vertex and pixel program keys to source hash
     std::unordered_map<uint64_t, VkPipeline> psos_;
     std::unordered_map<uint64_t, VkPipeline> blit_psos_;
+    // Modules and pipelines the precompile workers built; the render thread adopts them on use.
+    // pre_modules_ also lists the render thread's modules: blobs_ shares those handles.
+    std::mutex pre_mutex_;
+    std::unordered_map<uint64_t, VkShaderModule> pre_modules_;
+    std::unordered_map<uint64_t, VkPipeline> pre_psos_;
+    std::unordered_set<uint64_t> pre_done_;  // pipelines made on either side
+    openshao::pipelines::SourceHashes candidate_sources_;
+    openshao::pipelines::InFlight pre_shader_flight_, pre_pso_flight_;
+    bool pso_first_use_ = false;
+    bool pso_compiled_on_draw_ = false;
+    VkShaderModule CompileModule(const std::string& src, const char* entry, vkshader::Stage stage) const;
+    VkShaderModule PrecompileModule(const std::string& src, const char* entry, vkshader::Stage stage, uint64_t& hash);
+    void RecordPipeline(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk, const PsoKey& k);
     std::unordered_map<uint64_t, VkSampler> samplers_;
     VkSampler blit_samplers_[4] = {};
     Attachments pending_;
@@ -804,6 +832,9 @@ private:
 
 
 VulkanBackend::~VulkanBackend() {
+    openshao::pipelines::ReportAssetPipelines();
+    openshao::pipelines::ClearCandidateDescriber();
+    openshao::pipelines::Shutdown();
     if (!dev_) {
         if (surface_) vk.vkDestroySurfaceKHR(instance_, surface_, nullptr);
         if (instance_) vk.vkDestroyInstance(instance_, nullptr);
@@ -826,8 +857,12 @@ VulkanBackend::~VulkanBackend() {
         if (f.acquire) vk.vkDestroySemaphore(dev_, f.acquire, nullptr);
     }
     for (auto& [k, p] : psos_) if (p) vk.vkDestroyPipeline(dev_, p, nullptr);
+    for (auto& [k, p] : pre_psos_) if (p) vk.vkDestroyPipeline(dev_, p, nullptr);
     for (auto& [k, p] : blit_psos_) if (p) vk.vkDestroyPipeline(dev_, p, nullptr);
-    for (auto& [k, m] : blobs_) if (m) vk.vkDestroyShaderModule(dev_, m, nullptr);
+    std::unordered_set<VkShaderModule> modules;
+    for (auto& [k, m] : blobs_) if (m) modules.insert(m);
+    for (auto& [k, m] : pre_modules_) if (m) modules.insert(m);
+    for (VkShaderModule m : modules) vk.vkDestroyShaderModule(dev_, m, nullptr);
     for (auto& [k, s] : samplers_) vk.vkDestroySampler(dev_, s, nullptr);
     for (VkSampler s : blit_samplers_) if (s) vk.vkDestroySampler(dev_, s, nullptr);
     if (query_pool_) vk.vkDestroyQueryPool(dev_, query_pool_, nullptr);
@@ -854,17 +889,16 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
     scale_ = app::RenderScale(guest_h_);
     Begin();
     LOGI("vulkan: %ux%u guest, %ux%u window, render scale %.3f", width, height, bb_w_, bb_h_, scale_);
+    openshao::pipelines::Start(openshao::paths::Cache() / "vulkan_recipes.bin", 0x5C0000000000ull | sizeof(PsoKey), this);
+    openshao::pipelines::SetCandidateDescriber([this](const auto& c, auto& r) { return DescribeCandidate(c, r); });
+    openshao::pipelines::SetPipelineRenderScale(scale_);
+    openshao::pipelines::WarmCommonScreenPipelines();
     return true;
 }
 
 bool VulkanBackend::CreateInstance() {
-    Uint32 count = 0;
-    const char* const* sdl_ext = SDL_Vulkan_GetInstanceExtensions(&count);
-    if (!sdl_ext) {
-        LOGE("vulkan: no surface extensions (%s)", SDL_GetError());
-        return false;
-    }
-    std::vector<const char*> ext(sdl_ext, sdl_ext + count);
+    auto ext=vkplatform::SurfaceExtensions();
+    if(ext.empty())return false;
     uint32_t api = VK_API_VERSION_1_0;
     if (auto enumerate = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
             vk.vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"))) {
@@ -901,10 +935,7 @@ bool VulkanBackend::CreateInstance() {
         return false;
     }
     if (!vkapi::LoadInstance(instance_)) return false;
-    if (!SDL_Vulkan_CreateSurface(static_cast<SDL_Window*>(app::Window()), instance_, nullptr, &surface_)) {
-        LOGE("vulkan: no window surface (%s)", SDL_GetError());
-        return false;
-    }
+    if(!vkplatform::CreateSurface(instance_,surface_))return false;
     return true;
 }
 
@@ -1033,7 +1064,7 @@ bool VulkanBackend::CreateDevice() {
 
 bool VulkanBackend::CreateSwapchain() {
     int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(app::Window()), &pw, &ph);
+    vkplatform::WindowSize(pw,ph);
     VkSurfaceCapabilitiesKHR caps;
     if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu_, surface_, &caps) != VK_SUCCESS) return false;
     VkExtent2D extent = caps.currentExtent;
@@ -1848,32 +1879,52 @@ void VulkanBackend::Blit(Image& src, const float uvrect[4], const BlitOptions& o
     DrawFullScreen(EnsureBlitPipeline(o.rtv, o.over), cb, views, samplers);
 }
 
-VkShaderModule VulkanBackend::Compile(const std::string& src, const char* entry, vkshader::Stage stage, uint64_t& hash) {
-    // one source can hold several entry points
+// one source can hold several entry points
+uint64_t ShaderKey(const std::string& src, const char* entry, vkshader::Stage stage) {
     uint64_t stage_seed = Hash(&stage, sizeof(stage));
     uint64_t entry_seed = Hash(entry, std::strlen(entry), stage_seed);
-    hash = Hash(src.data(), src.size(), entry_seed);
-    auto it = blobs_.find(hash);
-    if (it != blobs_.end()) return it->second;
-    PerfScope perf_compile{g_perf.compile};
-    g_perf.shaders++;
+    return Hash(src.data(), src.size(), entry_seed);
+}
+
+VkShaderModule VulkanBackend::CompileModule(const std::string& src, const char* entry, vkshader::Stage stage) const {
     std::vector<uint32_t> spirv;
     std::string error;
     VkShaderModule module = VK_NULL_HANDLE;
     if (!vkshader::Compile(src, entry, stage, spirv, error)) {
         LOGE("vulkan: shader compile failed: %s", error.c_str());
         LOGE("%s", src.c_str());
-    } else {
-        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        ci.codeSize = spirv.size() * sizeof(uint32_t);
-        ci.pCode = spirv.data();
-        if (vk.vkCreateShaderModule(dev_, &ci, nullptr, &module) != VK_SUCCESS) module = VK_NULL_HANDLE;
+        return VK_NULL_HANDLE;
+    }
+    VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    ci.codeSize = spirv.size() * sizeof(uint32_t);
+    ci.pCode = spirv.data();
+    if (vk.vkCreateShaderModule(dev_, &ci, nullptr, &module) != VK_SUCCESS) module = VK_NULL_HANDLE;
+    return module;
+}
+
+VkShaderModule VulkanBackend::Compile(const std::string& src, const char* entry, vkshader::Stage stage, uint64_t& hash) {
+    hash = ShaderKey(src, entry, stage);
+    auto it = blobs_.find(hash);
+    if (it != blobs_.end()) return it->second;
+    // Wait for a worker compiling the same source, then take its module.
+    openshao::pipelines::InFlightScope flight{pre_shader_flight_, hash};
+    {
+        std::lock_guard lock(pre_mutex_);
+        auto ready = pre_modules_.find(hash);
+        if (ready != pre_modules_.end()) return blobs_[hash] = ready->second;
+    }
+    PerfScope perf_compile{g_perf.compile};
+    g_perf.shaders++;
+    VkShaderModule module = CompileModule(src, entry, stage);
+    if (module) {
+        std::lock_guard lock(pre_mutex_);
+        pre_modules_.try_emplace(hash, module);
     }
     blobs_[hash] = module;
     return module;
 }
 
-VkPipeline VulkanBackend::CreatePipeline(const PipelineParts& p) {
+VkPipeline VulkanBackend::CreatePipeline(const PipelineParts& p) const {
     // glslang keeps the HLSL entry point's name
     VkPipelineShaderStageCreateInfo st[3];
     uint32_t n = 0;
@@ -1991,9 +2042,41 @@ float VulkanBackend::PointScale() const {
 }
 
 VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkShaderModule ps) {
+    pso_first_use_ = pso_compiled_on_draw_ = false;
     uint64_t h = Hash(&k, sizeof(k));
     auto it = psos_.find(h);
     if (it != psos_.end()) return it->second;
+    openshao::pipelines::InFlightScope flight{pre_pso_flight_, h};
+    {
+        std::lock_guard lock(pre_mutex_);
+        auto ready = pre_psos_.find(h);
+        if (ready != pre_psos_.end()) {
+            const VkPipeline pso = ready->second;
+            pre_psos_.erase(ready);
+            pso_first_use_ = pso != VK_NULL_HANDLE;
+            return psos_[h] = pso;
+        }
+    }
+    uint64_t hash;
+    // Expand points to full console pixels without culling.
+    VkShaderModule points = k.topo == uint32_t(Topology::Points) && gs_ok_
+        ? Compile(PointHlsl(), "main", vkshader::Stage::Geometry, hash) : VK_NULL_HANDLE;
+    VkShaderModule atlas = k.atlas_guard && gs_ok_
+        ? Compile(openshao::AtlasBoundsHlsl(), "main", vkshader::Stage::Geometry, hash) : VK_NULL_HANDLE;
+    if (k.atlas_guard && gs_ok_ && !atlas) return psos_[h] = VK_NULL_HANDLE;
+    g_perf.psos++;
+    VkPipeline pso = MakePipeline(k, vs, ps, points, atlas);
+    psos_[h] = pso;
+    {
+        std::lock_guard lock(pre_mutex_);
+        pre_done_.insert(h);
+    }
+    pso_first_use_ = pso_compiled_on_draw_ = pso != VK_NULL_HANDLE;
+    return pso;
+}
+
+VkPipeline VulkanBackend::MakePipeline(const PsoKey& k, VkShaderModule vs, VkShaderModule ps, VkShaderModule points,
+                                       VkShaderModule atlas) const {
     PipelineParts p;
     p.vs = vs;
     p.ps = ps;
@@ -2039,24 +2122,17 @@ VkPipeline VulkanBackend::EnsurePipeline(const PsoKey& k, VkShaderModule vs, VkS
     p.ds.front = p.ds.back = so;
     p.color = k.has_rt ? VkFormat(k.rtfmt) : VK_FORMAT_UNDEFINED;
     p.depth = k.has_ds ? depth_format_ : VK_FORMAT_UNDEFINED;
-    uint64_t hash;
-    if (k.topo == uint32_t(Topology::Points) && gs_ok_) {
-        // Expand points to full console pixels without culling.
-        p.gs = Compile(PointHlsl(), "main", vkshader::Stage::Geometry, hash);
-        if (p.gs) {
-            p.raster.polygonMode = VK_POLYGON_MODE_FILL;
-            p.raster.cullMode = VK_CULL_MODE_NONE;
-            p.raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
-        }
+    if (points) {
+        p.gs = points;
+        p.raster.polygonMode = VK_POLYGON_MODE_FILL;
+        p.raster.cullMode = VK_CULL_MODE_NONE;
+        p.raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
     }
     if (k.atlas_guard && gs_ok_) {
-        p.gs = Compile(openshao::AtlasBoundsHlsl(), "main", vkshader::Stage::Geometry, hash);
-        if (!p.gs) return psos_[h] = VK_NULL_HANDLE;
+        if (!atlas) return VK_NULL_HANDLE;
+        p.gs = atlas;
     }
-    g_perf.psos++;
-    VkPipeline pso = CreatePipeline(p);
-    psos_[h] = pso;
-    return pso;
+    return CreatePipeline(p);
 }
 
 
@@ -2460,26 +2536,12 @@ void KeyRasterizer(const State& s, const Assembled& a, PsoKey& k) {
 }
 
 void VulkanBackend::BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k) {
-    std::memset(&k, 0, sizeof(k));
-    k.vs = vh;
-    k.ps = ph;
-    k.regs = a.regs;
-    for (int r = 0; r < 16; r++) {
-        if ((a.regs >> r) & 1) {
-            const VertexElement& e = a.elements[size_t(r)];
-            k.elements[r] = e.format | uint32_t(e.buffer) << 8 | uint32_t(e.offset) << 16;
-        }
-    }
-    k.buffers = a.buffer_count;
-    for (uint32_t i = 0; i < a.buffer_count && i < 16; i++) k.strides[i] = a.buffers[i].stride;
-    k.topo = uint32_t(a.topology);
-    k.strip = a.strip;
-    k.has_rt = bound_rt_ != nullptr;
-    k.has_ds = bound_ds_ != nullptr;
-    k.rtfmt = bound_rt_ ? uint32_t(bound_rt_->fmt) : 0;
-    KeyBlend(s, k);
-    if (k.has_ds) KeyDepthStencil(s, a, k);
-    KeyRasterizer(s, a, k);
+    openshao::pipelines::PipelinePass pass;
+    pass.color = bound_rt_ != nullptr;
+    pass.depth = bound_ds_ != nullptr;
+    pass.color_format = bound_rt_ ? uint32_t(bound_rt_->fmt) : 0;
+    pass.depth_scale = bound_ds_ ? float(bound_ds_->w) / bound_ds_->gw : 1;
+    openshao::pipelines::FillPipelineKey(s, a, vh, ph, pass, k);
 }
 
 constexpr float kAlphaTestAlways = 7.0f;
@@ -2893,6 +2955,10 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
     k.atlas_guard = sh.quad && a.topology == Topology::Triangles && atlas && !target_texture;
     VkPipeline pso = EnsurePipeline(k, sh.vs_code, sh.ps_code);
     if (!pso) return;
+    if (pso_first_use_) {
+        openshao::pipelines::ObserveAssetPipeline(Hash(&k, sizeof(k)), pso_compiled_on_draw_);
+        RecordPipeline(s, a, sh, pk, k);
+    }
 
     GuestExtent size;
     SurfaceSize(bound_rt_ ? s.rt : s.zs, size.w, size.h);
@@ -3123,7 +3189,7 @@ void VulkanBackend::Copy(const Surface& src, const Surface& dst, uint32_t count,
 // On X11 use the surface extent because SDL may lag mode changes; on Wayland use SDL size.
 void VulkanBackend::ResizeSwap() {
     int pw = 0, ph = 0;
-    SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(app::Window()), &pw, &ph);
+    vkplatform::WindowSize(pw,ph);
     bool vsync = app::Get().vsync;
     static int last_w = 0, last_h = 0;
     bool sdl_changed = pw != last_w || ph != last_h;
@@ -3192,6 +3258,9 @@ void VulkanBackend::RenderUi() {
     io.DeltaTime = std::max(1e-4f, std::chrono::duration<float>(now - ui_t_).count());
     ui_t_ = now;
     ImGui_ImplVulkan_NewFrame();
+#ifdef _WIN32
+    ImGui_ImplWin32_NewFrame();
+#endif
     ImGui::NewFrame();
     if (app::kGame.ui) app::kGame.ui(fps_);
     ImGui::Render();
@@ -3289,10 +3358,11 @@ void LogPerf() {
 
 void VulkanBackend::Present(const Surface& front) {
     PerfScope perf_present{g_perf.present};
-    if (g_capture.exchange(false)) LOG_FIRST(1, "capture: frame captures need the Direct3D 12 renderer");
+    const bool capture=g_capture.exchange(false);
     ResizeSwap();
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
+    if(capture && t)CaptureFrame(*t);
     if (ramp_dirty_) UploadGammaRamp();
     Transition(*lut_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
@@ -3342,6 +3412,7 @@ void VulkanBackend::ApplySettings() {
         Flush();
         targets_.clear();
         scale_ = want;
+        openshao::pipelines::SetPipelineRenderScale(scale_);
         bound_rt_ = bound_ds_ = nullptr;
         pending_ = open_ = {};
     }
@@ -3500,9 +3571,139 @@ bool VulkanBackend::ReadBack(Image& img, uint32_t w, uint32_t h, std::vector<uin
     return true;
 }
 
+void VulkanBackend::CaptureFrame(Target& target) {
+    if(diag::CaptureDir().empty()){LOG_FIRST(1,"capture: set XBE_CAPTURE_DIR");return;}
+    const auto source=PrepareCopySource(target,{});
+    std::vector<uint8_t> pixels;
+    if(!source.res || !ReadBack(*source.res,target.gw,target.gh,pixels))return;
+    auto surface=SDL_CreateSurfaceFrom(int(target.gw),int(target.gh),
+        source.res->format==VK_FORMAT_R8G8B8A8_UNORM?SDL_PIXELFORMAT_RGBA32:SDL_PIXELFORMAT_BGRA32,
+        pixels.data(),int(target.gw*4));
+    if(!surface){LOGE("vulkan: capture surface failed (%s)",SDL_GetError());return;}
+    const auto folder=diag::CaptureDir()/("frame-"+std::to_string(presents_));
+    std::error_code error;
+    std::filesystem::create_directories(folder,error);
+    const auto utf8=(folder/"final.bmp").u8string();
+    const std::string filename(utf8.begin(),utf8.end());
+    if(error || !SDL_SaveBMP(surface,filename.c_str()))LOGE("vulkan: frame capture failed (%s)",error?error.message().c_str():SDL_GetError());
+    else LOGR("vulkan: frame captured to %s",filename.c_str());
+    SDL_DestroySurface(surface);
+}
+
 void VulkanBackend::SetGamma(const uint8_t* ramp) {
     std::memcpy(ramp_, ramp, sizeof(ramp_));
     ramp_dirty_ = true;
+}
+
+// Pipeline precompilation. The workers mirror EnsureVertexShader, EnsurePixelShader and
+// EnsurePipeline; keep them in step.
+static_assert(sizeof(PsoKey) <= openshao::pipelines::kMaxPipelineKey);
+
+VkShaderModule VulkanBackend::PrecompileModule(const std::string& src, const char* entry, vkshader::Stage stage,
+                                               uint64_t& hash) {
+    hash = ShaderKey(src, entry, stage);
+    openshao::pipelines::InFlightScope flight{pre_shader_flight_, hash};
+    {
+        std::lock_guard lock(pre_mutex_);
+        auto it = pre_modules_.find(hash);
+        if (it != pre_modules_.end()) return it->second;
+    }
+    VkShaderModule module = CompileModule(src, entry, stage);
+    if (!module) return VK_NULL_HANDLE;
+    std::lock_guard lock(pre_mutex_);
+    pre_modules_.try_emplace(hash, module);
+    return module;
+}
+
+bool VulkanBackend::DescribeCandidate(const openshao::pipelines::PipelineCandidate& c,
+                                     openshao::pipelines::Recipe& r) {
+    const auto& s = c.state;
+    const auto& a = c.layout;
+    auto sh = ClassifyShaders(s, a, c.count);
+    PixelKey pk = MakePixelKey(s, c.textures);
+    pk.quad = sh.quad;
+    r = {};
+    r.vertex.program = sh.prog ? openshao::pipelines::ProgramHash(s.vs->program) : 0;
+    r.vertex.decode = a.decode; r.vertex.regs = a.regs;
+    r.vertex.pretransformed = a.pretransformed; r.vertex.quad = sh.quad; r.vertex.fixed = sh.fk;
+    r.pixel = pk;
+    r.vs_source = candidate_sources_.Vertex(r.vertex, [&] {
+        auto vs = VertexHlsl(s, a, sh);
+        if (sh.quad) vs = QuadHlsl(std::move(vs));
+        return ShaderKey(vs, "main", vkshader::Stage::Vertex);
+    });
+    r.ps_source = candidate_sources_.Pixel(pk, [&] { return ShaderKey(PixelHlsl(pk), "main", vkshader::Stage::Fragment); });
+    openshao::pipelines::PipelinePass pass;
+    pass.color = !c.shadow || c.shadow_color; pass.color_format = kBgra;
+    pass.depth = c.depth;
+    pass.depth_scale = openshao::pipelines::PipelineDepthScale(c, guest_w_);
+    PsoKey key;
+    openshao::pipelines::FillPipelineKey(s, a, r.vs_source, r.ps_source, pass, key);
+    bool atlas = false, target = false;
+    for (const auto& tex : c.textures) if (tex.kind) {
+        target |= tex.kind != kTex2D || tex.rect || tex.shadow;
+        atlas |= tex.kind == kTex2D && !tex.shadow;
+    }
+    key.atlas_guard = sh.quad && a.topology == Topology::Triangles && atlas && !target;
+    r.key_size = sizeof(key); std::memcpy(r.key, &key, sizeof(key));
+    return true;
+}
+
+bool VulkanBackend::BuildPipeline(const openshao::pipelines::Recipe& r, std::span<const uint32_t> program) {
+    if (r.key_size != sizeof(PsoKey)) return false;
+    const auto& v = r.vertex;
+    std::string vsrc = v.program ? VertexProgramHlsl(std::vector<uint32_t>(program.begin(), program.end()), v.regs, v.decode)
+                                 : FixedVertexHlsl(v.regs, v.pretransformed, v.decode, v.fixed);
+    if (v.quad) vsrc = QuadHlsl(std::move(vsrc));
+    uint64_t vh = 0, ph = 0, gh = 0;
+    VkShaderModule vs = PrecompileModule(vsrc, "main", vkshader::Stage::Vertex, vh);
+    VkShaderModule ps = PrecompileModule(PixelHlsl(r.pixel), "main", vkshader::Stage::Fragment, ph);
+    if (!vs || !ps) return false;
+    if (vh != r.vs_source || ph != r.ps_source)
+        LOG_FIRST(8, "pipeline precompile: recipe sources changed (vertex %d, pixel %d); building the current ones",
+                  vh != r.vs_source, ph != r.ps_source);
+    PsoKey k;
+    std::memcpy(&k, r.key, sizeof(k));
+    k.vs = vh;
+    k.ps = ph;
+    // Geometry shaders compile before the pipeline key is held: a thread never holds two keys.
+    VkShaderModule points = k.topo == uint32_t(Topology::Points) && gs_ok_
+        ? PrecompileModule(PointHlsl(), "main", vkshader::Stage::Geometry, gh) : VK_NULL_HANDLE;
+    VkShaderModule atlas = k.atlas_guard && gs_ok_
+        ? PrecompileModule(openshao::AtlasBoundsHlsl(), "main", vkshader::Stage::Geometry, gh) : VK_NULL_HANDLE;
+    if (k.atlas_guard && gs_ok_ && !atlas) return false;
+    const uint64_t h = Hash(&k, sizeof(k));
+    openshao::pipelines::InFlightScope flight{pre_pso_flight_, h};
+    {
+        std::lock_guard lock(pre_mutex_);
+        if (pre_done_.count(h)) return true;
+    }
+    VkPipeline pso = MakePipeline(k, vs, ps, points, atlas);
+    if (!pso) return false;
+    std::lock_guard lock(pre_mutex_);
+    pre_done_.insert(h);
+    pre_psos_[h] = pso;
+    return true;
+}
+
+void VulkanBackend::RecordPipeline(const State& s, const Assembled& a, const DrawShaders& sh, const PixelKey& pk,
+                                   const PsoKey& k) {
+    openshao::pipelines::Recipe r{};
+    r.vs_source = sh.vh;
+    r.ps_source = sh.ph;
+    r.vertex.program = sh.prog ? s.vs->hash : 0;
+    r.vertex.decode = a.decode;
+    r.vertex.regs = a.regs;
+    r.vertex.pretransformed = a.pretransformed;
+    r.vertex.quad = sh.quad;
+    r.vertex.fixed = sh.fk;
+    r.pixel = pk;
+    r.key_size = sizeof(k);
+    std::memcpy(r.key, &k, sizeof(k));
+    openshao::pipelines::TraceObservedAssetRecipe(r, &s);
+    std::span<const uint32_t> program;
+    if (sh.prog) program = {s.vs->program.data(), s.vs->program.size()};
+    openshao::pipelines::Record(r, program, openshao::pipelines::CurrentRoom());
 }
 
 }

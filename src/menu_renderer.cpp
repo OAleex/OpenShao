@@ -118,6 +118,8 @@ void ResizeArrow(Arrow arrow,float tip) {
 }
 }
 void BeginFrame(){viewport_arrows.reset();}
+std::bitset<512> FrameArrows(){return viewport_arrows;}
+void SetFrameArrows(const std::bitset<512>& arrows){viewport_arrows=arrows;}
 bool ViewportArrow(uint32_t index){return index<viewport_arrows.size() && viewport_arrows[index];}
 void BeginScene(){scenes.emplace_back();}
 void MainRowAnchor(uint32_t first,uint32_t end) {
