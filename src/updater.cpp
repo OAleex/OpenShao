@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #endif
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -25,6 +26,12 @@ namespace openshao::update {
 namespace {
 constexpr uint64_t kMaximumPackage = 512ull * 1024 * 1024;
 constexpr const char* kCleanupList = ".openshao-update-cleanup";
+constexpr int64_t kAutomaticInterval = 2 * 60 * 60;
+constexpr int64_t kManualInterval = 15 * 60;
+constexpr int64_t kMaximumPersistedWait = 48 * 60 * 60;
+int64_t NowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
 std::string Lower(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -38,7 +45,6 @@ std::vector<uint8_t> ReadFile(const fs::path& path) {
     if (!file) throw std::runtime_error("Cannot read " + files::Utf8(path));
     return {std::istreambuf_iterator<char>(file), {}};
 }
-// Package paths are fixed by the release script. Anything else is rejected before files change.
 std::string SafeName(std::string name) {
     std::replace(name.begin(), name.end(), '\\', '/');
     while (name.starts_with("./")) name.erase(0, 2);
@@ -130,7 +136,6 @@ Files ReadTar(const std::vector<uint8_t>& bytes) {
                 if (!prefix.empty()) name = prefix + "/" + name;
             }
             long_name.clear();
-            // Accept the folder used by earlier packages without stripping paths such as licenses/.
             constexpr std::string_view legacy_prefix = "OpenShao/";
             if (name.starts_with(legacy_prefix)) name.erase(0, legacy_prefix.size());
             if (const auto safe = SafeName(name); !safe.empty()) result[safe] = std::vector<uint8_t>(body, body + ptrdiff_t(size));
@@ -225,7 +230,7 @@ void Install(const fs::path& folder, const Files& package) {
     std::vector<Step> steps;
     std::string cleanup;
     try {
-        // Stage every file first, so a full disk or a locked folder changes nothing.
+        // Stage every file before replacing anything, so failures can roll back.
         for (const auto& [name, data] : package) {
             Step step;
             step.target = folder / files::FromUtf8(name);
@@ -271,7 +276,6 @@ void RemovePreviousFiles(const fs::path& folder) {
     for (std::string line; std::getline(list, line);) {
         if (line.empty()) continue;
         const auto path = files::FromUtf8(line);
-        // Only the *.old files recorded by Install, inside the installation folder, are removed.
         if (path.extension() != ".old" || !files::Within(path, folder)) continue;
         std::error_code ec;
         if (!fs::remove(path, ec) && fs::exists(path)) kept.push_back(line);
@@ -285,7 +289,6 @@ void RemovePreviousFiles(const fs::path& folder) {
 bool Relaunch(const fs::path& folder, std::string& error) {
     const auto executable = folder / ExecutableName();
 #ifdef _WIN32
-    // Keep the original arguments; only the program changes.
     std::wstring command = L"\"" + executable.wstring() + L"\"";
     int count = 0;
     if (wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &count)) {
@@ -313,7 +316,6 @@ bool Relaunch(const fs::path& folder, std::string& error) {
     CloseHandle(process.hProcess);
     return true;
 #else
-    // The kernel keeps the original arguments, separated by NUL bytes.
     std::vector<std::string> arguments;
     std::ifstream line("/proc/self/cmdline", std::ios::binary);
     for (std::string argument; std::getline(line, argument, '\0');) arguments.push_back(argument);
@@ -334,10 +336,36 @@ Updater::Updater(fs::path install, fs::path cache, std::string current, Fetch fe
     if (!fetch_) fetch_ = [](std::string_view url, const fs::path& file, uint64_t maximum, const std::function<bool(uint64_t, uint64_t)>& progress) {
         mods::Download(url, file, maximum, [progress](std::string_view, uint64_t done, uint64_t total) { return !progress || progress(done, total); });
     };
+    try {
+        std::ifstream state(cache_ / "check-state.txt", std::ios::binary);
+        int64_t attempted = 0, blocked = 0;
+        if (state >> attempted >> blocked) {
+            const auto now = NowSeconds();
+            if (attempted >= 0 && attempted <= now + kMaximumPersistedWait) last_check_ = attempted;
+            if (blocked > now && blocked <= now + kMaximumPersistedWait) blocked_until_ = blocked;
+        }
+    } catch (...) {}
+    try {
+        const auto bytes = ReadFile(cache_ / "latest-release.json");
+        auto release = ParseLatest(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        view_.release = std::move(release);
+        view_.state = mods::CompareVersions(view_.release.version, current_) > 0 ? State::Available : State::Current;
+    } catch (...) {}
 }
 Updater::~Updater() { Cancel(); if (worker_.joinable()) worker_.join(); }
 View Updater::Get() const { std::lock_guard lock(mutex_); return view_; }
 void Updater::Cancel() { cancel_ = true; }
+void Updater::SaveCheckState() const {
+    fs::create_directories(cache_);
+    const auto temporary = cache_ / "check-state.tmp";
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        file << last_check_ << '\n' << blocked_until_ << '\n';
+        file.close();
+        if (!file) throw std::runtime_error("Cannot save update check cache");
+    }
+    MoveReplacing(temporary, cache_ / "check-state.txt");
+}
 void Updater::Start(std::function<void()> job) {
     if (worker_.joinable()) worker_.join();
     cancel_ = false;
@@ -345,27 +373,64 @@ void Updater::Start(std::function<void()> job) {
         try { job(); }
         catch (const std::exception& e) {
             std::lock_guard lock(mutex_);
-            view_.state = cancel_ ? (view_.release.version.empty() ? State::Idle : State::Available) : State::Failed;
-            view_.error = cancel_ ? std::string{} : e.what();
+            if (cancel_) {
+                view_.state = view_.release.version.empty() ? State::Idle :
+                    (mods::CompareVersions(view_.release.version, current_) > 0 ? State::Available : State::Current);
+                view_.error.clear();
+            } else if (view_.state == State::Checking) {
+                view_.state = view_.release.version.empty() ? State::Failed :
+                    (mods::CompareVersions(view_.release.version, current_) > 0 ? State::Available : State::Current);
+                view_.error = view_.state == State::Failed ? "Unable to check for updates right now." : "";
+            } else {
+                view_.state = State::Failed;
+                view_.error = e.what();
+            }
         }
     });
 }
-void Updater::Check() {
+void Updater::Tick() { Check(false); }
+CheckResult Updater::Check(bool manual) {
     {
         std::lock_guard lock(mutex_);
-        if (view_.state == State::Checking || view_.state == State::Downloading || view_.state == State::Ready) return;
-        view_ = {}; view_.state = State::Checking;
+        if (view_.state == State::Checking || view_.state == State::Downloading || view_.state == State::Ready)
+            return CheckResult::Busy;
+        const auto now = NowSeconds();
+        const int64_t next = std::max(blocked_until_, last_check_ > 0 ? last_check_ + (manual ? kManualInterval : kAutomaticInterval) : int64_t(0));
+        if (now < next) return CheckResult::Cached;
+        last_check_ = now;
+        view_.error.clear();
+        view_.state = State::Checking;
     }
     Start([this] {
         fs::create_directories(cache_);
-        const auto file = cache_ / "latest-release.json";
-        fetch_(kLatestReleaseUrl, file, 4 * 1024 * 1024, {});
-        const auto bytes = ReadFile(file);
+        try { SaveCheckState(); } catch (...) {}
+        const auto temporary = cache_ / "latest-release.pending.json";
+        try {
+            fetch_(kLatestReleaseUrl, temporary, 4 * 1024 * 1024,
+                [this](uint64_t, uint64_t) { return !cancel_.load(); });
+        } catch (const mods::HttpError& error) {
+            if (error.status == 403 || error.status == 429) {
+                {
+                    std::lock_guard lock(mutex_);
+                    const auto now = NowSeconds();
+                    blocked_until_ = std::clamp(std::max(now + 60, error.retry_at), now + 60,
+                                                now + kMaximumPersistedWait);
+                }
+                try { SaveCheckState(); } catch (...) {}
+            }
+            std::error_code ignored; fs::remove(temporary, ignored);
+            if (error.status == 403 || error.status == 429)
+                throw std::runtime_error("Unable to check for updates right now.");
+            throw;
+        }
+        const auto bytes = ReadFile(temporary);
         auto release = ParseLatest(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        try { MoveReplacing(temporary, cache_ / "latest-release.json"); } catch (...) {}
         std::lock_guard lock(mutex_);
         view_.release = std::move(release);
         view_.state = mods::CompareVersions(view_.release.version, current_) > 0 ? State::Available : State::Current;
     });
+    return CheckResult::Started;
 }
 void Updater::Download() {
     Release release;

@@ -1,4 +1,4 @@
 #pragma once
 namespace openshao::mods {
-inline constexpr const char* RecompVersion = "0.4.0";
+inline constexpr const char* RecompVersion = "0.4.1";
 }

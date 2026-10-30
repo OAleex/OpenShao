@@ -27,6 +27,7 @@
 #include <vector>
 #include "launcher.h"
 #include "launcher_art.h"
+#include "launcher_footer_layout.h"
 #include "launcher_settings.h"
 #include "launcher_window.h"
 #include "app/app.h"
@@ -232,6 +233,7 @@ struct Session {
     support::Report report;
     bool report_scanned = false;
     float reveal = 0.f;  // the ensō draws itself once when the launcher opens
+    footer_layout::CachedCheckPulse cached_check_pulse;
 
     void GenerateReport() {
         if (report_job.valid()) return;
@@ -400,7 +402,7 @@ struct Session {
             std::string error;
             if (!Write(paths::Config(), table, error)) throw std::runtime_error(error);
             check_updates = enabled;
-            if (enabled && updater && updater->Get().state == update::State::Idle) updater->Check();
+            if (enabled && updater) updater->Tick();
         } catch (const std::exception& e) { Message("Cannot save the update preference", e.what()); }
     }
     void StartUpdate() {
@@ -408,8 +410,15 @@ struct Session {
         if (Busy()) { page = Page::Mods; Message("Mod operation in progress", "Wait for the mod operation to finish before updating."); return; }
         updater->Download();
     }
+    void CheckGameUpdates() {
+        if (!updater) return;
+        const auto result = updater->Check(true);
+        if (result == update::CheckResult::Cached)
+            cached_check_pulse.Start(std::chrono::steady_clock::now());
+    }
 
     bool Animating() const {
+        if (cached_check_pulse.Active(std::chrono::steady_clock::now())) return true;
         if (reveal < 1.f) return true;
         if (report_job.valid()) return true;
         if (mods && mods->View().busy) return true;
@@ -457,6 +466,17 @@ bool Link(const char* id, const Canvas& c, float x, float y, const char* label, 
     return hit.clicked;
 }
 
+void UpdateSpinner(const Canvas& c, float x, float y) {
+    const auto center = c.P(x, y);
+    constexpr float radius = 7.f;
+    c.list->AddCircle(center, c.S(radius), Rgb(color::Dim, 0.35f), 24, c.S(2.f));
+    const float seconds = std::chrono::duration<float>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const float start = std::fmod(seconds * 7.f, 6.2831853f);
+    c.list->PathArcTo(center, c.S(radius), start, start + 4.0f, 20);
+    c.list->PathStroke(Rgb(color::Ember), 0, c.S(2.3f));
+}
+
 void TopBar(Session& s, const Canvas& c, float W) {
     if (s.page == Page::Game || s.game_required) {
         const bool support = s.page == Page::Support;
@@ -482,7 +502,8 @@ void TopBar(Session& s, const Canvas& c, float W) {
 }
 
 void PlayPage(Session& s, const Canvas& c, float W, float H) {
-    const float footer = H - 76;
+    const footer_layout::Rows rows(H);
+    const float footer = rows.divider;
     float content_footer=footer;
 #ifdef _WIN32
     content_footer-=64;
@@ -518,7 +539,7 @@ void PlayPage(Session& s, const Canvas& c, float W, float H) {
     if(Button("##renderer-vulkan",c,api_x+290,api_y,api_x+416,api_y+40,"Vulkan",s.settings.renderer=="vulkan",!updating))s.SetRenderer("vulkan");
 #endif
     c.Rule(40, W - 40, footer);
-    const float y = H - 50;
+    const float y = rows.primary;
     const bool ready = !s.source.empty();
     c.list->AddCircleFilled(c.P(46, y + 9), c.S(4), Rgb(ready ? color::Moss : color::Warning));
     const char* status = ready ? "Game ready" : "No game selected";
@@ -527,36 +548,47 @@ void PlayPage(Session& s, const Canvas& c, float W, float H) {
     if (!ready && Link("Choose game##footer", c, detail_x, y, "Choose game")) s.ChangeGame();
 
     const float right = W - 40;
-    switch (view.state) {
+    const bool can_check = s.updater && view.state != update::State::Checking &&
+                           view.state != update::State::Downloading && view.state != update::State::Ready;
+    if (can_check) {
+        if (Link("Check game updates##footer", c, right, rows.secondary, "Check for updates", true))
+            s.CheckGameUpdates();
+    }
+    const bool cached_check_loading = can_check &&
+        s.cached_check_pulse.Active(std::chrono::steady_clock::now());
+    if (cached_check_loading) {
+        UpdateSpinner(c, right - 11.f, y + 10.f);
+    } else switch (view.state) {
         case update::State::Available:
-            if (Button("Update##footer", c, right - 96, y - 10, right, y + 26, "Update", true)) s.StartUpdate();
-            c.TextRight(Weight::Regular, 19, right - 112, y, Rgb(color::Mist), ("Version " + view.release.version + " is available").c_str());
+            if (Button("Update##footer", c, right - 96, rows.button_top, right, rows.button_bottom, "Update", true)) s.StartUpdate();
+            c.TextRight(Weight::Regular, 19, right - 112, y, Rgb(color::Mist), ("OpenShao " + view.release.version + " is available").c_str());
             break;
         case update::State::Downloading: {
-            if (Button("Cancel##update", c, right - 96, y - 10, right, y + 26, "Cancel", false)) s.updater->Cancel();
+            if (Button("Cancel##update", c, right - 96, rows.button_top, right, rows.button_bottom, "Cancel", false)) s.updater->Cancel();
             char progress[64];
             std::snprintf(progress, sizeof progress, "%.1f of %.1f MB", double(view.done) / 1048576.0, double(view.total) / 1048576.0);
-            c.TextRight(Weight::Regular, 19, right - 112, y, Rgb(color::Mist), view.total ? progress : "Downloading");
+            c.TextRight(Weight::Regular, 19, right - 112, y, Rgb(color::Mist), view.total ? progress : "Downloading update...");
             break;
         }
         case update::State::Ready:
-            c.TextRight(Weight::Regular, 19, right, y, Rgb(color::Mist), "Restarting");
+            c.TextRight(Weight::Regular, 19, right, y, Rgb(color::Mist), "Restarting OpenShao...");
             break;
         case update::State::Checking:
-            c.TextRight(Weight::Regular, 19, right, y, Rgb(color::Dim), "Checking for updates");
+            c.TextRight(Weight::Regular, 19, right - 27.f, y, Rgb(color::Dim), "Checking for updates...");
+            UpdateSpinner(c, right - 11.f, y + 10.f);
             break;
         case update::State::Current:
-            c.TextRight(Weight::Regular, 19, right, y, Rgb(color::Dim), ("Version " + std::string(mods::RecompVersion) + " is up to date").c_str());
+            c.TextRight(Weight::Regular, 19, right, y, Rgb(color::Dim), "OpenShao is up to date");
             break;
         case update::State::Failed: {
             const bool offered = !view.release.version.empty();
-            if (Link("Release page##update", c, right, y, "Release page", true))
+            if (Link("Release page##update", c, right, y, "View releases", true))
                 OpenLocation(view.release.page.empty() ? update::kReleasesPage : view.release.page);
-            const float link = c.Measure(Weight::Medium, 19, "Release page").x;
+            const float link = c.Measure(Weight::Medium, 19, "View releases").x;
             if (offered && Link("Retry##update", c, right - link - 18, y, "Retry", true)) s.StartUpdate();
             const float retry = offered ? c.Measure(Weight::Medium, 19, "Retry").x + 18 : 0.f;
             c.TextRight(Weight::Regular, 19, right - link - retry - 18, y, Rgb(color::Warning),
-                        offered ? "The update could not be installed" : "Cannot check for updates");
+                        offered ? "Couldn't install the update" : "Couldn't check for updates");
             if (ImGui::IsMouseHoveringRect(c.P(W / 2, y - 6), c.P(right, y + 24)) && !view.error.empty()) ImGui::SetTooltip("%s", view.error.c_str());
             break;
         }
@@ -1108,15 +1140,14 @@ bool Show() {
         return PlayWithSavedSettings();
     }
     s.mods = std::make_unique<mods::Browser>(paths::Mods());
-    if (s.check_updates) {
-        s.updater = std::make_unique<update::Updater>(app::ExeDir(), paths::Cache() / "update", mods::RecompVersion);
-        s.updater->Check();
-    }
+    s.updater = std::make_unique<update::Updater>(app::ExeDir(), paths::Cache() / "update", mods::RecompVersion);
+    if (s.check_updates) s.updater->Tick();
     if (!paths::MoveWarning().empty()) s.Message("Folder move", paths::MoveWarning());
     {
         Gamepads gamepads;
         while (s.result < 0) {
             if (!window.BeginFrame(s.Animating())) s.Close();
+            if (s.check_updates && s.updater) s.updater->Tick();
             gamepads.Poll(s);
             Draw(s, window.Scale());
             window.EndFrame();

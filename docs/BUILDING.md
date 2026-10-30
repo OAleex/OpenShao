@@ -103,14 +103,14 @@ Keep these version fields synchronized before building:
 
 The build script uses the packager's default version. Changing only the CMake version does not update the package names or mod compatibility version.
 
-For 0.4.0, use:
+For 0.4.1, use:
 
 | Release field | Value |
 | --- | --- |
 | Repository | `OAleex/OpenShao` |
-| Tag | `v0.4.0` |
-| Title | `OpenShao 0.4.0` |
-| Attached files | `OpenShao-0.4.0-Windows-x64.zip`, `OpenShao-0.4.0-Linux-x64.tar.gz`, `checksums.txt` |
+| Tag | `v0.4.1` |
+| Title | `OpenShao 0.4.1` |
+| Attached files | `OpenShao-0.4.1-Windows-x64.zip`, `OpenShao-0.4.1-Linux-x64.tar.gz`, `checksums.txt` |
 
 1. Set all version fields.
 2. Build with `--test` and include both platforms.
@@ -121,6 +121,9 @@ For 0.4.0, use:
 7. Publish the stable release with **Set as latest release** selected and **This is a pre-release** cleared.
 
 The launcher updates from the latest release and only installs packages whose SHA-256 matches.
+Automatic release checks run at most once every two hours, and manual checks at most once every fifteen minutes.
+The last result and retry deadline persist across restarts. HTTP 403/429 responses honor the GitHub retry headers.
+Network errors do not prevent starting the game.
 Do not rename the packages.
 Use a higher version for every published update. Replacing assets under the same version does not offer an update to an installation already at that version.
 Use a patch increment for fixes, such as `0.3.1`, and a minor increment for a feature release, such as `0.4.0`.
