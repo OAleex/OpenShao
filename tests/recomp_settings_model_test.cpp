@@ -10,11 +10,12 @@ int main() {
     check(model.Rows()[5].key=="settings.save" && model.Rows()[6].key=="settings.discard","Enhancements must have a separate main-menu entry");
     model.Enter(5);check(model.CurrentPage()==Page::Home,"Saving must not enter a configuration category");
     model.Go(Page::Enhancements);
-    check(model.Title()=="recomp.enhancements" && model.Rows().size()==6 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
+    check(model.Title()=="recomp.enhancements" && model.Rows().size()==9 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
           model.Rows()[1].key=="settings.restore_dialogue" && model.Rows()[1].value=="value.on" &&
           model.Rows()[2].key=="settings.cinematic_bars" && model.Rows()[2].value=="value.off" &&
           model.Rows()[3].key=="settings.improved_difficulty" && model.Rows()[3].value=="value.on" &&
-          model.Rows()[4].key=="settings.save" && model.Rows()[5].key=="settings.discard",
+          model.Rows()[6].key=="settings.statue_heal" &&
+          model.Rows()[7].key=="settings.save" && model.Rows()[8].key=="settings.discard",
           "The main-menu Enhancements page must expose its toggles and explicit Save/Discard actions");
     model.Change(2,1);
     check(openshao::launcher::Merge({},model.Draft())["enhancements"]["cinematic_bars"].value_or(false) && model.Dirty(),
@@ -39,6 +40,12 @@ int main() {
     model.Discard();
     check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["scorpion_unfiltered"].value_or(true),
           "Discarding the enhancement must restore the original voice distribution");
+    check(openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(false),
+          "The save statue health refill must be enabled by default");
+    model.Go(Page::Enhancements);model.Change(5,1);
+    check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(true) && model.Dirty(),
+          "Toggling the save statue health refill must edit the settings draft");
+    model.Discard();
     check(model.Rows()[4].key=="settings.language","The fifth category must contain language selection without duplicating original game settings");
     model.Enter(4);
     check(model.Rows().size()==2 && model.Rows()[0].key=="settings.text_language" && model.Rows()[0].value=="language.en","Language must display an autonym from the text catalog");

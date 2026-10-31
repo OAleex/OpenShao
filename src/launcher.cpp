@@ -46,6 +46,7 @@
 #include "mods/version.h"
 #include "mouse.h"
 #include "performance_overlay.h"
+#include "cheat_menu.h"
 #include "runtime_paths.h"
 #include "support_report.h"
 #include "updater.h"
@@ -81,6 +82,10 @@ void Apply(const Settings& s, bool save) {
     mouse::Configure(s.mouse);
     keyboard::Configure(s.keyboard);
     performance::SetVisible(s.show_fps);
+    cheat::SetEnabled(s.cheats_enabled);
+    cheat::SetHotkey(s.cheat_menu_key);
+    cheat::SetStatueFullHeal(s.statue_full_heal);
+    cheat::SetMenuPosition(s.cheat_menu_x, s.cheat_menu_y);
 }
 bool NeedsLanguagePack(std::string_view code) {
     return !mods::IsOriginalLanguage(code)&&options.language_pack.empty()&&language::FindInstalledPack(paths::Mods(),code).empty();
@@ -1215,6 +1220,7 @@ void Load(const void* raw) {
     current = Read(table); app::Get().fps_cap = FrameRate;
     frames::Configure(current.fps_cap,current.vsync);
     controller::Load(raw); keyboard::Configure(current.keyboard); mouse::Configure(current.mouse); performance::SetVisible(current.show_fps);
+    cheat::SetEnabled(current.cheats_enabled); cheat::SetHotkey(current.cheat_menu_key); cheat::SetStatueFullHeal(current.statue_full_heal); cheat::SetMenuPosition(current.cheat_menu_x, current.cheat_menu_y);
     if (!options.language_pack.empty() && !options.resume_main_menu) current.language = "pt-BR";
     Publish();
 }
@@ -1268,6 +1274,7 @@ bool ApplyInGame(const Settings& settings,bool save,std::string& error) {
     host.vsync=settings.vsync;host.aniso=settings.aniso;
     frames::Configure(settings.fps_cap,settings.vsync);
     controller::Configure(settings);keyboard::Configure(settings.keyboard);mouse::Configure(settings.mouse);performance::SetVisible(settings.show_fps);
+    cheat::SetEnabled(settings.cheats_enabled);cheat::SetHotkey(settings.cheat_menu_key);cheat::SetStatueFullHeal(settings.statue_full_heal);cheat::SetMenuPosition(settings.cheat_menu_x,settings.cheat_menu_y);
     if(previous.display_mode!=settings.display_mode || previous.width!=settings.width || previous.height!=settings.height)
         app::ApplyDisplay();
     error.clear();return true;

@@ -56,7 +56,7 @@ void BeginCapture(unsigned row) {
 constexpr std::array<std::string_view,uint32_t(Item::Count)> ItemKeys{
     "recomp.title","main.exit_desktop","settings.fps","settings.vsync",
     "settings.bloom_effect","settings.back_hint","pause.unsaved",
-    "pause.exit_no","pause.exit_yes"
+    "pause.exit_no","pause.exit_yes","pause.save_game"
 };
 }
 std::string Localized(std::string_view id) {

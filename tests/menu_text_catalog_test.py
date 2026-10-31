@@ -118,6 +118,7 @@ class MenuCatalogTest(unittest.TestCase):
         }
         keys = {key for key in self.catalog["languages"]["en"] if key.startswith("pause.")}
         self.assertIn("pause.display_refresh", keys)
+        self.assertIn("pause.save_game", keys)
         for locale, labels in self.catalog["languages"].items():
             for key in keys:
                 with self.subTest(locale=locale, key=key):

@@ -44,6 +44,20 @@ int main() {
           "New and legacy configurations must restore dropped script dialogue by default");
     check(!Merge({}, Read(toml::parse("[enhancements]\nrestore_dialogue = false\n")))["enhancements"]["restore_dialogue"].value_or(true),
           "Choosing the original dialogue behavior must survive configuration load and save");
+    check(Read({}).statue_full_heal && Merge({}, Read({}))["enhancements"]["statue_full_heal"].value_or(false),
+          "New and legacy configurations must enable the save statue health refill by default");
+    const auto no_refill = Read(toml::parse("[enhancements]\nstatue_full_heal = false\n"));
+    check(!no_refill.statue_full_heal && !Merge({}, no_refill)["enhancements"]["statue_full_heal"].value_or(true),
+          "Disabling the save statue health refill must survive configuration load and save");
+    check(Read({}).cheat_menu_x == 100 && Read({}).cheat_menu_y == 5,
+          "A new configuration must place the cheat menu in the upper right corner");
+    const auto moved = Read(toml::parse("[enhancements]\ncheat_menu_x = 35\ncheat_menu_y = 60\n"));
+    const auto moved_saved = Read(Merge({}, moved));
+    check(moved_saved.cheat_menu_x == 35 && moved_saved.cheat_menu_y == 60,
+          "The cheat menu position must survive configuration load and save");
+    const auto far_away = Read(toml::parse("[enhancements]\ncheat_menu_x = 900\ncheat_menu_y = -20\n"));
+    check(far_away.cheat_menu_x == 100 && far_away.cheat_menu_y == 0,
+          "An out-of-range cheat menu position must be clamped onto the screen");
     check(Read({}).brightness == 50, "A new configuration must default to 50 percent brightness");
     for (const int brightness : {0, 23, 50, 100}) {
         const auto saved_brightness = Read(toml::table{{"game", toml::table{{"brightness", brightness}}}});
