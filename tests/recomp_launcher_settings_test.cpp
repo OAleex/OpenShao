@@ -44,11 +44,11 @@ int main() {
           "New and legacy configurations must restore dropped script dialogue by default");
     check(!Merge({}, Read(toml::parse("[enhancements]\nrestore_dialogue = false\n")))["enhancements"]["restore_dialogue"].value_or(true),
           "Choosing the original dialogue behavior must survive configuration load and save");
-    check(Read({}).statue_full_heal && Merge({}, Read({}))["enhancements"]["statue_full_heal"].value_or(false),
-          "New and legacy configurations must enable the save statue health refill by default");
-    const auto no_refill = Read(toml::parse("[enhancements]\nstatue_full_heal = false\n"));
-    check(!no_refill.statue_full_heal && !Merge({}, no_refill)["enhancements"]["statue_full_heal"].value_or(true),
-          "Disabling the save statue health refill must survive configuration load and save");
+    check(!Read({}).statue_full_heal && !Merge({}, Read({}))["enhancements"]["statue_full_heal"].value_or(true),
+          "New and legacy configurations must keep the original save statue healing by default");
+    const auto refill = Read(toml::parse("[enhancements]\nstatue_full_heal = true\n"));
+    check(refill.statue_full_heal && Merge({}, refill)["enhancements"]["statue_full_heal"].value_or(false),
+          "Enabling the save statue health refill must survive configuration load and save");
     check(Read({}).cheat_menu_x == 100 && Read({}).cheat_menu_y == 5,
           "A new configuration must place the cheat menu in the upper right corner");
     const auto moved = Read(toml::parse("[enhancements]\ncheat_menu_x = 35\ncheat_menu_y = 60\n"));

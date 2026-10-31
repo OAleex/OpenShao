@@ -40,10 +40,10 @@ int main() {
     model.Discard();
     check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["scorpion_unfiltered"].value_or(true),
           "Discarding the enhancement must restore the original voice distribution");
-    check(openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(false),
-          "The save statue health refill must be enabled by default");
+    check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(true),
+          "The save statue health refill must be disabled by default");
     model.Go(Page::Enhancements);model.Change(5,1);
-    check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(true) && model.Dirty(),
+    check(openshao::launcher::Merge({},model.Draft())["enhancements"]["statue_full_heal"].value_or(false) && model.Dirty(),
           "Toggling the save statue health refill must edit the settings draft");
     model.Discard();
     check(model.Rows()[4].key=="settings.language","The fifth category must contain language selection without duplicating original game settings");

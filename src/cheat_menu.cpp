@@ -149,7 +149,7 @@ void SetMenuPosition(int x_percent, int y_percent) {
 const CheatState& State() { return state; }
 
 namespace {
-std::atomic<bool> statue_full_heal{true};
+std::atomic<bool> statue_full_heal{false};
 std::atomic<int64_t> statue_heal_until_ms{0};
 uint32_t max_health = guest::kBaseHealth;
 uint32_t candidate_health = 0;

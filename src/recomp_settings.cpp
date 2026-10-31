@@ -386,6 +386,9 @@ void Draw(X86Context& ctx) {
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
         else if(selection==3)message="settings.improved_difficulty_hint";
+        else if(selection==4)message="settings.cheats_hint";
+        else if(selection==5)message="settings.cheat_key_hint";
+        else if(selection==6)message="settings.statue_heal_hint";
     }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }
