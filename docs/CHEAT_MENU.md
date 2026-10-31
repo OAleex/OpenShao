@@ -109,7 +109,7 @@ Values outside the range are clamped.
 ## Implementation notes
 
 The code is in `src/cheat_menu.cpp` and `src/cheat_menu.h`. The overlay is drawn with Dear ImGui and takes its keys from the platform input code.
-With the Vulkan renderer the overlay uses the launcher typeface. With Direct3D 12 it uses the default overlay font, and that layout has not been checked.
+The overlay uses the launcher typeface, baked at several sizes before the renderer builds its font atlas. Text is drawn from the nearest larger size, so it stays sharp at different resolutions.
 
 The cheats and the statue option write to fixed guest addresses of the supported game.
 
@@ -126,4 +126,4 @@ The save statue is detected by a hook on the game's player reaction function. Re
 Save Game calls the game's save menu routine after the pause menu closes. It sets the acting player to player 1 first.
 Both features use hooks in the recompiled code, so they follow the original game logic and do not patch the game files.
 
-Automated checks cover the settings, the pause menu layout and the text catalog. The overlay itself has been tested by hand on Linux with the Vulkan renderer.
+Automated checks cover the settings, the pause menu layout and the text catalog. The overlay itself has been tested by hand on Linux and Windows.
