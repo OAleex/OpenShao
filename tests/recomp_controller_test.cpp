@@ -25,6 +25,8 @@ namespace openshao::survival {bool ActiveSession(){return survival_active;}}
 static void TestKeyboard(int port,input::Pad& pad) {if(keyboard_active) openshao::keyboard::Poll(port,pad);}
 namespace app { const GameInfo kGame{.pad=TestKeyboard}; std::filesystem::path ExeDir() { return std::filesystem::current_path(); } }
 namespace openshao { Options options; }
+// keyboard.cpp forwards keys to the cheat menu; this test never opens it.
+namespace openshao::cheat { bool Message(uint32_t,uintptr_t,intptr_t) { return false; } bool HandleKey(unsigned,bool) { return false; } }
 static void Check(bool value,const char* description) {
     if (!value) { std::fprintf(stderr,"FAIL: %s (%s)\n",description,SDL_GetError()); std::exit(1); }
 }

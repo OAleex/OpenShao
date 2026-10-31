@@ -9,6 +9,7 @@
 #include <string_view>
 #include <imgui.h>
 #include "launcher.h"
+#include "launcher_fonts.h"
 #include "menu_text.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
@@ -83,6 +84,13 @@ std::atomic<int> menu_x{100};
 std::atomic<int> menu_y{5};
 ImFont* font_regular = nullptr;
 ImFont* font_bold = nullptr;
+// Pixel sizes the menu typeface is baked at. Text always shrinks from the nearest larger
+// size, never grows, so it stays sharp from 720p to 4K.
+constexpr float kBakedSizes[] = {16.f, 24.f, 32.f, 48.f, 64.f, 96.f};
+constexpr int kBakedCount = int(std::size(kBakedSizes));
+ImFont* ladder_regular[kBakedCount] = {};
+ImFont* ladder_bold[kBakedCount] = {};
+bool ladder_ready = false;
 CheatState state{};
 
 enum class Screen { Root, Player1, Player2, Settings, Count };
@@ -142,6 +150,29 @@ void Toggle() { visible.store(!Visible(), std::memory_order_relaxed); }
 void SetHotkey(int vk) { hotkey.store(vk, std::memory_order_relaxed); }
 int Hotkey() { return hotkey.load(std::memory_order_relaxed); }
 void SetFonts(ImFont* regular, ImFont* bold) { font_regular = regular; font_bold = bold; }
+
+void InitFonts() {
+    if (ladder_ready || !ImGui::GetCurrentContext()) return;
+    ImGuiIO& io = ImGui::GetIO();
+    // Fonts can only be added before the backend builds the atlas.
+    if (io.Fonts->IsBuilt()) return;
+    // The default font stays first so existing overlays keep their look.
+    if (io.Fonts->Fonts.Size == 0) io.Fonts->AddFontDefault();
+    namespace fonts = launcher::fonts;
+    const auto bake = [&](const unsigned char* data, size_t size, ImFont** out) {
+        for (int i = 0; i < kBakedCount; ++i) {
+            ImFontConfig config;
+            config.FontDataOwnedByAtlas = false;
+            config.OversampleH = 2;
+            config.PixelSnapH = false;
+            out[i] = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(data), int(size), kBakedSizes[i],
+                                                    &config, io.Fonts->GetGlyphRangesDefault());
+        }
+    };
+    bake(fonts::kMedium, fonts::kMediumSize, ladder_regular);
+    bake(fonts::kSemiBold, fonts::kSemiBoldSize, ladder_bold);
+    ladder_ready = true;
+}
 void SetMenuPosition(int x_percent, int y_percent) {
     menu_x.store(std::clamp(x_percent, 0, 100), std::memory_order_relaxed);
     menu_y.store(std::clamp(y_percent, 0, 100), std::memory_order_relaxed);
@@ -319,8 +350,18 @@ void Text(ImDrawList* list, ImFont* font, float size, ImVec2 position, ImU32 col
 void DrawMenu() {
     const auto* viewport = ImGui::GetMainViewport();
     ImDrawList* list = ImGui::GetForegroundDrawList();
-    ImFont* regular = font_regular ? font_regular : ImGui::GetFont();
-    ImFont* bold = font_bold ? font_bold : regular;
+    ImFont* fallback_regular = font_regular ? font_regular : ImGui::GetFont();
+    ImFont* fallback_bold = font_bold ? font_bold : fallback_regular;
+    // Pixels per framebuffer unit, so text is picked for the real render size on high-DPI displays.
+    const float density = ImGui::GetIO().DisplayFramebufferScale.y;
+    const auto face = [&](bool heavy, float size) {
+        if (!ladder_ready) return heavy ? fallback_bold : fallback_regular;
+        const float pixels = size * density;
+        int index = kBakedCount - 1;
+        for (int i = 0; i < kBakedCount; ++i) if (kBakedSizes[i] >= pixels - 0.01f) { index = i; break; }
+        ImFont* font = (heavy ? ladder_bold : ladder_regular)[index];
+        return font ? font : (heavy ? fallback_bold : fallback_regular);
+    };
     const float s = std::max(0.75f, viewport->Size.y / 1080.f);
     const Page& page = pages[int(screen)];
     const int selected = selection[int(screen)];
@@ -336,6 +377,7 @@ void DrawMenu() {
 
     const auto title = Tr(page.title);
     const float title_size = 46 * s;
+    ImFont* bold = face(true, title_size);
     const ImVec2 title_extent = TextSize(bold, title_size, title);
     const ImVec2 title_position{x + (width - title_extent.x) / 2, y + (header - title_extent.y) / 2};
     Text(list, bold, title_size, {title_position.x + 2 * s, title_position.y + 2 * s}, IM_COL32(0, 0, 0, 90), title);
@@ -344,6 +386,7 @@ void DrawMenu() {
     const float bar_y = y + header;
     list->AddRectFilled({x, bar_y}, {x + width, bar_y + bar}, IM_COL32(0, 0, 0, 255));
     const float bar_text = 19 * s;
+    ImFont* regular = face(false, bar_text);
     const auto select_text = Tr("cheat.select");
     Text(list, regular, bar_text, {x + 14 * s, bar_y + (bar - TextSize(regular, bar_text, select_text).y) / 2},
          IM_COL32(48, 150, 255, 255), select_text);
@@ -352,13 +395,15 @@ void DrawMenu() {
          bar_y + (bar - TextSize(regular, bar_text, counter).y) / 2}, IM_COL32(255, 255, 255, 255), counter);
 
     const float text_size = 24 * s;
+    ImFont* row_regular = face(false, text_size);
+    ImFont* row_bold = face(true, text_size);
     for (int i = 0; i < page.count; ++i) {
         const Entry& entry = page.entries[i];
         const bool active = i == selected;
         const float top = bar_y + bar + row * i;
         list->AddRectFilled({x, top}, {x + width, top + row}, active ? IM_COL32(255, 255, 255, 255) : IM_COL32(23, 33, 49, 238));
         const ImU32 ink = active ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
-        ImFont* font = active ? bold : regular;
+        ImFont* font = active ? row_bold : row_regular;
         const auto label = Tr(entry.key);
         Text(list, font, text_size, {x + 16 * s, top + (row - TextSize(font, text_size, label).y) / 2}, ink, label);
 
@@ -391,10 +436,11 @@ void DrawMenu() {
     list->AddRectFilled({x, footer_y}, {x + width, footer_y + footer}, IM_COL32(0, 0, 0, 255));
     const auto hint = Tr("cheat.hint");
     float hint_size = 15 * s;
-    const float hint_width = TextSize(regular, hint_size, hint).x;
+    const float hint_width = TextSize(face(false, hint_size), hint_size, hint).x;
     if (hint_width > width - 20 * s) hint_size *= (width - 20 * s) / hint_width;
-    const ImVec2 hint_extent = TextSize(regular, hint_size, hint);
-    Text(list, regular, hint_size, {x + (width - hint_extent.x) / 2, footer_y + (footer - hint_extent.y) / 2}, IM_COL32(168, 176, 190, 255), hint);
+    ImFont* hint_font = face(false, hint_size);
+    const ImVec2 hint_extent = TextSize(hint_font, hint_size, hint);
+    Text(list, hint_font, hint_size, {x + (width - hint_extent.x) / 2, footer_y + (footer - hint_extent.y) / 2}, IM_COL32(168, 176, 190, 255), hint);
     list->AddRect({x, y}, {x + width, y + height}, IM_COL32(0, 0, 0, 220), 0.f, ImDrawFlags_None, 1.5f * s);
 }
 }
