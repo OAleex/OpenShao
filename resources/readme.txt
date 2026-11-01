@@ -51,7 +51,7 @@ V-Sync targets the monitor's refresh rate. With it disabled, choose 60, 120, 144
 The achieved frame rate depends on hardware and the scene. Menus run at up to 60 FPS.
 
 The main menu's Enhancements contains Restore Lost Dialogue, Improved Difficulty and Cinematic Bars.
-In the same page, Cheats enables a cheat menu that opens over gameplay with the Cheat Menu Key, F8 by default. It is off by default.
+In Konfigure Recompilation, the Cheats category enables a cheat menu that opens over gameplay with the Cheat Menu Key, F8 by default. It is off by default.
 Use the arrow keys to move, Enter to switch a cheat and Backspace to go back. The menu's Settings screen moves it on screen.
 Full Health at Statue fills the health bar when a save statue is used. It is off by default.
 The pause menu lists Continue, Options, Save Game, Konfigure Recompilation, Exit Game and Exit to Desktop. Exit Game returns to the main menu. Save Game opens the game's save menu anywhere.
