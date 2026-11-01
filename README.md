@@ -63,7 +63,7 @@ OpenShao migrates recognized data and saves from earlier releases to the current
 - Restored missing and unused dialogue using only the original recordings. Lines whose original
   trigger is lost are placed by their map, scene and script context; this is optional.
 - Optional enhancements, including Easy and Monk difficulties and cinematic bars, plus ten pages of save slots.
-- **Cheat menu** in Konfigure Recompilation's Cheats category, off by default. It opens over gameplay with a configurable key and offers infinite health, XP, energy and Fatality meter. Its position on screen is adjustable and saved. See [Cheat menu](docs/CHEAT_MENU.md).
+- **Cheat menu** in Konfigure Recompilation's Cheats category, off by default. It opens over gameplay with a configurable key and offers infinite health, XP, energy and Fatality meter, plus Ko-op Paths in single player and Unlock All. Its position on screen is adjustable and saved. See [Cheat menu](docs/CHEAT_MENU.md).
 - **Full Health at Statue** in the main menu's Enhancements, off by default. Using a save statue fills the health bar completely. See [Save Game and Full Health at Statue](docs/SAVE_AND_STATUE.md).
 - **Pause menu** with Continue, Options, Save Game, Konfigure Recompilation, Exit Game and Exit to Desktop. Exit Game returns to the main menu. Save Game opens the game's save menu anywhere (see [docs](docs/SAVE_AND_STATUE.md)).
 - Separate text and voice languages, with an optional Brazilian Portuguese fan translation and dub as a language pack mod.

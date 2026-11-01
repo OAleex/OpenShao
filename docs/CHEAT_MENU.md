@@ -37,7 +37,7 @@ The menu is drawn in the language selected for the game. Missing translations us
 
 | Screen | Entries |
 | --- | --- |
-| Cheat Menu | Infinite Health, Player 1, Player 2, Settings |
+| Cheat Menu | Infinite Health, Ko-op Paths, Unlock All, Player 1, Player 2, Settings |
 | Player 1 and Player 2 | Infinite XP, Infinite Energy, Infinite Fatality |
 | Settings | Position X, Position Y, Reset Position |
 
@@ -49,6 +49,27 @@ The menu is drawn in the language selected for the game. Missing translations us
 | Infinite XP | Sets the player's XP to 999999 whenever it is lower. | One switch for each player. |
 | Infinite Energy | Keeps the player's special bar full. | One switch for each player. |
 | Infinite Fatality | Keeps the player's Fatality, Multality and Brutality meter full. | The three bars share one meter, so all three are full. The meter is refilled continuously, so Brutality does not drain it. |
+| Ko-op Paths | In single player, opens the routes and secrets that the game builds for two players. | See [Ko-op Paths](#ko-op-paths). |
+| Unlock All | Unlocks every character, arena, mode and extra. | The same unlock the game grants itself. It is applied again while the switch is on. |
+
+### Ko-op Paths
+
+The level scripts decide between their one player and two player layouts by asking the game whether it is a two player game. With this switch on, single player answers yes to those scripts, so the co-op routes and secret areas open. Everything else keeps the real player count: cameras, respawn and the map triggers that need a lone player.
+
+A door built for two plates is opened by one:
+
+- A door that waits for several event flags opens when a plate has just set one of them. Flags set more than 30 seconds ago do not count.
+- A door that waits for stone power opens when half of the power it asks for is there. A colored plate accepts either player's color.
+
+Co-op and Versus are not changed. A plate that needs two characters at the same time in a way the game checks differently may still not open.
+
+### Unlock All
+
+The game keeps its progress in a block of unlock bits. The switch sets every bit that the game's own complete-unlock routine sets, and the three flag bytes next to them. Bits 165 and 342 stay as they were, as in the game. It is applied while the switch is on, so loading a profile does not lock the roster again. Turn it off and load a save to return to the real progress.
+
+Saving while Unlock All is on writes the unlocked state into the save.
+
+Routine mods cannot hook the game functions that Ko-op Paths uses, so a mod that does the same cannot be enabled together with the cheat menu.
 
 Cheats change progress values in the running game. If you save while a cheat is on, the save can keep the changed values. Keep a backup of your saves before using them.
 
