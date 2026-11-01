@@ -341,7 +341,7 @@ int main() {
     ctx.esp=0x3000;ctx.ecx=0x598430;kernel::W32(0x4000,0);kernel::W32(0x4004,0x40);
     kernel::W32(0x598468,7);kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     check(MainInput(ctx,memory.data()) && Active() && model.CurrentPage()==Page::Enhancements &&
-          Snapshot().rows.size()==9 && !exit_prompt,
+          Snapshot().rows.size()==7 && !exit_prompt,
           "The new main-menu Enhancements row must open its standalone list rather than Exit");
     ctx.esp=0x3000;ctx.ecx=0x5985E8;release=false;Process(ctx,0,0x20);
     check(closing,"Leaving unchanged Enhancements must close the native Options scene");
@@ -378,7 +378,7 @@ int main() {
     release=false;Process(ctx,0,0x20);
     check(model.CurrentPage()==Page::Home && kernel::R32(0x6000+0x2A0)==34,"Returning from a custom category must use the original Audio-to-Options clip");
     animation.running=false;kernel::G<uint8_t>(0x6000+0x340)=1;
-    for(const auto [page,extension]:{std::pair{Page::Home,72.f},std::pair{Page::Display,24.f},std::pair{Page::Graphics,48.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-48.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,48.f}}) {
+    for(const auto [page,extension]:{std::pair{Page::Home,96.f},std::pair{Page::Display,24.f},std::pair{Page::Graphics,48.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-48.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,72.f},std::pair{Page::Cheats,-48.f}}) {
         model.Go(page);selection=0;LowerCap(ctx,0x6000,20,250);
         const float top=std::bit_cast<float>(kernel::R32(0x63F5E4+0x14)),bottom=std::bit_cast<float>(kernel::R32(0x63F5E4+0x24));
         check(std::abs(top-250-extension)<.01f && std::abs(bottom-top-120)<.01f,"Every settings category must size its ornament to the visible rows while preserving the carved cap proportions");
@@ -387,15 +387,15 @@ int main() {
     kernel::W32(0x6000+0x33C,4);
     check(std::abs(LowerCap(ctx,0x6000,48,230)-230)<.01f,"Custom Options must begin its added height collapsed with the retail entrance");
     kernel::W32(0x6000+0x33C,13);
-    check(std::abs(LowerCap(ctx,0x6000,48,230)-302)<.01f,"Custom Options must reach the complete seven-row height at the end of its entrance");
+    check(std::abs(LowerCap(ctx,0x6000,48,230)-326)<.01f,"Custom Options must reach the complete seven-row height at the end of its entrance");
     const auto home=Snapshot();model.Go(Page::Audio);animation.Start(ctx,home,false);
-    float previous_custom=72;
+    float previous_custom=96;
     for(unsigned movie_frame=284;movie_frame<=291;++movie_frame) {
         kernel::W32(0x6000+0x33C,movie_frame);
         const float extension=LowerCap(ctx,0x6000,48,230)-230;
-        check(extension<=previous_custom+.01f && previous_custom-extension<30,
+        check(extension<=previous_custom+.01f && previous_custom-extension<36,
               "Changing from seven rows to two must contract continuously during the native submenu clip");
-        if(movie_frame==284)check(std::abs(extension-72)<.01f,"A category transition must start at the previous ornament height");
+        if(movie_frame==284)check(std::abs(extension-96)<.01f,"A category transition must start at the previous ornament height");
         previous_custom=extension;
     }
     check(std::abs(previous_custom+48)<.01f,"The completed Audio transition must enclose exactly its two rows");
@@ -412,7 +412,7 @@ int main() {
     bool exiting=false;for(const auto& c:captions)if(c.text=="Display" && c.alpha==127)exiting=true;
     check(exiting,"Closing settings after a native return must preserve the outer exit clip's original row opacity");
     animation.running=false;
-    for(unsigned category=0;category<5;++category) {
+    for(unsigned category=0;category<6;++category) {
         model.Open(settings);selection=category;release=false;Process(ctx,0,0x40);
         kernel::G<uint8_t>(0x6000+0x340)=1;release=false;Process(ctx,0,0x20);
         check(model.CurrentPage()==Page::Home && selection==category,"Returning from each category must restore its selected home row");
@@ -496,7 +496,7 @@ int main() {
     check(Save(ctx) && prepared==1 && committed==1,
           "Saving again after a failed shutdown must retry the still-pending language change");
     settings={};model.Open(settings);model.Edit().language="de";model.Edit().aspect_ratio="16:9";
-    model.Go(Page::Home);selection=5;release=false;closing=false;trial=false;
+    model.Go(Page::Home);selection=6;release=false;closing=false;trial=false;
     prepared=committed=cancelled=persisted=0;Process(ctx,0,0x40);
     check(trial && prepared==0 && persisted==0,"A combined display and language change must wait for the display confirmation before preparing any restart");
     release=false;Process(ctx,0,0x20);
@@ -517,7 +517,7 @@ int main() {
     preview_succeeds=false;release=false;Process(ctx,0,0x80);
     check(notice=="settings.preview_error" && !closing,"A preview failure must keep the settings screen usable");
     const auto stopped=preview_stops;release=false;Process(ctx,0,0x20);
-    check(!closing && selection==7 && notice=="settings.unsaved" && preview_stops==stopped,
+    check(!closing && selection==5 && notice=="settings.unsaved" && preview_stops==stopped,
           "Unsaved Enhancements must select Save Changes before leaving");
     release=false;Process(ctx,0x4000,0);release=false;Process(ctx,0,0x40);
     check(closing && preview_stops>stopped,
@@ -567,13 +567,13 @@ int main() {
     // Successful Save must close through the retail Options teardown; an
     // unsuccessful write must keep the custom screen active for a retry.
     settings={};model.Open(settings);model.Edit().scorpion_unfiltered=true;
-    model.Go(Page::Home);selection=5;release=false;closing=false;trial=false;exit_prompt=false;animation.running=false;
+    model.Go(Page::Home);selection=6;release=false;closing=false;trial=false;exit_prompt=false;animation.running=false;
     native_close_calls.clear();const auto first_save=persisted;const auto first_stops=preview_stops;
     Process(ctx,0,0x40);
     check(closing && persisted==first_save+1 && last_saved.scorpion_unfiltered &&
           native_close_calls==std::vector<uint32_t>{0x14CFA,0x166DB,0x11EAB} && preview_stops==first_stops+1,
           "Saving an enhancement must persist it and immediately run native Options teardown");
-    model.Open(settings);model.Edit().scorpion_unfiltered=false;selection=5;
+    model.Open(settings);model.Edit().scorpion_unfiltered=false;selection=6;
     closing=false;release=false;persist_fails=true;native_close_calls.clear();
     const auto rejected_save=persisted;
     Process(ctx,0,0x40);
@@ -583,7 +583,7 @@ int main() {
     // Display changes first require user confirmation, and then close only
     // after the confirmed setting has been persisted.
     settings={};model.Open(settings);model.Edit().aspect_ratio="16:9";
-    selection=5;closing=false;release=false;trial=false;native_close_calls.clear();
+    selection=6;closing=false;release=false;trial=false;native_close_calls.clear();
     Process(ctx,0,0x40);
     check(trial && !closing && native_close_calls.empty(),
           "A display change must not close before the confirmation");

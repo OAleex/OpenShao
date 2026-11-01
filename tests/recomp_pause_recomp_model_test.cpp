@@ -32,7 +32,7 @@ int main(){
     }
     settings.language="pt-BR";settings.voice_language="pt-BR";
     Open();
-    assert(RowCount()==5 && RowText(0)=="Tela" && RowText(4)=="Voltar");
+    assert(RowCount()==6 && RowText(0)=="Tela" && RowText(4)=="Cheats" && RowText(5)=="Voltar");
     assert(!Choose(2) && CurrentPage()==Page::Controls && RowCount()==6);
     const auto deadzone=settings.deadzone;
     Choose(3);assert(settings.deadzone!=deadzone && saves==1);
@@ -109,12 +109,19 @@ int main(){
     for(const auto* locale:{"en","fr","de","es","it","pt-BR"}){
         settings.language=locale;
         Open();
-        for(unsigned category=0;category<4;++category){
+        for(unsigned category=0;category<5;++category){
             Choose(category);
             for(unsigned row=0;row<RowCount();++row)assert(RowText(row).size()<=24);
             Back();
         }
     }
+    settings.language="pt-BR";Open();Choose(4);
+    assert(CurrentPage()==Page::Cheats && RowCount()==3 && RowText(1).find("F8")!=std::string::npos);
+    const auto cheat_saves=saves;
+    Choose(0);assert(settings.cheats_enabled && saves==cheat_saves+1);
+    Choose(1);assert(settings.cheat_menu_key==0x78 && RowText(1).find("F9")!=std::string::npos);
+    Choose(2);assert(CurrentPage()==Page::Categories);
+    Back();
     assert(exits==0);
     std::puts("PASS: pause categories, immediate settings, remapping/conflicts, screen rollback/confirm, six locales");
 }
