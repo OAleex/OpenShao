@@ -60,7 +60,7 @@ Mod ReadMod(const Json& j) {
     }
     if(j.Has("features"))for(const auto& feature:j.At("features").Items()) {
         const auto& name=feature.Text();m.features.push_back(name);
-        if(name!="files"&&name!="gamedata"&&name!="voices"&&name!="fonts"&&name!="movies"&&name!="lua")
+        if(name!="files"&&name!="gamedata"&&name!="voices"&&name!="fonts"&&name!="movies"&&name!="lua"&&name!="hdtextures")
             m.unsupported_reason="Update OpenShao to use this mod feature: "+name;
     }
     return m;
