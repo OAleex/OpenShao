@@ -61,6 +61,7 @@ Put finished files in `mods/<id>/pack/`:
 | `audio/voices/*.adx` | Replace matching recordings in the English and shared voice banks |
 | `audio/movies/<name>.adx` and `.aix` | Replace both audio representations of a movie |
 | `fonts/small.xpr`, `fonts/large.xpr` | Replace the embedded fonts |
+| `hd/index.txt`, `hd/*` | Replace game textures with high resolution ones, as a texture pack |
 | `files/<game path>` | Replace a directly read game file |
 | `scripts/*.lua` | Supply routine callbacks listed in `routines` |
 | `README.txt`, `CREDITS.md` | Instructions and attribution |
@@ -84,6 +85,28 @@ All patches use the original game as their source, including updates.
 `routines` contains the script paths to execute.
 The builder derives required `features`, package hashes and release records.
 New packages require Recomp 0.2.0 or later. Existing PT-BR packages remain supported.
+
+## Texture packs
+
+A mod with an `hd/` folder replaces game textures with larger ones, without using the game archive or the game's memory.
+List it in `features` as `hdtextures`. Only one texture pack can be enabled at a time.
+
+`hd/index.txt` has one line per replaced texture: the hash, the width, the height, the number of levels and the file,
+separated by spaces. Lines starting with `#` are comments.
+
+```
+# hash width height levels file
+0bac2904604d3ecc 2048 2048 10 tex/0bac2904604d3ecc.dds
+```
+
+- The **hash** is the SDK `Hash` of the bytes of level 0 of the game's own texture, as 16 hexadecimal digits.
+- The **file** is a DDS with the `DXT5` format and every level, from the largest down, each a multiple of 4 in size.
+  The width and height must have the same proportion as the game's texture.
+- The pack's textures keep their own size and levels, and only exist in video memory.
+  A file that is missing or does not match its line is not used, and the game's texture stays.
+- The runtime reads each file when its texture is first used.
+
+Only the Vulkan renderer replaces textures for now.
 
 ## Routine scripts
 
