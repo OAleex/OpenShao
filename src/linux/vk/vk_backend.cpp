@@ -448,7 +448,8 @@ struct Tex {
     ImageP hd;                // the replacement, when it has arrived
     uint64_t requested = 0;   // the frame (plus one) it was last asked for, to ask again before the request grows old
     uint64_t first_request = 0;
-    uint64_t last_wait = 0;  // the last frame (plus one) it was drawn while it waited for its replacement
+    uint64_t last_wait = 0;      // the last frame (plus one) it was drawn while it waited for its replacement
+    uint64_t waited_frames = 0;  // the frames it was drawn while it waited
 };
 
 struct PsoKey {
@@ -626,6 +627,7 @@ private:
     void BindGuestTexture(const State& s, int stage, const TextureDesc& d, const FormatInfo& fi, DrawTextures& stages);
     bool CreateTexture(Tex& tx, const TextureDesc& d, const FormatInfo& fi, uint64_t key);
     void SyncHdSource();
+    void TraceScene();
     void PumpHdUploads();
     bool UploadHd(const texpack::Loaded& loaded);
     void UseHd(Tex& tx);
@@ -811,6 +813,7 @@ private:
     std::unordered_map<uint64_t, HdImage> hd_images_;
     std::shared_ptr<const texpack::PackSource> hd_source_;
     uint64_t hd_generation_ = ~0ull, hd_pumped_ = ~0ull;
+    uint32_t scene_world_ = ~0u, scene_room_ = ~0u, scene_flag_a_ = ~0u, scene_flag_b_ = ~0u;  // as the game says where it is
     texpack::Loader hd_loader_;
     ImageP dummy_[4];  // views for stages without a texture, by TexKind
     ImageP lut_;
@@ -2361,6 +2364,23 @@ bool VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     return true;
 }
 
+// The scene the game is in, as the world and the room it says, and whether it is paused or loading (the addresses
+// native_frames.cpp reads for the same); logged whenever it changes, so the textures each scene uses can be told apart
+void VulkanBackend::TraceScene() {
+    if (!hd_source_) return;
+    const uint32_t world = kernel::R32(0x639224), room = kernel::R32(0x505970);
+    const uint32_t a = kernel::R32(0x6C92F8), b = kernel::R32(0x4EF42C);
+    if (world == scene_world_ && room == scene_room_ && a == scene_flag_a_ && b == scene_flag_b_) return;
+    scene_world_ = world;
+    scene_room_ = room;
+    scene_flag_a_ = a;
+    scene_flag_b_ = b;
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1) < 2000)
+        LOGI("Texture pack: scene world %u room %u flags %u %u at frame %llu", world, room, a, b,
+             static_cast<unsigned long long>(presents_));
+}
+
 // A new set of packs: what belongs to the old ones goes, and every texture looks for its replacement again
 void VulkanBackend::SyncHdSource() {
     const uint64_t generation = texpack::Generation();
@@ -2376,7 +2396,7 @@ void VulkanBackend::SyncHdSource() {
         tx.rep.reset();
         tx.rep_hash = 0;
         tx.hd.reset();
-        tx.requested = tx.first_request = 0;
+        tx.requested = tx.first_request = tx.waited_frames = tx.last_wait = 0;
         tx.sig = ~tx.sig;  // read again, which also looks for the replacement
     }
 }
@@ -2407,20 +2427,22 @@ void VulkanBackend::PumpHdUploads() {
 // The replacement of a texture, once it is here; until then the texture is asked for, again before the request grows old
 void VulkanBackend::UseHd(Tex& tx) {
     if (tx.hd) return;
-    // a texture not drawn for a second has not been waiting for its replacement in that time
-    if (tx.last_wait && presents_ + 1 - tx.last_wait > 60) tx.first_request = 0;
-    tx.last_wait = presents_ + 1;
     const auto it = hd_images_.find(tx.rep_hash);
     if (it != hd_images_.end()) {
         tx.hd = it->second.image;
+        static std::atomic<uint32_t> used_logged{0};
+        if (used_logged.fetch_add(1) < 6000)  // which textures each scene uses, for the lists of what to load ahead
+            LOGI("Texture pack: use %016llx %ux%u in world %u room %u at frame %llu", static_cast<unsigned long long>(tx.rep_hash),
+                 tx.rep ? tx.rep->width : 0u, tx.rep ? tx.rep->height : 0u, scene_world_, scene_room_,
+                 static_cast<unsigned long long>(presents_));
         if (tx.first_request) {
-            const uint64_t frames = presents_ + 1 - tx.first_request;
-            texpack::NotePopIn(frames);
+            // what shows is the frames it was drawn as the game made it; the time until its next draw is not seen
+            texpack::NotePopIn(tx.waited_frames);
             static std::atomic<uint32_t> late_logged{0};
-            if (frames >= 6 && tx.rep && late_logged.fetch_add(1) < 300)  // the replacements that took long to come, to find which
-                LOGI("Texture pack: late %016llx %ux%u, %u levels, %llu frames after it was first asked for",
+            if (tx.waited_frames >= 6 && tx.rep && late_logged.fetch_add(1) < 300)
+                LOGI("Texture pack: late %016llx %ux%u, %u levels, drawn %llu frames as the game's own before its replacement",
                      static_cast<unsigned long long>(tx.rep_hash), tx.rep->width, tx.rep->height, unsigned(tx.rep->levels),
-                     static_cast<unsigned long long>(frames));
+                     static_cast<unsigned long long>(tx.waited_frames));
         }
         return;
     }
@@ -2428,6 +2450,10 @@ void VulkanBackend::UseHd(Tex& tx) {
         tx.rep.reset();
         return;
     }
+    // a texture not drawn for a second has not been waiting for its replacement in that time
+    if (tx.last_wait && presents_ + 1 - tx.last_wait > 60) tx.first_request = tx.waited_frames = 0;
+    if (tx.last_wait != presents_ + 1) ++tx.waited_frames;
+    tx.last_wait = presents_ + 1;
     constexpr uint64_t kAskAgainEvery = 30;  // frames; a request is dropped after 240 not asked for again
     if (!tx.requested || presents_ + 1 - tx.requested >= kAskAgainEvery) {
         hd_loader_.Request(tx.rep_hash);
@@ -2512,7 +2538,7 @@ void VulkanBackend::BindGuestTexture(const State& s, int stage, const TextureDes
                     tx.rep = rep;
                     tx.rep_hash = rep ? rep_hash : 0;
                     tx.hd.reset();
-                    tx.requested = tx.first_request = 0;
+                    tx.requested = tx.first_request = tx.waited_frames = tx.last_wait = 0;
                 }
             }
             UploadTexture(tx, d, p, palette.va ? palette.colours : nullptr);
@@ -3629,6 +3655,7 @@ void VulkanBackend::Present(const Surface& front) {
     CountFps();
     if (diag::Perf()) LogPerf();
     hd_loader_.AdvanceFrame();
+    TraceScene();
     LogTexturePack();
     ApplySettings();
     if (presents_ % 1800 == 0 && psos_.size() != cache_saved_psos_) {
