@@ -2388,6 +2388,11 @@ void VulkanBackend::SyncHdSource() {
     hd_generation_ = generation;
     hd_source_ = texpack::Source();
     hd_loader_.SetPack(hd_source_, texpack::Quality::High);
+    if (hd_source_) {  // the menus' textures are read now, apart from the frames, so they are here before anything draws them
+        const auto ahead = hd_source_->Preload();
+        for (uint64_t hash : ahead) hd_loader_.Request(hash, -1.f);  // below a texture that is being drawn
+        if (!ahead.empty()) LOGI("Texture pack: %zu textures to have ready for the menus", ahead.size());
+    }
     for (auto& entry : hd_images_) CurrentFrame().garbage.push_back(entry.second.image);
     hd_images_.clear();
     g_bad_replacements.clear();
@@ -2435,6 +2440,7 @@ void VulkanBackend::UseHd(Tex& tx) {
             LOGI("Texture pack: use %016llx %ux%u in world %u room %u at frame %llu", static_cast<unsigned long long>(tx.rep_hash),
                  tx.rep ? tx.rep->width : 0u, tx.rep ? tx.rep->height : 0u, scene_world_, scene_room_,
                  static_cast<unsigned long long>(presents_));
+        if (!tx.first_request) texpack::NoteReadyAtFirstUse();
         if (tx.first_request) {
             // what shows is the frames it was drawn as the game made it; the time until its next draw is not seen
             texpack::NotePopIn(tx.waited_frames);
@@ -3569,14 +3575,16 @@ void LogTexturePack() {
     if (texpack::TakeInterval(300, span) && (span.resident || span.loads || span.failures)) {
         const double loads = double(std::max<uint64_t>(span.loads, 1));
         LOGI("Texture pack: %llu frames: %llu loads, %llu failed, read %.2f ms and upload %.2f ms per load, worst frame %.2f ms "
-             "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most in this stretch, %u textures %.0f MiB",
+             "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most in this stretch, %llu ready at "
+             "their first draw, %u textures %.0f MiB",
              static_cast<unsigned long long>(span.frames), static_cast<unsigned long long>(span.loads),
              static_cast<unsigned long long>(span.failures), double(span.disk_us) / 1000.0 / loads,
              double(span.upload_us) / 1000.0 / loads, double(span.worst_frame_us) / 1000.0,
              double(span.wait_us) / 1000.0 / double(std::max<uint64_t>(span.waits, 1)),
              static_cast<unsigned long long>(span.pop_ins),
              double(span.pop_frames) / double(std::max<uint64_t>(span.pop_ins, 1)),
-             static_cast<unsigned long long>(span.pop_max), span.resident, double(span.resident_bytes) / 1048576.0);
+             static_cast<unsigned long long>(span.pop_max), static_cast<unsigned long long>(span.ready), span.resident,
+             double(span.resident_bytes) / 1048576.0);
     }
     uint32_t mark = 0;
     if (texpack::TakeMarker(mark)) {
@@ -3612,6 +3620,10 @@ void LogPerf() {
 
 void VulkanBackend::Present(const Surface& front) {
     PerfScope perf_present{g_perf.present};
+    if (hd_pumped_ != presents_) {  // what was read goes to the GPU whether or not a texture is drawn this frame
+        hd_pumped_ = presents_;
+        PumpHdUploads();
+    }
     const bool capture=g_capture.exchange(false);
     ResizeSwap();
     Target* t = EnsureTarget(front, false);
