@@ -21,7 +21,7 @@ struct Interval {
 void EndFrame();
 // True once `frames` frames have passed since the last time, with the figures of those frames
 bool TakeInterval(uint64_t frames, Interval& out);
-// A mark in the log, for the player to say a scene began (the overlay's F10 asks for it); false when none is waiting
+// A mark in the log, for the player to say a scene began (Ctrl+F9 on Linux asks for it); false when none is waiting
 void RequestMarker();
 bool TakeMarker(uint32_t& number);
 // Held by a texture while it holds a replacement, so the replacement counts as resident for as long as it lives.

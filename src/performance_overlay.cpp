@@ -30,11 +30,7 @@ double WorstFrameLoadMs(uint64_t total_us) {
 bool Visible() { return visible.load(std::memory_order_relaxed); }
 void SetVisible(bool value) { visible.store(value, std::memory_order_relaxed); }
 bool Message(uint32_t message, uintptr_t key, intptr_t flags) {
-    constexpr uint32_t keydown = 0x100, keyup = 0x101, f9 = 0x78, f10 = 0x79;
-    if (key == f10 && (message == keydown || message == keyup)) {  // a mark in the log for the texture pack measurements
-        if (message == keydown && !(uintptr_t(flags) & (uintptr_t(1) << 30))) texpack::RequestMarker();
-        return true;
-    }
+    constexpr uint32_t keydown = 0x100, keyup = 0x101, f9 = 0x78;
     if (key != f9 || (message != keydown && message != keyup)) return false;
     if (message == keydown && !(uintptr_t(flags) & (uintptr_t(1) << 30)))
         visible.store(!Visible(), std::memory_order_relaxed);
