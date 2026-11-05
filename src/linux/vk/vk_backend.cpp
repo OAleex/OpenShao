@@ -3433,6 +3433,27 @@ void VulkanBackend::CountFps() {
     }
 }
 
+// What the texture pack costs, every five seconds, and where the player marked the scenes (F10)
+void LogTexturePack() {
+    texpack::EndFrame();
+    texpack::Interval span;
+    if (texpack::TakeInterval(300, span) && (span.resident || span.loads || span.failures)) {
+        const double loads = double(std::max<uint64_t>(span.loads, 1));
+        LOGI("Texture pack: %llu frames: %llu loads, %llu failed, read %.2f ms and upload %.2f ms per load, worst frame %.2f ms "
+             "of loading, %u textures %.0f MiB",
+             static_cast<unsigned long long>(span.frames), static_cast<unsigned long long>(span.loads),
+             static_cast<unsigned long long>(span.failures), double(span.disk_us) / 1000.0 / loads,
+             double(span.upload_us) / 1000.0 / loads, double(span.worst_frame_us) / 1000.0, span.resident,
+             double(span.resident_bytes) / 1048576.0);
+    }
+    uint32_t mark = 0;
+    if (texpack::TakeMarker(mark)) {
+        const auto stats = texpack::GetStats();
+        LOGI("Texture pack: marker %u: %u textures %.0f MiB, %llu loads in all", mark, stats.resident,
+             double(stats.resident_bytes) / 1048576.0, static_cast<unsigned long long>(stats.loads));
+    }
+}
+
 void LogPerf() {
     static PerfClock::time_point perf_start = PerfClock::now();
     static uint64_t perf_frames = 0;
@@ -3501,6 +3522,7 @@ void VulkanBackend::Present(const Surface& front) {
     ResetFrame();
     CountFps();
     if (diag::Perf()) LogPerf();
+    LogTexturePack();
     ApplySettings();
     if (presents_ % 1800 == 0 && psos_.size() != cache_saved_psos_) {
         cache_saved_psos_ = psos_.size();
