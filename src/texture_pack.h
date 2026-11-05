@@ -2,7 +2,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <vector>
+#include "texture_pack_source.h"
 
 // High resolution texture packs. A pack is the hd folder of an enabled mod: an index.txt and the DDS files it names.
 // Each line of the index reads: hash, width, height, levels, file. The hash covers the level 0 bytes of the game's
@@ -19,4 +21,8 @@ std::optional<Entry> Find(uint64_t hash);
 bool Load(uint64_t hash, std::vector<uint8_t>& blocks);
 // Bytes of one BC3 level
 uint32_t LevelBytes(uint32_t w, uint32_t h, uint32_t level);
+// The packs in use as the loader reads them, null when there are none. The source does not change when SetPacks is called
+// again; the generation does, so a reader knows to ask for the new one.
+std::shared_ptr<const PackSource> Source();
+uint64_t Generation();
 }

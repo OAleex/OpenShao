@@ -77,6 +77,34 @@ int main() try {
     Check(!texpack::Load(0xa4, blocks), "A missing file is refused");
     Check(!texpack::Load(0xdead, blocks), "An unknown hash is refused");
 
+    // The packs as the loader reads them
+    {
+        const auto source = texpack::Source();
+        Check(source != nullptr, "A source for the packs in use");
+        const auto entry = source->Find(0xa1);
+        Check(entry && entry->width == 16 && entry->height == 8 && entry->levels == 3 && entry->format == texpack::BcFormat::Bc3 &&
+                  entry->medium_first_level == 0,
+              "The source describes a texture");
+        std::vector<uint8_t> all, later;
+        Check(source->ReadLevels(*entry, 0, all) && all == blocks, "The source reads what Load reads");
+        Check(source->ReadLevels(*entry, 1, later) && later.size() == all.size() - texpack::LevelBytes(16, 8, 0) &&
+                  later.front() == 0x11 && later.back() == 0x12,
+              "Reading from a later level skips the earlier ones");
+        Check(!source->ReadLevels(*entry, 3, later), "A level the texture lacks is refused");
+        Check(!source->Find(0xdead), "A texture the packs lack is not found");
+        const auto bad = source->Find(0xa2);
+        Check(bad && !source->ReadLevels(*bad, 0, later), "A file that disagrees with its line is refused");
+        const uint64_t generation = texpack::Generation();
+        texpack::SetPacks({root / "a", root / "b"});
+        Check(texpack::Generation() != generation, "Setting the packs changes the generation");
+        Check(source->ReadLevels(*entry, 0, all) && texpack::Source() != source, "An old source keeps reading what it described");
+        std::vector<uint8_t> other;
+        texpack::SetPacks({});
+        Check(texpack::Source() == nullptr, "No packs, no source");
+        Check(source->ReadLevels(*entry, 0, other), "A source outlives the packs it came from");
+        texpack::SetPacks({root / "a", root / "b"});
+    }
+
     const auto before = texpack::GetStats();
     {
         texpack::Resident one_texture(1000);
