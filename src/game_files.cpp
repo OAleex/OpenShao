@@ -8,6 +8,7 @@
 #include "restart.h"
 #include "language_pack.h"
 #include "texture_pack.h"
+#include <cstdlib>
 #include "mods/manager.h"
 #include "mods/languages.h"
 #include "mods/runtime.h"
@@ -124,6 +125,9 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         if(!mounted)return false;
         if(options.validate_language_pack&&!language::ValidateMovies(error))return false;
         mods::StageRoutines(std::move(scripts));
+        // A development aid: the folder this names is read as a texture pack before the installed ones, so a pack can be tried
+        // without packaging and installing it
+        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)hd_packs.insert(hd_packs.begin(),folder);
         texpack::SetPacks(hd_packs);
         const auto& stats=language::Statistics();
         LOGR("Language resources: text=%s voices=%s",selected.c_str(),voices.c_str());
