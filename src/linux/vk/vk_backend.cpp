@@ -46,6 +46,7 @@
 #include "pipeline_precompile.h"
 #include "pipeline_assets.h"
 #include "texture_pack.h"
+#include "texture_pack_stats.h"
 #include "pipeline_source_cache.h"
 #include "raster_compat.h"
 #include "runtime_paths.h"
@@ -443,6 +444,7 @@ struct Tex {
     uint64_t palette = 0;  // hash of the colours a P8 texture was decoded with
     std::optional<texpack::Entry> rep;  // texture pack replacement this image holds instead of the game's texture
     uint64_t rep_hash = 0;
+    std::shared_ptr<texpack::Resident> resident;  // keeps the replacement counted while this image holds it
 };
 
 struct PsoKey {
@@ -2295,8 +2297,18 @@ void VulkanBackend::UploadTextureLevel(Tex& tx, uint32_t f, uint32_t l, const st
 }
 
 bool VulkanBackend::UploadReplacement(Tex& tx) {
+    using Clock = std::chrono::steady_clock;
+    const auto micros = [](Clock::time_point from, Clock::time_point to) {
+        return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(to - from).count());
+    };
+    const auto start = Clock::now();
     std::vector<uint8_t> blocks;
-    if (!texpack::Load(tx.rep_hash, blocks)) return false;
+    const bool read = texpack::Load(tx.rep_hash, blocks);
+    const auto read_done = Clock::now();
+    if (!read) {
+        texpack::NoteLoad(micros(start, read_done), 0, false);
+        return false;
+    }
     Transition(*tx.res, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     size_t offset = 0;
     std::vector<uint8_t> level;
@@ -2307,6 +2319,16 @@ bool VulkanBackend::UploadReplacement(Tex& tx) {
         offset += size;
     }
     Transition(*tx.res, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto done = Clock::now();
+    const uint64_t disk_us = micros(start, read_done), upload_us = micros(read_done, done);
+    texpack::NoteLoad(disk_us, upload_us, true);
+    tx.resident.reset();
+    tx.resident = std::make_shared<texpack::Resident>(blocks.size());
+    static std::atomic<uint32_t> slow_logged{0};
+    if (disk_us + upload_us >= 5000 && slow_logged.fetch_add(1) < 100)
+        LOGI("Texture pack: slow load %016llx %ux%u, %u levels, %zu bytes: read %.1f ms, upload %.1f ms",
+             static_cast<unsigned long long>(tx.rep_hash), tx.rep->w, tx.rep->h, tx.levels, blocks.size(),
+             double(disk_us) / 1000.0, double(upload_us) / 1000.0);
     return true;
 }
 
