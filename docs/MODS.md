@@ -104,7 +104,19 @@ separated by spaces. Lines starting with `#` are comments.
   The width and height must have the same proportion as the game's texture.
 - The pack's textures keep their own size and levels, and only exist in video memory.
   A file that is missing or does not match its line is not used, and the game's texture stays.
-- The runtime reads each file when its texture is first used.
+- The runtime reads the files on threads of its own, so the game never waits for the disk. A texture is drawn as the game made it until
+  its replacement has been read, which takes a few frames.
+
+`hd/preload.txt` is optional. It lists, one hash per line, the replacements to have ready before the menus draw them, so that the menus
+show them from the first frame instead of changing a few frames later. Lines starting with `#` are comments, and a hash that has no line in
+`index.txt` is ignored. The runtime reads the list as soon as the pack is in use. Keep it to the textures the menus draw: each one takes
+video memory from the start.
+
+```
+# menus
+3abc1b8f4bea1c09
+b1ef1733100d3dea
+```
 
 Only the Vulkan renderer replaces textures for now.
 
