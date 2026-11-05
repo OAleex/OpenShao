@@ -448,6 +448,7 @@ struct Tex {
     ImageP hd;                // the replacement, when it has arrived
     uint64_t requested = 0;   // the frame (plus one) it was last asked for, to ask again before the request grows old
     uint64_t first_request = 0;
+    uint64_t last_wait = 0;  // the last frame (plus one) it was drawn while it waited for its replacement
 };
 
 struct PsoKey {
@@ -2406,10 +2407,21 @@ void VulkanBackend::PumpHdUploads() {
 // The replacement of a texture, once it is here; until then the texture is asked for, again before the request grows old
 void VulkanBackend::UseHd(Tex& tx) {
     if (tx.hd) return;
+    // a texture not drawn for a second has not been waiting for its replacement in that time
+    if (tx.last_wait && presents_ + 1 - tx.last_wait > 60) tx.first_request = 0;
+    tx.last_wait = presents_ + 1;
     const auto it = hd_images_.find(tx.rep_hash);
     if (it != hd_images_.end()) {
         tx.hd = it->second.image;
-        if (tx.first_request) texpack::NotePopIn(presents_ + 1 - tx.first_request);
+        if (tx.first_request) {
+            const uint64_t frames = presents_ + 1 - tx.first_request;
+            texpack::NotePopIn(frames);
+            static std::atomic<uint32_t> late_logged{0};
+            if (frames >= 6 && tx.rep && late_logged.fetch_add(1) < 300)  // the replacements that took long to come, to find which
+                LOGI("Texture pack: late %016llx %ux%u, %u levels, %llu frames after it was first asked for",
+                     static_cast<unsigned long long>(tx.rep_hash), tx.rep->width, tx.rep->height, unsigned(tx.rep->levels),
+                     static_cast<unsigned long long>(frames));
+        }
         return;
     }
     if (g_bad_replacements.count(tx.rep_hash)) {
@@ -3531,7 +3543,7 @@ void LogTexturePack() {
     if (texpack::TakeInterval(300, span) && (span.resident || span.loads || span.failures)) {
         const double loads = double(std::max<uint64_t>(span.loads, 1));
         LOGI("Texture pack: %llu frames: %llu loads, %llu failed, read %.2f ms and upload %.2f ms per load, worst frame %.2f ms "
-             "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most, %u textures %.0f MiB",
+             "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most in this stretch, %u textures %.0f MiB",
              static_cast<unsigned long long>(span.frames), static_cast<unsigned long long>(span.loads),
              static_cast<unsigned long long>(span.failures), double(span.disk_us) / 1000.0 / loads,
              double(span.upload_us) / 1000.0 / loads, double(span.worst_frame_us) / 1000.0,

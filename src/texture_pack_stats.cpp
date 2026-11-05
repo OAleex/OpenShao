@@ -6,7 +6,7 @@ namespace openshao::texpack {
 namespace {
 std::atomic<uint32_t> resident_count{0};
 std::atomic<uint64_t> resident_bytes{0}, load_count{0}, load_failures{0}, disk_us_total{0}, upload_us_total{0};
-std::atomic<uint64_t> wait_count{0}, wait_us_total{0}, pop_count{0}, pop_frames_total{0}, pop_worst{0};
+std::atomic<uint64_t> wait_count{0}, wait_us_total{0}, pop_count{0}, pop_frames_total{0}, pop_worst{0}, pop_worst_span{0};
 std::atomic<uint64_t> render_us_total{0};
 std::atomic<uint64_t> frame_us{0};  // what the loads cost the frame in progress
 std::atomic<uint32_t> markers_asked{0}, markers_taken{0};
@@ -43,8 +43,10 @@ void NoteWait(uint64_t wait_us) {
 void NotePopIn(uint64_t frames) {
     pop_count.fetch_add(1, std::memory_order_relaxed);
     pop_frames_total.fetch_add(frames, std::memory_order_relaxed);
-    uint64_t worst = pop_worst.load(std::memory_order_relaxed);
-    while (frames > worst && !pop_worst.compare_exchange_weak(worst, frames, std::memory_order_relaxed)) {}
+    for (auto* worst_of : {&pop_worst, &pop_worst_span}) {
+        uint64_t worst = worst_of->load(std::memory_order_relaxed);
+        while (frames > worst && !worst_of->compare_exchange_weak(worst, frames, std::memory_order_relaxed)) {}
+    }
 }
 
 void EndFrame() {
@@ -64,7 +66,7 @@ bool TakeInterval(uint64_t frames, Interval& out) {
     out.wait_us = now.wait_us - since.wait_us;
     out.pop_ins = now.pop_ins - since.pop_ins;
     out.pop_frames = now.pop_frames - since.pop_frames;
-    out.pop_max = now.pop_max;
+    out.pop_max = pop_worst_span.exchange(0, std::memory_order_relaxed);  // of this stretch, where the overlay shows the total
     out.worst_frame_us = since.worst_frame_us;
     out.resident = now.resident;
     out.resident_bytes = now.resident_bytes;
