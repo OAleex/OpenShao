@@ -69,7 +69,10 @@ void Draw(double fps) {
                         static_cast<unsigned long long>(stats.failures));
             ImGui::Text("Per load: read %.2f ms, upload %.2f ms", double(stats.disk_us) / 1000.0 / loads,
                         double(stats.upload_us) / 1000.0 / loads);
-            ImGui::Text("Worst frame, last 240: %.2f ms", WorstFrameLoadMs(stats.disk_us + stats.upload_us));
+            if (stats.pop_ins)
+                ImGui::Text("Pop-in: %.1f frames on average, %llu at most", double(stats.pop_frames) / double(stats.pop_ins),
+                            static_cast<unsigned long long>(stats.pop_max));
+            ImGui::Text("Worst frame, last 240: %.2f ms", WorstFrameLoadMs(stats.render_us));
         }
     }
     ImGui::End();

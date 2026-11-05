@@ -130,6 +130,16 @@ int main() try {
         texpack::EndFrame();
         texpack::EndFrame();
         Check(texpack::TakeInterval(2, span) && span.loads == 0 && span.worst_frame_us == 0, "A quiet interval has no loads");
+        texpack::NoteWait(2000);
+        texpack::NoteWait(4000);
+        texpack::NotePopIn(3);
+        texpack::NotePopIn(7);
+        texpack::NoteLoad(900, 100, true, false);  // read on another thread: only the upload held up the frame
+        texpack::EndFrame();
+        texpack::EndFrame();
+        Check(texpack::TakeInterval(2, span) && span.waits == 2 && span.wait_us == 6000 && span.pop_ins == 2 &&
+                  span.pop_frames == 10 && span.pop_max >= 7 && span.disk_us == 900 && span.worst_frame_us == 100,
+              "Waits and pop-ins add up, and a read made elsewhere does not count against the frame");
         uint32_t number = 0;
         Check(!texpack::TakeMarker(number), "No marker without a request");
         texpack::RequestMarker();
