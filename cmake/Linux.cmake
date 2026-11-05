@@ -64,6 +64,8 @@ endfunction()
 add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_model_instances_test.py"
     --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
 openshao_linux_test(recomp_virtual_file SOURCES tests/recomp_virtual_file_test.cpp src/virtual_file.cpp)
+openshao_linux_test(recomp_texture_pack SOURCES tests/recomp_texture_pack_test.cpp src/texture_pack.cpp src/texture_pack_stats.cpp)
+openshao_linux_test(recomp_texture_pack_file SOURCES tests/recomp_texture_pack_file_test.cpp src/texture_pack_file.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
 openshao_linux_test(recomp_language_archive SOURCES tests/recomp_language_archive_test.cpp src/language_archive.cpp src/virtual_file.cpp LIBS miniz)
 openshao_linux_test(recomp_language_credits SOURCES tests/recomp_language_credits_test.cpp src/language_credits.cpp)
 openshao_linux_test(recomp_language_pack SOURCES tests/recomp_language_pack_test.cpp src/language_pack.cpp src/language_archive.cpp
