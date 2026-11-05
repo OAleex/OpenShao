@@ -31,7 +31,7 @@ static void Keep(std::vector<std::vector<uint8_t>>& pool, std::vector<uint8_t>&&
     if (pool.size() < kPoolBuffers && buffer.capacity() && buffer.capacity() <= kPoolMaxCapacity) pool.push_back(std::move(buffer));
 }
 
-void Loader::SetPack(std::shared_ptr<const PackFile> pack, Quality quality) {
+void Loader::SetPack(std::shared_ptr<const PackSource> pack, Quality quality) {
     std::lock_guard<std::mutex> lock(mutex_);
     ++generation_;
     pack_ = std::move(pack);
@@ -131,11 +131,12 @@ bool Loader::ProcessOne() {
     Loaded result;
     result.hash = hash;
     result.pack = pack;
-    result.entry = pack->Find(hash);
+    const auto found = pack->Find(hash);
     const auto start = Clock::now();
-    if (result.entry) {
-        result.first_level = FirstLevel(*result.entry, quality);
-        result.ok = pack->ReadLevels(*result.entry, result.first_level, buffer);
+    if (found) {
+        result.entry = *found;
+        result.first_level = quality == Quality::Medium ? found->medium_first_level : 0;
+        result.ok = pack->ReadLevels(*found, result.first_level, buffer);
     }
     const auto done = Clock::now();
 
