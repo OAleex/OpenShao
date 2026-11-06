@@ -1,5 +1,6 @@
 #include "mods/manager.h"
 #include "mods/sha256.h"
+#include "mods/mod_settings.h"
 #include "file_ops.h"
 #include "texture_pack_builder.h"
 #include "texture_pack_file.h"
@@ -186,6 +187,24 @@ int main(int argc,char** argv){try{
         Require(!parses(",\"files\":[],\"patches\":[]","\"size\":10","\"size\":0"),"A texture pack file has a size");
         mods::Uninstall(root,"AiTextures");
         Require(mods::ReadInstalled(root).empty()&&!fs::exists(live_pack),"Uninstalling removes the texture pack file");
+    }
+    {   // What the user chose is kept by the mod's id, apart from the mod's own files
+        const auto folder=fs::temp_directory_path()/"openshao-mod-settings-test";fs::remove_all(folder);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"Nothing chosen means High, even without the folder");
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
+        mods::WriteTextureQuality(folder,"B.x-1",texpack::Quality::High);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::High,
+                "Each mod keeps its own choice");
+        mods::WriteTextureQuality(folder,"B.x-1",texpack::Quality::Medium);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::Medium,
+                "Changing one choice keeps the others");
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::High);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A choice can change back");
+        std::ofstream(folder/"settings.toml",std::ios::trunc)<<"this is [not toml";
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A file that cannot be read means High");
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,"A damaged file is written again");
+        fs::remove_all(folder);
     }
     std::cout<<"Mod manager checks passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

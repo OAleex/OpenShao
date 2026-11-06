@@ -2,6 +2,8 @@
 #include "manager.h"
 #include <atomic>
 #include <condition_variable>
+#include <map>
+#include "mod_settings.h"
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -16,6 +18,7 @@ struct BrowserState {
     std::string status,error;
     uint64_t done=0,total=0,revision=0;
     bool busy=false,updates=false,checking=false;
+    std::map<std::string,texpack::Quality> quality;  // of the installed texture pack files, by mod id
     std::optional<Replacement> asking;  // set while an installation waits for the answer
 };
 class Browser {
@@ -41,6 +44,7 @@ public:
     void Answer(bool install);
     void Install(std::string id,const std::filesystem::path& game);
     void Enable(std::string id,bool enabled);
+    void SetQuality(std::string id,texpack::Quality quality);
     void Remove(std::string id);
     void Cancel();
 };

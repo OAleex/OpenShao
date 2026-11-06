@@ -15,7 +15,7 @@ struct SourceEntry {
     uint16_t width = 0, height = 0;  // level 0 of the stored texture
     uint8_t levels = 0;
     BcFormat format = BcFormat::Bc3;
-    uint32_t medium_first_level = 0;  // the first level to use for the Medium quality
+    uint32_t first_level = 0;   // the level to start from: the pack's quality may skip the largest ones
     uint32_t origin = 0;              // which of several packs gave it, for the one that combines them
 };
 

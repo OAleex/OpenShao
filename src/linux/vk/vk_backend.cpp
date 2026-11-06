@@ -2387,7 +2387,7 @@ void VulkanBackend::SyncHdSource() {
     if (generation == hd_generation_) return;
     hd_generation_ = generation;
     hd_source_ = texpack::Source();
-    hd_loader_.SetPack(hd_source_, texpack::Quality::High);
+    hd_loader_.SetPack(hd_source_);
     if (hd_source_) {  // the menus' textures are read now, apart from the frames, so they are here before anything draws them
         const auto ahead = hd_source_->Preload();
         for (uint64_t hash : ahead) hd_loader_.Request(hash, -1.f);  // below a texture that is being drawn

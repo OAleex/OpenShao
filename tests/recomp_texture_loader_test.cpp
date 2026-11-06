@@ -44,11 +44,11 @@ struct Opened {
     const Opened* operator->() const { return this; }
 };
 
-static Opened Open(const std::string& name, int count = 8) {
+static Opened Open(const std::string& name, int count = 8, texpack::Quality quality = texpack::Quality::High) {
     std::string error;
     std::shared_ptr<const texpack::PackFile> pack = texpack::PackFile::Open(Write(name, Build(Many(count), InfoFor(size_t(count)))), error);
     Check(pack != nullptr, "The test pack opens: " + error);
-    return {pack, texpack::AsSource(pack)};
+    return {pack, texpack::AsSource(pack, quality)};
 }
 
 static std::vector<texpack::Loaded> TakeAll(texpack::Loader& loader) {
@@ -83,7 +83,7 @@ int main() try {
     {
         texpack::Loader loader(NoThreads());
         Check(!loader.Request(0x100), "Without a pack nothing can be asked for");
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         Check(loader.Request(0x100), "A texture of the pack can be asked for");
         Check(loader.GetStats().pending == 1, "The request waits");
         Check(loader.ProcessOne() && !loader.ProcessOne(), "One request is read, and then there is nothing to read");
@@ -105,7 +105,7 @@ int main() try {
     // The quality sets where the blocks start
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::Medium);
+        loader.SetPack(Open("medium.ostp", 8, texpack::Quality::Medium));
         loader.Request(0x101);
         loader.ProcessOne();
         const auto out = TakeAll(loader);
@@ -118,7 +118,7 @@ int main() try {
     // Asking again does not read again
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         for (int i = 0; i < 100; ++i) Check(loader.Request(0x102), "Asked many times");
         Check(loader.GetStats().pending == 1, "Many requests make one");
         loader.ProcessOne();
@@ -131,7 +131,7 @@ int main() try {
     // The highest priority first, and the most recent among equals
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100, 1);
         loader.Request(0x101, 5);
         loader.Request(0x102, 3);
@@ -144,7 +144,7 @@ int main() try {
     }
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100, 1);
         loader.Request(0x101, 2);
         loader.Request(0x102, 2);
@@ -160,7 +160,7 @@ int main() try {
     // Cancelling
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100);
         loader.Request(0x101);
         Check(loader.Cancel(0x100) && !loader.Cancel(0x100) && !loader.Cancel(0x105), "Only a pending request is cancelled, once");
@@ -174,7 +174,7 @@ int main() try {
         auto options = NoThreads();
         options.max_age_frames = 10;
         texpack::Loader loader(options);
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100);
         for (int i = 0; i < 11; ++i) loader.AdvanceFrame();
         loader.Request(0x101);
@@ -195,12 +195,12 @@ int main() try {
     // Changing the pack drops what belongs to the old one
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100);
         loader.Request(0x101);
         loader.ProcessOne();  // 0x101 is ready, 0x100 is pending
-        const auto other = Open("b.ostp", 4);
-        loader.SetPack(other, texpack::Quality::Medium);
+        const auto other = Open("b.ostp", 4, texpack::Quality::Medium);
+        loader.SetPack(other);
         Check(loader.GetStats().pending == 0 && loader.GetStats().ready == 0 && loader.GetStats().dropped == 2 &&
                   TakeAll(loader).empty() && !loader.ProcessOne(),
               "Pending and ready results of the old pack are dropped");
@@ -222,12 +222,12 @@ int main() try {
             released.wait();
         };
         texpack::Loader loader(options);
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100);
         WaitUntil([&] { return inside.load(); }, "the read to start");
         Check(loader.GetStats().in_flight == 1 && !loader.Cancel(0x100), "A read in progress cannot be cancelled");
         Check(loader.Request(0x100), "Asking for what is being read is accepted and changes nothing");
-        loader.SetPack(Open("c.ostp", 2), texpack::Quality::High);
+        loader.SetPack(Open("c.ostp", 2));
         release.set_value();
         WaitUntil([&] { return loader.GetStats().in_flight == 0; }, "the read to end");
         Check(TakeAll(loader).empty() && loader.GetStats().dropped == 1 && loader.GetStats().ready == 0,
@@ -242,7 +242,7 @@ int main() try {
         Check(broken != nullptr, "Opens before the damage");
         fs::resize_file(path, 300);
         texpack::Loader loader(NoThreads());
-        loader.SetPack(texpack::AsSource(broken), texpack::Quality::High);
+        loader.SetPack(texpack::AsSource(broken));
         loader.Request(0x101);
         loader.ProcessOne();
         const auto out = TakeAll(loader);
@@ -256,7 +256,7 @@ int main() try {
         auto options = NoThreads();
         options.max_ready_bytes = 12000;  // a little over two textures
         texpack::Loader loader(options);
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         for (int i = 0; i < 5; ++i) {
             loader.Request(uint64_t(0x100 + i));
             loader.ProcessOne();
@@ -269,7 +269,7 @@ int main() try {
         auto tiny = NoThreads();
         tiny.max_ready_bytes = 1;
         texpack::Loader small(tiny);
-        small.SetPack(pack, texpack::Quality::High);
+        small.SetPack(pack);
         small.Request(0x100);
         small.ProcessOne();
         Check(small.GetStats().ready == 1, "The newest result is kept even when it alone passes the limit");
@@ -278,7 +278,7 @@ int main() try {
     // Buffers given back are reused
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         loader.Request(0x100);
         loader.ProcessOne();
         auto out = TakeAll(loader);
@@ -295,7 +295,7 @@ int main() try {
         options.threads = 4;
         texpack::Loader loader(options);
         const int count = 32;
-        loader.SetPack(Open("many.ostp", count), texpack::Quality::High);
+        loader.SetPack(Open("many.ostp", count));
         std::atomic<bool> stop{false};
         std::vector<std::thread> askers;
         for (int t = 0; t < 6; ++t)
@@ -336,7 +336,7 @@ int main() try {
         texpack::Loader::Options options;
         options.threads = 3;
         texpack::Loader loader(options);
-        loader.SetPack(pack, texpack::Quality::High);
+        loader.SetPack(pack);
         for (int k = 0; k < 8; ++k) loader.Request(uint64_t(0x100 + k));
         if (i % 2) std::this_thread::sleep_for(std::chrono::microseconds(300));
     }

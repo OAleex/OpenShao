@@ -699,6 +699,17 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             ImGui::EndDisabled();
             list.Text(Weight::Medium, 18, remove_x, meta_y, Rgb(remove.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), "Remove");
             if (remove.clicked) s.RemoveMod(mod);
+            if (const auto quality = view.quality.find(mod.id); quality != view.quality.end()) {
+                // A texture pack file: High uses every level of its textures, Medium leaves them at twice the game's size
+                const bool medium = quality->second == texpack::Quality::Medium;
+                const std::string label = std::string("Quality: ") + (medium ? "Medium" : "High");
+                const float quality_x = remove_x + list.Measure(Weight::Medium, 18, "Remove").x + 18;
+                ImGui::BeginDisabled(view.busy);
+                const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + list.Measure(Weight::Medium, 18, label.c_str()).x, meta_y + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, quality_x, meta_y, Rgb(choose.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), label.c_str());
+                if (choose.clicked) s.mods->SetQuality(mod.id, medium ? texpack::Quality::High : texpack::Quality::Medium);
+            }
             ImGui::BeginDisabled(view.busy);
             const auto toggle = Item("##toggle", list, right - 38, ty + 6, right, ty + 28);
             ImGui::EndDisabled();

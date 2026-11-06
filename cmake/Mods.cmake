@@ -25,7 +25,7 @@ target_include_directories(openshao_storage PUBLIC src)
 target_link_libraries(openshao_storage PUBLIC tomlplusplus::tomlplusplus)
 target_compile_definitions(openshao_storage PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_library(openshao_mods STATIC src/mods/sha256.cpp src/mods/json.cpp src/mods/catalog.cpp
-    src/mods/vcdiff.cpp src/mods/tar_xz.cpp src/mods/state.cpp src/mods/manager.cpp
+    src/mods/vcdiff.cpp src/mods/tar_xz.cpp src/mods/state.cpp src/mods/mod_settings.cpp src/mods/manager.cpp
     src/mods/game_reader.cpp src/mods/http.cpp src/mods/browser.cpp src/mods/activation.cpp src/mods/routines.cpp src/mods/releases.cpp
     src/texture_pack_file.cpp)
 target_include_directories(openshao_mods PUBLIC src PRIVATE "${OPENSHAO_RECOMP_SDK}/runtime")
