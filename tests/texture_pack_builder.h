@@ -32,10 +32,10 @@ inline const char* kInfo =
     R"("texture_count":3,"description":"Longer text.","website":"https://example.org"})";
 
 // The information of a pack of `count` textures
-inline std::string InfoFor(size_t count) {
+inline std::string InfoFor(size_t count, const std::string& more = {}) {
     return std::string(R"({"id":"Test_Pack-1.0","name":"Test pack","version":"1.0.0","authors":["Someone"],)"
                        R"("summary":"A pack for the tests.","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture",)"
-                       R"("texture_count":)") + std::to_string(count) + "}";
+                       R"("texture_count":)") + std::to_string(count) + more + "}";
 }
 
 inline uint64_t Level(uint16_t w, uint16_t h, uint32_t l, uint8_t format) {
@@ -47,7 +47,7 @@ inline Bytes Build(const std::vector<Tex>& textures, const std::string& info = k
     Bytes file(128, 0), meta(info.begin(), info.end());
     std::memcpy(file.data(), "OSTPACK\0", 8);
     Put(file, 8, 1, 2);
-    Put(file, 10, 0, 2);
+    Put(file, 10, 1, 2);
     Put(file, 12, 128, 4);
     Bytes logo_bytes;
     if (logo) {
