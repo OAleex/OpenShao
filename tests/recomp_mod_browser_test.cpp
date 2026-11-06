@@ -78,6 +78,28 @@ int main(int argc,char** argv){
         browser.InstallFile(fixtures/"bad-local.tar.xz",fixtures/"game");state=Ready(browser);
         Check(!state.error.empty()&&state.installed.size()==3&&Sha256File(local_file)==local_hash&&!state.installed.back().enabled,
               "A corrupt local update must preserve the installed files and enabled state");
+        // asking before a mod that is already installed is replaced
+        const auto asked=[&]{
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+            for(;;){auto view=browser.View();if(view.asking)return view;
+                Check(view.busy&&std::chrono::steady_clock::now()<deadline,"An installation over an installed mod must wait for an answer");
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));}};
+        browser.Answer(true);Check(!browser.View().asking,"Answering when nothing asks changes nothing");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);
+        auto waiting=asked();
+        Check(waiting.asking->installed=="2.0.0"&&waiting.asking->incoming=="1.0.0"&&!waiting.asking->name.empty()&&waiting.busy,
+              "The question names the mod and the installed and the incoming versions");
+        browser.Answer(false);state=Ready(browser);
+        Check(state.error.empty()&&!state.asking&&state.status=="Installation cancelled"&&state.installed.back().mod.version=="2.0.0"&&Sha256File(local_file)==local_hash,
+              "Saying no leaves what is installed as it was");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);asked();browser.Answer(true);state=Ready(browser);
+        Check(state.error.empty()&&state.installed.back().mod.version=="1.0.0"&&!state.installed.back().enabled,
+              "Saying yes replaces it, with an older version too, and keeps it disabled");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);
+        waiting=asked();
+        Check(waiting.asking->installed==waiting.asking->incoming,"The same version asks too, to install it again");
+        browser.Cancel();state=Ready(browser);
+        Check(state.error.empty()&&!state.asking&&state.installed.back().mod.version=="1.0.0","Cancelling while it asks ends the installation without changes");
         offline=true;browser.Refresh();state=Ready(browser);offline=false;
         Check(!state.error.empty()&&state.catalog.size()==3&&state.installed.size()==3,"Network failure must preserve cached catalog and installations");
         Check(progress_calls>0,"Downloads must report progress");
