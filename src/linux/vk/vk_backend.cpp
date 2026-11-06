@@ -47,6 +47,7 @@
 #include "pipeline_assets.h"
 #include "texture_pack.h"
 #include "texture_loader.h"
+#include "texture_residency.h"
 #include "texture_pack_stats.h"
 #include "pipeline_source_cache.h"
 #include "raster_compat.h"
@@ -629,7 +630,10 @@ private:
     void SyncHdSource();
     void TraceScene();
     void PumpHdUploads();
-    bool UploadHd(const texpack::Loaded& loaded);
+    enum class HdUpload { Ok, Memory, Data };  // Memory: the image could not be made, so it may work later; Data: the pack's own data is wrong
+    HdUpload UploadHd(const texpack::Loaded& loaded);
+    texpack::ResidencyLimits HdLimits();
+    void EvictHd(const std::vector<uint64_t>& hashes);
     void UseHd(Tex& tx);
     void UploadTexture(Tex& tx, const TextureDesc& d, const uint8_t* p, const uint32_t* colours);
     void UploadTextureLevel(Tex& tx, uint32_t f, uint32_t l, const std::vector<uint8_t>& px, uint32_t pitch);
@@ -760,6 +764,7 @@ private:
     bool gs_ok_ = false;       // geometryShader
     bool precise_ok_ = false;  // occlusionQueryPrecise
     bool dynamic_ext_ = false;  // VK_KHR_dynamic_rendering enabled
+    bool memory_budget_ext_ = false;  // VK_EXT_memory_budget enabled: the driver says how much video memory this process may use
     VkFormat depth_format_ = VK_FORMAT_D24_UNORM_S8_UINT;
     bool shadow_target_linear_ = false;
     bool shadow_texture_linear_ = false;
@@ -815,6 +820,11 @@ private:
     uint64_t hd_generation_ = ~0ull, hd_pumped_ = ~0ull;
     uint32_t scene_world_ = ~0u, scene_room_ = ~0u, scene_flag_a_ = ~0u, scene_flag_b_ = ~0u;  // as the game says where it is
     texpack::Loader hd_loader_;
+    texpack::Residency hd_residency_;  // which replacements are in video memory and which to take out when they take too much
+    texpack::ResidencyLimits hd_limits_;
+    uint64_t hd_limits_frame_ = 0;  // presents_ plus one when hd_limits_ was last worked out
+    uint64_t hd_limits_logged_ = 0;
+    std::unordered_map<uint64_t, uint8_t> hd_memory_failures_;  // how many times making the image of a replacement failed for lack of memory
     ImageP dummy_[4];  // views for stages without a texture, by TexKind
     ImageP lut_;
     uint8_t ramp_[768] = {};
@@ -1027,6 +1037,7 @@ bool VulkanBackend::PickDevice() {
             gpu_props_ = p;
             queue_family_ = uint32_t(family);
             dynamic_ext_ = HasExtension(ext, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+            memory_budget_ext_ = HasExtension(ext, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         }
     }
     if (!gpu_) {
@@ -1079,6 +1090,7 @@ bool VulkanBackend::CreateDevice() {
     qi.pQueuePriorities = &priority;
     std::vector<const char*> ext = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     if (dynamic_ext_) ext.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+    if (memory_budget_ext_) ext.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.pNext = &f2;
     ci.queueCreateInfoCount = 1;
@@ -2318,12 +2330,12 @@ void VulkanBackend::UploadTextureLevel(Tex& tx, uint32_t f, uint32_t l, const ui
 }
 
 // Makes the image of a replacement that the loader read and records its upload. False when it cannot be made.
-bool VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
+VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
     const texpack::SourceEntry& e = loaded.entry;
     const uint32_t first = loaded.first_level;
-    if (first >= e.levels) return false;
+    if (first >= e.levels) return HdUpload::Data;
     // the image is made and filled as the game's own textures are, so a device without BC gets the blocks decoded
     Tex hd;
     const bool bc1 = e.format == texpack::BcFormat::Bc1;
@@ -2338,7 +2350,7 @@ bool VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     spec.h = std::max(1u, uint32_t(e.height) >> first);
     spec.levels = hd.levels;
     hd.res = CreateImage(spec);
-    if (!hd.res) return false;
+    if (!hd.res) return HdUpload::Memory;
     Transition(*hd.res, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     const uint32_t block = bc1 ? 8 : 16;
     size_t offset = 0;
@@ -2346,7 +2358,7 @@ bool VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
         const uint32_t lw = std::max(1u, spec.w >> l), lh = std::max(1u, spec.h >> l);
         const uint32_t pitch = (lw + 3) / 4 * block;
         const size_t size = size_t(pitch) * ((lh + 3) / 4);
-        if (offset + size > loaded.blocks.size()) return false;
+        if (offset + size > loaded.blocks.size()) return HdUpload::Data;
         UploadTextureLevel(hd, 0, l, loaded.blocks.data() + offset, size, pitch);
         offset += size;
     }
@@ -2355,13 +2367,15 @@ bool VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     texpack::NoteLoad(loaded.read_us, upload_us, true, false);
     texpack::NoteWait(loaded.wait_us);
     hd_images_[loaded.hash] = {hd.res, std::make_shared<texpack::Resident>(loaded.blocks.size())};
+    hd_residency_.Add(loaded.hash, loaded.blocks.size(), presents_);
+    hd_memory_failures_.erase(loaded.hash);
     static std::atomic<uint32_t> slow_logged{0};
     if (upload_us >= 5000 && slow_logged.fetch_add(1) < 100)
         LOGI("Texture pack: slow upload %016llx %ux%u, %u levels, %zu bytes: %.1f ms on the render thread, read %.1f ms, "
              "waited %.1f ms",
              static_cast<unsigned long long>(loaded.hash), e.width, e.height, hd.levels, loaded.blocks.size(),
              double(upload_us) / 1000.0, double(loaded.read_us) / 1000.0, double(loaded.wait_us) / 1000.0);
-    return true;
+    return HdUpload::Ok;
 }
 
 // The scene the game is in, as the world and the room it says, and whether it is paused or loading (the addresses
@@ -2395,6 +2409,9 @@ void VulkanBackend::SyncHdSource() {
     }
     for (auto& entry : hd_images_) CurrentFrame().garbage.push_back(entry.second.image);
     hd_images_.clear();
+    hd_residency_.Clear();
+    hd_memory_failures_.clear();
+    hd_limits_frame_ = 0;
     g_bad_replacements.clear();
     for (auto& entry : textures_) {
         Tex& tx = entry.second;
@@ -2406,6 +2423,100 @@ void VulkanBackend::SyncHdSource() {
     }
 }
 
+// How much video memory the replacements may take and how many images. With the driver's budget (VK_EXT_memory_budget, which
+// already leaves out what other programs use) it is 60% of it less what this process uses apart from the replacements; without
+// it, 40% of the largest local heap. OPENSHAO_HD_VRAM_MB forces the bytes. Worked out again every 60 frames, so a program that
+// opens in the middle of a game, a stream for one, makes the budget fall and the replacements it leaves unused are taken out.
+texpack::ResidencyLimits VulkanBackend::HdLimits() {
+    if (hd_limits_frame_ && presents_ + 1 - hd_limits_frame_ < 60) return hd_limits_;
+    hd_limits_frame_ = presents_ + 1;
+    constexpr uint64_t kMiB = 1ull << 20;
+    uint32_t heap = 0;
+    uint64_t heap_size = 0;
+    for (uint32_t i = 0; i < g_memory_props.memoryHeapCount; i++) {
+        const VkMemoryHeap& h = g_memory_props.memoryHeaps[i];
+        if ((h.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && h.size > heap_size) {
+            heap = i;
+            heap_size = h.size;
+        }
+    }
+    static const uint64_t forced_mb = [] {
+        const char* v = std::getenv("OPENSHAO_HD_VRAM_MB");
+        return v ? std::strtoull(v, nullptr, 10) : 0ull;
+    }();
+    uint64_t bytes = 0;
+    const char* how = "40% of the largest local heap";
+    bool apply_floor = true;
+    if (forced_mb) {
+        bytes = forced_mb * kMiB;
+        how = "OPENSHAO_HD_VRAM_MB";
+        apply_floor = false;
+    } else {
+        uint64_t budget = 0, used = 0;
+        if (memory_budget_ext_) {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT mb{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            props.pNext = &mb;
+            vk.vkGetPhysicalDeviceMemoryProperties2(gpu_, &props);
+            budget = mb.heapBudget[heap];
+            used = mb.heapUsage[heap];
+        }
+        if (budget) {
+            const uint64_t mine = hd_residency_.bytes();
+            const uint64_t others = used > mine ? used - mine : 0;
+            const uint64_t share = budget / 10 * 6;
+            bytes = share > others ? share - others : 0;
+            how = "60% of the driver's budget";
+        } else {
+            bytes = heap_size / 10 * 4;
+        }
+    }
+    if (apply_floor) bytes = std::max<uint64_t>(bytes, 256 * kMiB);
+    // each image has an allocation of its own and a device allows a fixed number: leave half to the rest of the game
+    const uint64_t allowed = gpu_props_.limits.maxMemoryAllocationCount;
+    const uint64_t resident = hd_residency_.count();
+    const uint64_t outside = g_memory_objects > resident ? g_memory_objects - resident : 0;
+    const uint64_t half = allowed / 2;
+    const uint32_t count = uint32_t(std::min<uint64_t>(std::max<uint64_t>(half > outside ? half - outside : 0, 256), UINT32_MAX));
+    hd_limits_ = {bytes, count};
+    if (!hd_limits_logged_ || bytes > hd_limits_logged_ + hd_limits_logged_ / 4 || bytes + bytes / 4 < hd_limits_logged_) {
+        hd_limits_logged_ = bytes ? bytes : 1;
+        LOGI("Texture pack: video memory for the replacements: %.0f MiB (%s), at most %u images; local heap %.0f MiB",
+             double(bytes) / double(kMiB), how, count, double(heap_size) / double(kMiB));
+    }
+    return hd_limits_;
+}
+
+// Takes replacements out of video memory: the image goes to the frame's garbage, which the GPU is done with before it is freed,
+// and the game's textures that held it go back to their own picture and ask for it again the next time they are drawn.
+void VulkanBackend::EvictHd(const std::vector<uint64_t>& hashes) {
+    if (hashes.empty()) return;
+    const uint64_t before = hd_residency_.bytes();
+    std::unordered_set<uint64_t> gone;
+    for (uint64_t hash : hashes) {
+        const auto it = hd_images_.find(hash);
+        if (it == hd_images_.end()) continue;
+        CurrentFrame().garbage.push_back(it->second.image);
+        hd_images_.erase(it);
+        hd_residency_.Remove(hash);
+        gone.insert(hash);
+    }
+    if (gone.empty()) return;
+    for (auto& entry : textures_) {
+        Tex& tx = entry.second;
+        if (tx.hd && gone.count(tx.rep_hash)) {
+            tx.hd.reset();
+            tx.requested = tx.first_request = tx.waited_frames = tx.last_wait = 0;
+        }
+    }
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1) < 300)
+        LOGI("Texture pack: took %zu replacements out of video memory (%.1f MiB); %zu left, %.1f MiB of %.1f MiB, at frame %llu",
+             gone.size(), double(before - hd_residency_.bytes()) / 1048576.0, hd_residency_.count(),
+             double(hd_residency_.bytes()) / 1048576.0, double(hd_limits_.max_bytes) / 1048576.0,
+             static_cast<unsigned long long>(presents_));
+}
+
 // Once a frame, the replacements that have been read go to the GPU, as many as the budget allows. The rest wait.
 void VulkanBackend::PumpHdUploads() {
     using Clock = std::chrono::steady_clock;
@@ -2413,6 +2524,8 @@ void VulkanBackend::PumpHdUploads() {
     constexpr auto kTimePerFrame = std::chrono::microseconds(2000);
     const auto start = Clock::now();
     uint64_t bytes = 0;
+    const texpack::ResidencyLimits limits = HdLimits();
+    EvictHd(hd_residency_.Plan(presents_, limits).drop);  // the budget fell, or an earlier frame left it over
     std::vector<texpack::Loaded> ready;
     while (bytes < kBytesPerFrame && Clock::now() - start < kTimePerFrame) {
         ready.clear();
@@ -2423,18 +2536,53 @@ void VulkanBackend::PumpHdUploads() {
             texpack::NoteLoad(r.read_us, 0, false, false);
             continue;
         }
+        if (hd_images_.count(r.hash)) {
+            hd_loader_.Recycle(std::move(r.blocks));
+            continue;
+        }
+        // make room for it; when nothing can be taken out it stays the game's own picture and asks again later
+        const auto plan = hd_residency_.Plan(presents_, limits, r.blocks.size(), 1);
+        EvictHd(plan.drop);
+        if (!plan.fits) {
+            static std::atomic<uint32_t> logged{0};
+            if (logged.fetch_add(1) < 50)
+                LOGI("Texture pack: no room for %016llx (%zu bytes): %.1f MiB of %.1f MiB in use and all of it drawn lately",
+                     static_cast<unsigned long long>(r.hash), r.blocks.size(), double(hd_residency_.bytes()) / 1048576.0,
+                     double(limits.max_bytes) / 1048576.0);
+            hd_loader_.Recycle(std::move(r.blocks));
+            continue;
+        }
         bytes += r.blocks.size();
-        if (!hd_images_.count(r.hash) && !UploadHd(r)) g_bad_replacements.insert(r.hash);
+        switch (UploadHd(r)) {
+            case HdUpload::Ok: break;
+            case HdUpload::Data: g_bad_replacements.insert(r.hash); break;
+            case HdUpload::Memory: {
+                // the device had no memory for it just now, which a replacement that is out of use can give back: free a quarter
+                // and let the texture ask again; only after three tries is it given up
+                if (++hd_memory_failures_[r.hash] >= 3) g_bad_replacements.insert(r.hash);
+                const uint64_t held = hd_residency_.bytes(), count = hd_residency_.count();
+                EvictHd(hd_residency_.Plan(presents_, {held / 4 * 3, uint32_t(count / 4 * 3)}).drop);
+                static std::atomic<uint32_t> logged{0};
+                if (logged.fetch_add(1) < 50)
+                    LOGI("Texture pack: no memory for %016llx (try %u); %.1f MiB in use", static_cast<unsigned long long>(r.hash),
+                         unsigned(hd_memory_failures_[r.hash]), double(held) / 1048576.0);
+                break;
+            }
+        }
         hd_loader_.Recycle(std::move(r.blocks));
     }
 }
 
 // The replacement of a texture, once it is here; until then the texture is asked for, again before the request grows old
 void VulkanBackend::UseHd(Tex& tx) {
-    if (tx.hd) return;
+    if (tx.hd) {
+        hd_residency_.Touch(tx.rep_hash, presents_);  // drawn now: the last to be taken out of video memory
+        return;
+    }
     const auto it = hd_images_.find(tx.rep_hash);
     if (it != hd_images_.end()) {
         tx.hd = it->second.image;
+        hd_residency_.Touch(tx.rep_hash, presents_);
         static std::atomic<uint32_t> used_logged{0};
         if (used_logged.fetch_add(1) < 6000)  // which textures each scene uses, for the lists of what to load ahead
             LOGI("Texture pack: use %016llx %ux%u in world %u room %u at frame %llu", static_cast<unsigned long long>(tx.rep_hash),
