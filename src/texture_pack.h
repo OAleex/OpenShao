@@ -6,15 +6,17 @@
 #include <vector>
 #include "texture_pack_source.h"
 
-// High resolution texture packs. A pack is the hd folder of an enabled mod: an index.txt and the DDS files it names.
+// High resolution texture packs. A pack is the hd folder of an enabled mod: an index.txt and the DDS files it names, or a
+// texture pack file.
 // Each line of the index reads: hash, width, height, levels, file. The hash covers the level 0 bytes of the game's
 // own texture, and the file holds BC3 blocks of every level, largest first.
 namespace openshao::texpack {
 struct Entry {
     uint32_t w = 0, h = 0, levels = 0;
 };
-// Replaces the packs in use. Each folder holds an index.txt. An empty list turns the replacement off.
-void SetPacks(const std::vector<std::filesystem::path>& folders);
+// Replaces the packs in use, the first being the one that wins when several have a texture. Each is a folder that holds an
+// index.txt, or a texture pack file. One that cannot be read is skipped. An empty list turns the replacement off.
+void SetPacks(const std::vector<std::filesystem::path>& packs);
 bool Enabled();
 std::optional<Entry> Find(uint64_t hash);
 // The BC3 blocks of every level of a replacement, read from the pack

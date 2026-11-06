@@ -1,5 +1,6 @@
 #include "texture_pack.h"
 #include "texture_pack_stats.h"
+#include "texture_pack_builder.h"
 #include "core/log.h"
 #include <cstdint>
 #include <cstring>
@@ -167,6 +168,36 @@ int main() try {
     Check(noted.loads == before_noted.loads + 1 && noted.failures == before_noted.failures + 1 &&
               noted.disk_us == before_noted.disk_us + 350 && noted.upload_us == before_noted.upload_us + 700,
           "Loads and failures add their times");
+
+    // A pack file among the folders
+    {
+        const Bytes file = Build({{0xa1, 64, 64, 16, 16, 7, 2, 0, 0x77}, {0xf1, 64, 64, 16, 16, 7, 2, 0, 0x55}},
+                                 InfoFor(2, ",\"preload\":[\"00000000000000f1\"]"));
+        {
+            std::ofstream out(root / "c.ostp", std::ios::binary);
+            out.write(reinterpret_cast<const char*>(file.data()), std::streamsize(file.size()));
+        }
+        std::ofstream(root / "junk.ostp") << "not a texture pack";
+        texpack::SetPacks({root / "a", root / "c.ostp", root / "junk.ostp", root / "missing.ostp", root / "b"});
+        auto source = texpack::Source();
+        Check(source != nullptr, "A pack file among the folders, with files that are not packs, gives a source");
+        std::vector<uint8_t> out;
+        auto e = source->Find(0xa1);
+        Check(e && e->width == 16 && e->height == 8 && source->ReadLevels(*e, 0, out) && out.front() == 0x10,
+              "A folder before the file gives its own texture when both have it");
+        const auto f = source->Find(0xf1);
+        Check(f && f->width == 64 && f->levels == 7 && source->ReadLevels(*f, 0, out) && out.front() == 0x55,
+              "A texture only the file has is read from the file");
+        Check(source->Find(0xb1).has_value() && !source->Find(0xdead), "A folder after the file is read too");
+        Check(source->Preload() == std::vector<uint64_t>({0xf1}), "The list to load ahead comes from the file");
+        texpack::SetPacks({root / "c.ostp", root / "a"});
+        source = texpack::Source();
+        e = source->Find(0xa1);
+        Check(e && e->width == 64 && source->ReadLevels(*e, 0, out) && out.front() == 0x77,
+              "The file before the folder gives its own texture when both have it");
+        texpack::SetPacks({root / "junk.ostp"});
+        Check(texpack::Source() == nullptr && !texpack::Enabled(), "Only a file that is not a pack turns the replacement off");
+    }
 
     texpack::SetPacks({});
     Check(!texpack::Enabled() && !texpack::Find(0xa1), "An empty list turns the replacement off");
