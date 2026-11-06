@@ -10,7 +10,7 @@ set(OPENSHAO_IMGUI_CORE
 
 set(OPENSHAO_SHARED_SOURCES
     src/host.cpp src/keyboard.cpp src/game_info.cpp src/game_files.cpp src/runtime_paths.cpp
-    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp src/texture_pack.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/texture_loader.cpp
+    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp src/texture_pack.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/texture_loader.cpp src/texture_residency.cpp
     src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
     src/model_instances.cpp src/audio_load_wait.cpp
@@ -66,6 +66,7 @@ add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CU
 openshao_linux_test(recomp_virtual_file SOURCES tests/recomp_virtual_file_test.cpp src/virtual_file.cpp)
 openshao_linux_test(recomp_texture_pack SOURCES tests/recomp_texture_pack_test.cpp src/texture_pack.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/mods/json.cpp src/mods/sha256.cpp)
 openshao_linux_test(recomp_texture_pack_file SOURCES tests/recomp_texture_pack_file_test.cpp src/texture_pack_file.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
+openshao_linux_test(recomp_texture_residency SOURCES tests/recomp_texture_residency_test.cpp src/texture_residency.cpp)
 openshao_linux_test(recomp_texture_loader SOURCES tests/recomp_texture_loader_test.cpp src/texture_loader.cpp src/texture_pack_file.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
 openshao_linux_test(recomp_language_archive SOURCES tests/recomp_language_archive_test.cpp src/language_archive.cpp src/virtual_file.cpp LIBS miniz)
 openshao_linux_test(recomp_language_credits SOURCES tests/recomp_language_credits_test.cpp src/language_credits.cpp)
