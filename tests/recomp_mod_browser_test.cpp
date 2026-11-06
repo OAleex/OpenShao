@@ -3,6 +3,7 @@
 #include "mods/browser.h"
 #include "mods/http.h"
 #include "mods/sha256.h"
+#include "texture_pack_builder.h"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -100,6 +101,36 @@ int main(int argc,char** argv){
         Check(waiting.asking->installed==waiting.asking->incoming,"The same version asks too, to install it again");
         browser.Cancel();state=Ready(browser);
         Check(state.error.empty()&&!state.asking&&state.installed.back().mod.version=="1.0.0","Cancelling while it asks ends the installation without changes");
+        // Texture packs: the order they are read in, and the textures two of them both have
+        {
+            const auto make=[&](const std::string& id,std::vector<Tex> textures){
+                auto info=InfoFor(textures.size());info.replace(info.find("Test_Pack-1"),11,id);
+                const auto bytes=Build(textures,info);const auto path=fixtures/(id+".ostp");
+                std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+                return path;};
+            const auto texture=[](uint64_t hash,uint8_t fill){return Tex{hash,64,64,16,16,7,2,0,fill};};
+            browser.InstallFile(make("PackA",{texture(0x100,1),texture(0x101,2),texture(0x102,3)}),fixtures/"game");state=Ready(browser);
+            Check(state.error.empty()&&state.overlaps.empty(),"One texture pack file has nothing in common with another");
+            browser.InstallFile(make("PackB",{texture(0x101,4),texture(0x102,5),texture(0x103,6)}),fixtures/"game");state=Ready(browser);
+            const auto place=[](const BrowserState& view,const std::string& id){return std::find(view.order.begin(),view.order.end(),id)-view.order.begin();};
+            Check(state.error.empty()&&place(state,"PackA")<place(state,"PackB")&&place(state,"PackB")<ptrdiff_t(state.order.size()),
+                  "Without a choice the packs are in the installation order");
+            Check(state.overlaps.size()==1&&state.overlaps[0].winner=="PackA"&&state.overlaps[0].loser=="PackB"&&state.overlaps[0].count==2,
+                  "The first pack wins the two textures both have");
+            browser.MoveTexture("PackB",true);state=Ready(browser);
+            Check(state.error.empty()&&place(state,"PackB")<place(state,"PackA"),"Moving a pack up puts it before the one above");
+            Check(state.overlaps.size()==1&&state.overlaps[0].winner=="PackB"&&state.overlaps[0].loser=="PackA"&&state.overlaps[0].count==2,
+                  "The pack that moved up now wins");
+            const auto moved=state.order;
+            browser.MoveTexture(moved.front(),true);state=Ready(browser);
+            Check(state.order==moved,"The first pack cannot move up");
+            browser.MoveTexture("PackB",false);state=Ready(browser);
+            Check(place(state,"PackA")<place(state,"PackB")&&state.overlaps[0].winner=="PackA","Moving it down gives the win back");
+            browser.Enable("PackB",false);state=Ready(browser);
+            Check(state.overlaps.empty(),"A pack that is off does not take part");
+            browser.Remove("PackA");Ready(browser);browser.Remove("PackB");state=Ready(browser);
+            Check(state.error.empty()&&place(state,"PackA")==ptrdiff_t(state.order.size()),"Removed packs leave the order");
+        }
         offline=true;browser.Refresh();state=Ready(browser);offline=false;
         Check(!state.error.empty()&&state.catalog.size()==3&&state.installed.size()==3,"Network failure must preserve cached catalog and installations");
         Check(progress_calls>0,"Downloads must report progress");

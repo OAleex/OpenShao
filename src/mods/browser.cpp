@@ -4,7 +4,10 @@
 #include "sha256.h"
 #include "version.h"
 #include "../file_ops.h"
+#include "../texture_pack_file.h"
 #include <algorithm>
+#include <map>
+#include <memory>
 #include <fstream>
 namespace fs=std::filesystem;
 namespace openshao::mods {
@@ -44,10 +47,34 @@ void Browser::Start(const Job& job,bool checking){
         ++state_.revision;
     });
 }
+namespace {
+// For each enabled texture pack file, the textures that an enabled pack above it in the order already has
+std::vector<Overlap> FindOverlaps(const fs::path& root,const std::vector<Installed>& rows,const std::vector<std::string>& order) {
+    std::vector<std::pair<std::string,std::unique_ptr<texpack::PackFile>>> packs;
+    for(const auto& id:order)for(const auto& row:rows)if(row.mod.id==id&&row.enabled&&row.mod.ostp) {
+        std::string error;
+        auto pack=texpack::PackFile::Open(root/files::FromUtf8(row.mod.install_dir)/"pack.ostp",error);
+        if(pack)packs.emplace_back(id,std::move(pack));
+    }
+    std::vector<Overlap> overlaps;
+    for(size_t lower=1;lower<packs.size();++lower) {
+        std::map<size_t,size_t> lost;
+        for(const auto& entry:packs[lower].second->entries())
+            for(size_t higher=0;higher<lower;++higher)if(packs[higher].second->Find(entry.hash)) {++lost[higher];break;}
+        for(const auto& [higher,count]:lost)overlaps.push_back({packs[higher].first,packs[lower].first,count});
+    }
+    return overlaps;
+}
+}
 void Browser::Reload(){
     auto rows=ReadInstalled(root_);std::map<std::string,texpack::Quality> quality;
     for(const auto& i:rows)if(i.mod.ostp)quality[i.mod.id]=ReadTextureQuality(root_,i.mod.id);
-    std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.quality=std::move(quality);state_.updates=false;
+    std::vector<std::string> textures;
+    for(const auto& i:rows)if(i.mod.type=="texture")textures.push_back(i.mod.id);
+    auto order=TextureOrder(root_,textures);
+    auto overlaps=FindOverlaps(root_,rows,order);
+    std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.quality=std::move(quality);state_.order=std::move(order);
+    state_.overlaps=std::move(overlaps);state_.updates=false;
     for(const auto& m:state_.catalog)for(const auto& i:state_.installed)if(i.mod.id==m.id)if(const auto* v=LatestCompatible(m))if(CompareVersions(v->version,i.mod.version)>0)state_.updates=true;
 }
 void Browser::Refresh(){Start([this]{
@@ -89,6 +116,17 @@ void Browser::Install(std::string id,const fs::path& game){Start([this,id,game]{
 });}
 void Browser::Enable(std::string id,bool enabled){Start([this,id,enabled]{SetEnabled(root_,id,enabled);std::lock_guard lock(mutex_);state_.status=enabled?"Mod enabled":"Mod disabled";});}
 void Browser::SetQuality(std::string id,texpack::Quality quality){Start([this,id,quality]{WriteTextureQuality(root_,id,quality);std::lock_guard lock(mutex_);state_.status="Texture quality saved. It applies the next time you play.";});}
+void Browser::MoveTexture(std::string id,bool up){Start([this,id,up]{
+    std::vector<std::string> textures;
+    for(const auto& i:ReadInstalled(root_))if(i.mod.type=="texture")textures.push_back(i.mod.id);
+    auto order=TextureOrder(root_,textures);
+    const auto at=std::find(order.begin(),order.end(),id);
+    if(at==order.end())return;
+    if(up&&at!=order.begin())std::iter_swap(at,at-1);
+    else if(!up&&at+1!=order.end())std::iter_swap(at,at+1);
+    WriteTextureOrder(root_,order);
+    std::lock_guard lock(mutex_);state_.status="Texture order saved. It applies the next time you play.";
+});}
 void Browser::Remove(std::string id){Start([this,id]{Uninstall(root_,id);std::lock_guard lock(mutex_);state_.status="Mod uninstalled";});}
 std::vector<Mod> DisplayMods(const BrowserState& view){auto list=view.catalog;for(const auto& i:view.installed)if(std::none_of(list.begin(),list.end(),[&](auto& m){return m.id==i.mod.id;}))list.push_back(i.mod);return list;}
 }

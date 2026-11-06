@@ -9,6 +9,8 @@
 #include <thread>
 namespace openshao::mods {
 // An installed mod that a package chosen by the user would replace: what to ask before it does
+// Textures that two enabled texture pack files both have; the winner is the one that comes first in the order
+struct Overlap {std::string winner,loser;size_t count=0;};
 struct Replacement {
     std::string name,installed,incoming;
 };
@@ -19,6 +21,8 @@ struct BrowserState {
     uint64_t done=0,total=0,revision=0;
     bool busy=false,updates=false,checking=false;
     std::map<std::string,texpack::Quality> quality;  // of the installed texture pack files, by mod id
+    std::vector<std::string> order;    // the installed texture mods, the one that wins first
+    std::vector<Overlap> overlaps;
     std::optional<Replacement> asking;  // set while an installation waits for the answer
 };
 class Browser {
@@ -45,6 +49,8 @@ public:
     void Install(std::string id,const std::filesystem::path& game);
     void Enable(std::string id,bool enabled);
     void SetQuality(std::string id,texpack::Quality quality);
+    // Moves a texture mod one place up (toward winning) or down in the order
+    void MoveTexture(std::string id,bool up);
     void Remove(std::string id);
     void Cancel();
 };

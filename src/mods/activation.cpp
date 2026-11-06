@@ -44,7 +44,6 @@ Claims Resources(const Manifest& mod) {
             const auto dot=path.find_last_of('.');
             claims.resources.insert("file:front/movies/"+path.substr(13,dot-13)+".sfd");
         } else if(path.starts_with("fonts/")) claims.resources.insert(path);
-        else if(path=="hd/index.txt") claims.resources.insert("hd textures");
     };
     for(const auto& f:mod.files)add(f.path);
     for(const auto& p:mod.patches)add(p.path);

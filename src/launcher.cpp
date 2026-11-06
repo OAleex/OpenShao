@@ -715,6 +715,25 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             ImGui::EndDisabled();
             art::Toggle(list, right - 38, ty + 6, installed->enabled, toggle.hovered);
             if (toggle.clicked) s.ToggleMod(mod.id);
+            if (const auto at = std::find(view.order.begin(), view.order.end(), mod.id); view.order.size() > 1 && at != view.order.end()) {
+                // Several texture mods can be on at once: the first in this order is the one whose texture is used
+                const size_t place = size_t(at - view.order.begin());
+                const float line = ty + 44, down_w = list.Measure(Weight::Medium, 18, "Down").x, up_w = list.Measure(Weight::Medium, 18, "Up").x;
+                const std::string label = "Priority " + std::to_string(place + 1) + " of " + std::to_string(view.order.size());
+                const float down_x = right - down_w, up_x = down_x - 16 - up_w, label_x = up_x - 16 - list.Measure(Weight::Regular, 18, label.c_str()).x;
+                list.Text(Weight::Regular, 18, label_x, line, Rgb(color::Dim), label.c_str());
+                const bool can_up = place > 0 && !view.busy, can_down = place + 1 < view.order.size() && !view.busy;
+                ImGui::BeginDisabled(!can_up);
+                const auto up = Item("##up", list, up_x, line - 1, up_x + up_w, line + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, up_x, line, Rgb(up.hovered && can_up ? color::Paper : color::Mist, can_up ? 1.f : 0.4f), "Up");
+                if (up.clicked && can_up) s.mods->MoveTexture(mod.id, true);
+                ImGui::BeginDisabled(!can_down);
+                const auto down = Item("##down", list, down_x, line - 1, down_x + down_w, line + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, down_x, line, Rgb(down.hovered && can_down ? color::Paper : color::Mist, can_down ? 1.f : 0.4f), "Down");
+                if (down.clicked && can_down) s.mods->MoveTexture(mod.id, false);
+            }
             if (update) {
                 const std::string label = "Update to " + release->version;
                 if (Button("##update", list, right - 38 - 24 - 148, ty, right - 38 - 24, ty + 34, label.c_str(), false, !view.busy)) s.InstallMod(mod.id);
@@ -725,6 +744,20 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         y += row_h;
         list.Rule(48, right, y);
         ImGui::PopID();
+    }
+    if (!view.overlaps.empty()) {
+        // Two texture mods that have the same texture: only the one first in the order is used for it
+        const auto name = [&](const std::string& id) {
+            for (const auto& i : view.installed) if (i.mod.id == id) return i.mod.name;
+            return id;
+        };
+        list.Text(Weight::SemiBold, 18.5f, 48, y + 20, Rgb(color::Paper), "Textures that more than one mod has");
+        y += 48;
+        for (const auto& o : view.overlaps) {
+            const std::string line = name(o.winner) + " is used for " + std::to_string(o.count) + " textures that " + name(o.loser) + " also has.";
+            list.Text(Weight::Regular, 18, 48, y, Rgb(color::Mist), line.c_str(), right - 48);
+            y += 28;
+        }
     }
     const char* empty = rows.empty() ? "The catalog is unavailable right now. You can install a downloaded .tar.xz package or .ostp texture pack with Install from file."
                                      : "New official mods appear here when they are published.";
