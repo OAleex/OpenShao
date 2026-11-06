@@ -68,7 +68,13 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                     throw std::runtime_error("Installed mod folder is missing: "+row.mod.name);
                 packs.push_back({pack,true,row.mod.type!="language" || mods::SameLanguage(selected,voices)});
                 if(row.mod.type=="language") {language_ready=true;credits=selected=="pt-BR";}
-                if(std::find(row.mod.features.begin(),row.mod.features.end(),"hdtextures")!=row.mod.features.end()) {
+                if(row.mod.ostp) {
+                    // checked as it was installed; here only its size, and the reader checks its structure when it opens it
+                    const auto file=pack/"pack.ostp";std::error_code ec;
+                    if(!std::filesystem::is_regular_file(file,ec)||std::filesystem::file_size(file,ec)!=row.mod.ostp->size)
+                        throw std::runtime_error("Installed texture pack file changed: "+row.mod.name);
+                    hd_packs.push_back(file);
+                } else if(std::find(row.mod.features.begin(),row.mod.features.end(),"hdtextures")!=row.mod.features.end()) {
                     const auto index=std::find_if(row.mod.files.begin(),row.mod.files.end(),[](auto& f){return f.path=="hd/index.txt";});
                     if(index==row.mod.files.end()||mods::Sha256File(pack/"hd/index.txt")!=index->sha256)
                         throw std::runtime_error("Installed texture pack index changed: "+row.mod.name);

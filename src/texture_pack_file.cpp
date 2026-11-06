@@ -97,10 +97,11 @@ bool List(const mods::Json& object, const char* key, size_t most_items, size_t m
     return true;
 }
 
+// As the mod system writes a mod's id: letters, digits, _ and -, up to 80 characters
 bool IdChars(const std::string& id) {
-    if (id.empty() || id.size() > 64) return false;
+    if (id.empty() || id.size() > 80) return false;
     return std::all_of(id.begin(), id.end(), [](char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '.' || c == '-';
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '-';
     });
 }
 
@@ -147,7 +148,7 @@ bool ReadInfo(const std::vector<uint8_t>& bytes, uint32_t count, PackInfo& info,
         !Text(root, "website", 256, false, info.website, error) || !Text(root, "license", 128, false, info.license, error) ||
         !Text(root, "credits", 4000, false, info.credits, error))
         return false;
-    if (!IdChars(info.id)) return Fail(error, "information: \"id\" has characters outside letters, digits, _ . -");
+    if (!IdChars(info.id)) return Fail(error, "information: \"id\" has characters outside letters, digits, _ and -");
     if (!VersionChars(info.version) || !VersionChars(info.min_recomp))
         return Fail(error, "information: a version is not three numbers separated by dots");
     if (type != "texture") return Fail(error, "information: \"type\" is not \"texture\"");

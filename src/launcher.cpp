@@ -148,7 +148,7 @@ bool ChooseFolder(fs::path& path, const char* title) {
 }
 bool ChooseModArchive(fs::path& path) {
 #ifdef _WIN32
-    const COMDLG_FILTERSPEC filter[] = {{L"Mod archives (*.tar.xz)", L"*.tar.xz"}};
+    const COMDLG_FILTERSPEC filter[] = {{L"Mod archives and texture packs (*.tar.xz, *.ostp)", L"*.tar.xz;*.ostp"}};
     return ChooseWithDialog(path, false, L"Install a mod from file", filter, 1);
 #else
     return linux_platform::ChooseFile(path, false, "Install a mod from file");
@@ -696,7 +696,7 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         list.Rule(48, right, y);
         ImGui::PopID();
     }
-    const char* empty = rows.empty() ? "The catalog is unavailable right now. You can install a downloaded .tar.xz package with Install from file."
+    const char* empty = rows.empty() ? "The catalog is unavailable right now. You can install a downloaded .tar.xz package or .ostp texture pack with Install from file."
                                      : "New official mods appear here when they are published.";
     list.Text(Weight::Regular, 18.5f, 48, y + 24, Rgb(color::Dim), empty, right - 48);
     ImGui::SetCursorScreenPos(list.P(0, y + 64));

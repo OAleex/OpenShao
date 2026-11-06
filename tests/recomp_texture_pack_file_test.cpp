@@ -51,7 +51,7 @@ int main() try {
     std::string error;
     auto pack = texpack::PackFile::Open(Write("good.ostp", good), error);
     Check(pack != nullptr, "A valid pack opens: " + error);
-    Check(pack->info().id == "Test_Pack-1.0" && pack->info().name == "Test pack" && pack->info().version == "1.0.0" &&
+    Check(pack->info().id == "Test_Pack-1" && pack->info().name == "Test pack" && pack->info().version == "1.0.0" &&
               pack->info().authors.size() == 2 && pack->info().min_recomp == "0.4.1" &&
               pack->info().description == "Longer text." && pack->info().website == "https://example.org",
           "The information is read");
@@ -197,6 +197,7 @@ int main() try {
     info_refused("not JSON", "{not json");
     info_refused("not an object", "[1,2]");
     info_refused("no id", R"({"name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("an id with a dot", R"({"id":"has.dot","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
     info_refused("bad id", R"({"id":"has space","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
     info_refused("bad version", R"({"id":"i","name":"n","version":"1.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
     info_refused("bad min version", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"x","features":["hdtextures"],"type":"texture"})");

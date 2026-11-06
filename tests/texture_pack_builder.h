@@ -27,13 +27,13 @@ struct Tex {
 };
 
 inline const char* kInfo =
-    R"({"id":"Test_Pack-1.0","name":"Test pack","version":"1.0.0","authors":["Someone","Another"],)"
+    R"({"id":"Test_Pack-1","name":"Test pack","version":"1.0.0","authors":["Someone","Another"],)"
     R"("summary":"A pack for the tests.","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture",)"
     R"("texture_count":3,"description":"Longer text.","website":"https://example.org"})";
 
 // The information of a pack of `count` textures
 inline std::string InfoFor(size_t count, const std::string& more = {}) {
-    return std::string(R"({"id":"Test_Pack-1.0","name":"Test pack","version":"1.0.0","authors":["Someone"],)"
+    return std::string(R"({"id":"Test_Pack-1","name":"Test pack","version":"1.0.0","authors":["Someone"],)"
                        R"("summary":"A pack for the tests.","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture",)"
                        R"("texture_count":)") + std::to_string(count) + more + "}";
 }
