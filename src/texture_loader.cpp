@@ -111,7 +111,8 @@ bool Loader::ProcessOne() {
         pending = it->second;
         pending_.erase(it);
         hash = key.hash;
-        if (frame_ - pending.frame <= options_.max_age_frames) break;
+        // a request below zero is background work (the menus' preload) that nothing asks for again, so it does not age
+        if (pending.priority < 0 || frame_ - pending.frame <= options_.max_age_frames) break;
         ++stats_.dropped;  // not asked for again in a long while: the picture has moved on
     }
     in_flight_.insert(hash);

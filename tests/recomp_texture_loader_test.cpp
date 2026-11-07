@@ -192,6 +192,20 @@ int main() try {
         Check(loader.ProcessOne(), "Asking again keeps a request from growing old");
     }
 
+    // Background work below zero, as the menus' preload is, does not grow old: nothing asks for it again
+    {
+        auto options = NoThreads();
+        options.max_age_frames = 10;
+        texpack::Loader loader(options);
+        loader.SetPack(pack);
+        loader.Request(0x100, -1.f);
+        loader.Request(0x101, 0.f);
+        for (int i = 0; i < 50; ++i) loader.AdvanceFrame();
+        Check(loader.ProcessOne(), "The request of priority zero is old and passed over, and the background one is read");
+        const auto out = TakeAll(loader);
+        Check(out.size() == 1 && out[0].hash == 0x100 && loader.GetStats().dropped == 1, "Only the background request was read; the other was dropped");
+    }
+
     // Changing the pack drops what belongs to the old one
     {
         texpack::Loader loader(NoThreads());

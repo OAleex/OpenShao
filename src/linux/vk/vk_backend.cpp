@@ -825,6 +825,7 @@ private:
     uint64_t hd_limits_frame_ = 0;  // presents_ plus one when hd_limits_ was last worked out
     uint64_t hd_limits_logged_ = 0;
     std::unordered_set<uint64_t> hd_evicted_;  // replacements taken out and not loaded again yet, to count the ones that come back
+    std::unordered_map<uint64_t, uint8_t> hd_read_failures_;    // how many times reading a replacement failed
     std::unordered_map<uint64_t, uint8_t> hd_memory_failures_;  // how many times making the image of a replacement failed for lack of memory
     ImageP dummy_[4];  // views for stages without a texture, by TexKind
     ImageP lut_;
@@ -2245,6 +2246,7 @@ std::optional<texpack::SourceEntry> FindReplacement(const texpack::PackSource* s
     if (!source || d.cube || d.depth != 1 || d.linear || fi.depth || d.format == kFmtP8) return std::nullopt;
     if (fi.host != Host::BGRA8 && fi.host != Host::BC1 && fi.host != Host::BC2 && fi.host != Host::BC3) return std::nullopt;
     hash = Hash(guest, LevelSize(d, 0));
+    texpack::NoteHash(LevelSize(d, 0));
     if (g_bad_replacements.count(hash)) return std::nullopt;
     auto entry = source->Find(hash);
     // a replacement is a redraw of the same picture
@@ -2337,9 +2339,30 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     const texpack::SourceEntry& e = loaded.entry;
     const uint32_t first = loaded.first_level;
     if (first >= e.levels) return HdUpload::Data;
+    const bool bc1 = e.format == texpack::BcFormat::Bc1, raw = e.format == texpack::BcFormat::Rgba8;
+    {
+        // The blocks must hold every level before an image is made: once the first level is recorded, a failure would destroy an
+        // image that a command buffer still refers to.
+        size_t needed = 0;
+        for (uint32_t l = first; l < e.levels; l++) {
+            const uint32_t lw = std::max(1u, uint32_t(e.width) >> l), lh = std::max(1u, uint32_t(e.height) >> l);
+            needed += raw ? size_t(lw) * lh * 4 : size_t((lw + 3) / 4) * ((lh + 3) / 4) * (bc1 ? 8 : 16);
+        }
+        if (needed > loaded.blocks.size()) return HdUpload::Data;
+    }
+    // The device has a largest image side. A picture past it starts at a smaller level, as the Medium quality does; if no level fits, the
+    // game's own texture stays.
+    const uint32_t limit = gpu_props_.limits.maxImageDimension2D;
+    uint32_t begin = first;
+    while (begin < e.levels && (std::max(1u, uint32_t(e.width) >> begin) > limit || std::max(1u, uint32_t(e.height) >> begin) > limit)) begin++;
+    if (begin >= e.levels) return HdUpload::Data;
+    size_t skipped = 0;  // the bytes of the levels skipped on top of what the loader already left out
+    for (uint32_t l = first; l < begin; l++) {
+        const uint32_t lw = std::max(1u, uint32_t(e.width) >> l), lh = std::max(1u, uint32_t(e.height) >> l);
+        skipped += raw ? size_t(lw) * lh * 4 : size_t((lw + 3) / 4) * ((lh + 3) / 4) * (bc1 ? 8 : 16);
+    }
     // the image is made and filled as the game's own textures are, so a device without BC gets the blocks decoded
     Tex hd;
-    const bool bc1 = e.format == texpack::BcFormat::Bc1, raw = e.format == texpack::BcFormat::Rgba8;
     hd.fmt = bc1 ? VK_FORMAT_BC1_RGBA_UNORM_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
     hd.bc = bc1 ? 1 : 3;
     if (raw) {  // the developer mode's pictures, not compressed: sent as they are
@@ -2350,22 +2373,25 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     } else {
         hd.fmt = kBgra;
     }
-    hd.levels = e.levels - first;
+    hd.levels = e.levels - begin;
     ImageSpec spec;
     spec.format = hd.fmt;
-    spec.w = std::max(1u, uint32_t(e.width) >> first);
-    spec.h = std::max(1u, uint32_t(e.height) >> first);
+    spec.w = std::max(1u, uint32_t(e.width) >> begin);
+    spec.h = std::max(1u, uint32_t(e.height) >> begin);
     spec.levels = hd.levels;
     hd.res = CreateImage(spec);
     if (!hd.res) return HdUpload::Memory;
     Transition(*hd.res, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     const uint32_t block = bc1 ? 8 : 16;
-    size_t offset = 0;
+    size_t offset = skipped;
     for (uint32_t l = 0; l < hd.levels; l++) {
         const uint32_t lw = std::max(1u, spec.w >> l), lh = std::max(1u, spec.h >> l);
         const uint32_t pitch = raw ? lw * 4 : (lw + 3) / 4 * block;
         const size_t size = size_t(pitch) * (raw ? lh : (lh + 3) / 4);
-        if (offset + size > loaded.blocks.size()) return HdUpload::Data;
+        if (offset + size > loaded.blocks.size()) {  // cannot happen after the check above; the image may be in use if it does
+            CurrentFrame().garbage.push_back(hd.res);
+            return HdUpload::Data;
+        }
         UploadTextureLevel(hd, 0, l, loaded.blocks.data() + offset, size, pitch);
         offset += size;
     }
@@ -2420,6 +2446,7 @@ void VulkanBackend::SyncHdSource() {
     hd_residency_.Clear();
     hd_evicted_.clear();
     hd_memory_failures_.clear();
+    hd_read_failures_.clear();
     hd_limits_frame_ = 0;
     g_bad_replacements.clear();
     for (auto& entry : textures_) {
@@ -2547,10 +2574,13 @@ void VulkanBackend::PumpHdUploads() {
         if (!hd_loader_.TakeReady(ready, 1)) break;
         texpack::Loaded& r = ready[0];
         if (!r.ok) {
-            g_bad_replacements.insert(r.hash);
+            // the texture asks again after a while, so a read that failed once (a busy disk, a file that was briefly out of reach)
+            // gets another try; only the third failure turns the replacement off
+            if (++hd_read_failures_[r.hash] >= 3) g_bad_replacements.insert(r.hash);
             texpack::NoteLoad(r.read_us, 0, false, false);
             continue;
         }
+        hd_read_failures_.erase(r.hash);
         if (hd_images_.count(r.hash)) {
             hd_loader_.Recycle(std::move(r.blocks));
             continue;
@@ -3741,7 +3771,7 @@ void LogTexturePack() {
         const double loads = double(std::max<uint64_t>(span.loads, 1));
         LOGI("Texture pack: %llu frames: %llu loads, %llu failed, read %.2f ms and upload %.2f ms per load, worst frame %.2f ms "
              "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most in this stretch, %llu ready at "
-             "their first draw, %llu taken out (%.1f MiB), %llu back, %llu no room, budget %.0f MiB, %u textures %.0f MiB",
+             "their first draw, %llu taken out (%.1f MiB), %llu back, %llu no room, budget %.0f MiB, %llu hashed (%.1f MiB), %u textures %.0f MiB",
              static_cast<unsigned long long>(span.frames), static_cast<unsigned long long>(span.loads),
              static_cast<unsigned long long>(span.failures), double(span.disk_us) / 1000.0 / loads,
              double(span.upload_us) / 1000.0 / loads, double(span.worst_frame_us) / 1000.0,
@@ -3751,7 +3781,8 @@ void LogTexturePack() {
              static_cast<unsigned long long>(span.pop_max), static_cast<unsigned long long>(span.ready),
              static_cast<unsigned long long>(span.evictions), double(span.evicted_bytes) / 1048576.0,
              static_cast<unsigned long long>(span.reloads), static_cast<unsigned long long>(span.no_room),
-             double(span.budget_bytes) / 1048576.0, span.resident, double(span.resident_bytes) / 1048576.0);
+             double(span.budget_bytes) / 1048576.0, static_cast<unsigned long long>(span.hashes), double(span.hashed_bytes) / 1048576.0,
+             span.resident, double(span.resident_bytes) / 1048576.0);
     }
     uint32_t mark = 0;
     if (texpack::TakeMarker(mark)) {

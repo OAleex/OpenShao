@@ -6,7 +6,7 @@
 
 // Which texture pack replacements to take out of video memory when they take too much. It only decides: the renderer tells
 // it what it uploads and draws, and does what it answers. It knows nothing of the graphics API, so it is tested without a GPU.
-// The design is in docs/RESIDENCIA_VRAM.md.
+// docs/MODS.md describes the budget and the rule it follows.
 namespace openshao::texpack {
 struct ResidencyLimits {
     uint64_t max_bytes = 0;

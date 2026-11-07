@@ -202,8 +202,17 @@ int main(int argc,char** argv){try{
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A choice can change back");
         std::ofstream(folder/"settings.toml",std::ios::trunc)<<"this is [not toml";
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A file that cannot be read means High");
+        // Writing must not start from nothing: a damaged file would be replaced by one key and every other choice lost
+        const auto damaged=[&]{std::ifstream f(folder/"settings.toml");return std::string(std::istreambuf_iterator<char>(f),{});};
+        bool refused=false;
+        try{mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);}catch(const std::exception&){refused=true;}
+        Require(refused&&damaged()=="this is [not toml","A file that cannot be read is not written over");
+        refused=false;
+        try{mods::WriteTextureOrder(folder,{"A","B"});}catch(const std::exception&){refused=true;}
+        Require(refused&&damaged()=="this is [not toml","The order is not written over it either");
+        fs::remove(folder/"settings.toml");
         mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
-        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,"A damaged file is written again");
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,"With the damaged file gone, a choice is written");
         fs::remove_all(folder);
         // The order of the texture mods: the user's first, then the others as installed, and none that is gone
         using Ids=std::vector<std::string>;

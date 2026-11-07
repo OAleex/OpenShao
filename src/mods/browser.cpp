@@ -18,7 +18,7 @@ struct TempFile {fs::path path;~TempFile(){std::error_code ec;fs::remove(path,ec
 Browser::Browser(const fs::path& root):root_(root) { Refresh(); }
 Browser::~Browser(){Cancel();if(worker_.joinable())worker_.join();}
 BrowserState Browser::View()const{std::lock_guard lock(mutex_);return state_;}
-void Browser::Cancel(){cancel_=true;answered_.notify_all();}
+void Browser::Cancel(){{std::lock_guard lock(mutex_);cancel_=true;}answered_.notify_all();}
 void Browser::Answer(bool install){
     {std::lock_guard lock(mutex_);if(!state_.asking)return;answer_=install;state_.asking.reset();++state_.revision;}
     answered_.notify_all();
@@ -72,7 +72,10 @@ void Browser::Reload(){
     std::vector<std::string> textures;
     for(const auto& i:rows)if(i.mod.type=="texture")textures.push_back(i.mod.id);
     auto order=TextureOrder(root_,textures);
-    auto overlaps=FindOverlaps(root_,rows,order);
+    std::string overlaps_key;
+    for(const auto& id:order)for(const auto& row:rows)if(row.mod.id==id&&row.enabled&&row.mod.ostp)overlaps_key+=id+"|"+row.mod.ostp->sha256+";";
+    if(overlaps_key!=overlaps_key_){overlaps_cache_=FindOverlaps(root_,rows,order);overlaps_key_=overlaps_key;}  // opening the packs is the cost
+    auto overlaps=overlaps_cache_;
     std::map<std::string,Details> details;
     for(const auto& i:rows)if(i.mod.ostp) {
         const auto key=i.mod.id+"|"+i.mod.ostp->sha256;
