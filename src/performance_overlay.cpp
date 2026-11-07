@@ -72,6 +72,11 @@ void Draw(double fps) {
             if (stats.pop_ins)
                 ImGui::Text("Pop-in: %.1f frames on average, %llu at most", double(stats.pop_frames) / double(stats.pop_ins),
                             static_cast<unsigned long long>(stats.pop_max));
+            if (stats.budget_bytes)
+                ImGui::Text("Video memory: %.0f of %.0f MiB; %llu taken out, %llu back, %llu no room",
+                            double(stats.resident_bytes) / 1048576.0, double(stats.budget_bytes) / 1048576.0,
+                            static_cast<unsigned long long>(stats.evictions), static_cast<unsigned long long>(stats.reloads),
+                            static_cast<unsigned long long>(stats.no_room));
             ImGui::Text("Worst frame, last 240: %.2f ms", WorstFrameLoadMs(stats.render_us));
         }
     }

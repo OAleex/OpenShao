@@ -824,6 +824,7 @@ private:
     texpack::ResidencyLimits hd_limits_;
     uint64_t hd_limits_frame_ = 0;  // presents_ plus one when hd_limits_ was last worked out
     uint64_t hd_limits_logged_ = 0;
+    std::unordered_set<uint64_t> hd_evicted_;  // replacements taken out and not loaded again yet, to count the ones that come back
     std::unordered_map<uint64_t, uint8_t> hd_memory_failures_;  // how many times making the image of a replacement failed for lack of memory
     ImageP dummy_[4];  // views for stages without a texture, by TexKind
     ImageP lut_;
@@ -2369,6 +2370,7 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     hd_images_[loaded.hash] = {hd.res, std::make_shared<texpack::Resident>(loaded.blocks.size())};
     hd_residency_.Add(loaded.hash, loaded.blocks.size(), presents_);
     hd_memory_failures_.erase(loaded.hash);
+    if (hd_evicted_.erase(loaded.hash)) texpack::NoteReload();
     static std::atomic<uint32_t> slow_logged{0};
     if (upload_us >= 5000 && slow_logged.fetch_add(1) < 100)
         LOGI("Texture pack: slow upload %016llx %ux%u, %u levels, %zu bytes: %.1f ms on the render thread, read %.1f ms, "
@@ -2410,6 +2412,7 @@ void VulkanBackend::SyncHdSource() {
     for (auto& entry : hd_images_) CurrentFrame().garbage.push_back(entry.second.image);
     hd_images_.clear();
     hd_residency_.Clear();
+    hd_evicted_.clear();
     hd_memory_failures_.clear();
     hd_limits_frame_ = 0;
     g_bad_replacements.clear();
@@ -2479,10 +2482,14 @@ texpack::ResidencyLimits VulkanBackend::HdLimits() {
     const uint64_t half = allowed / 2;
     const uint32_t count = uint32_t(std::min<uint64_t>(std::max<uint64_t>(half > outside ? half - outside : 0, 256), UINT32_MAX));
     hd_limits_ = {bytes, count};
+    texpack::SetBudget(bytes);
     if (!hd_limits_logged_ || bytes > hd_limits_logged_ + hd_limits_logged_ / 4 || bytes + bytes / 4 < hd_limits_logged_) {
         hd_limits_logged_ = bytes ? bytes : 1;
-        LOGI("Texture pack: video memory for the replacements: %.0f MiB (%s), at most %u images; local heap %.0f MiB",
-             double(bytes) / double(kMiB), how, count, double(heap_size) / double(kMiB));
+        char images[40];
+        if (count >= 1000000) std::snprintf(images, sizeof(images), "no limit on images");
+        else std::snprintf(images, sizeof(images), "at most %u images", count);
+        LOGI("Texture pack: video memory for the replacements: %.0f MiB (%s), %s; local heap %.0f MiB",
+             double(bytes) / double(kMiB), how, images, double(heap_size) / double(kMiB));
     }
     return hd_limits_;
 }
@@ -2500,8 +2507,10 @@ void VulkanBackend::EvictHd(const std::vector<uint64_t>& hashes) {
         hd_images_.erase(it);
         hd_residency_.Remove(hash);
         gone.insert(hash);
+        hd_evicted_.insert(hash);
     }
     if (gone.empty()) return;
+    texpack::NoteEviction(gone.size(), before - hd_residency_.bytes());
     for (auto& entry : textures_) {
         Tex& tx = entry.second;
         if (tx.hd && gone.count(tx.rep_hash)) {
@@ -2544,6 +2553,7 @@ void VulkanBackend::PumpHdUploads() {
         const auto plan = hd_residency_.Plan(presents_, limits, r.blocks.size(), 1);
         EvictHd(plan.drop);
         if (!plan.fits) {
+            texpack::NoteNoRoom();
             static std::atomic<uint32_t> logged{0};
             if (logged.fetch_add(1) < 50)
                 LOGI("Texture pack: no room for %016llx (%zu bytes): %.1f MiB of %.1f MiB in use and all of it drawn lately",
@@ -2559,6 +2569,7 @@ void VulkanBackend::PumpHdUploads() {
             case HdUpload::Memory: {
                 // the device had no memory for it just now, which a replacement that is out of use can give back: free a quarter
                 // and let the texture ask again; only after three tries is it given up
+                texpack::NoteMemoryFailure();
                 if (++hd_memory_failures_[r.hash] >= 3) g_bad_replacements.insert(r.hash);
                 const uint64_t held = hd_residency_.bytes(), count = hd_residency_.count();
                 EvictHd(hd_residency_.Plan(presents_, {held / 4 * 3, uint32_t(count / 4 * 3)}).drop);
@@ -3724,21 +3735,24 @@ void LogTexturePack() {
         const double loads = double(std::max<uint64_t>(span.loads, 1));
         LOGI("Texture pack: %llu frames: %llu loads, %llu failed, read %.2f ms and upload %.2f ms per load, worst frame %.2f ms "
              "of loading, waited %.1f ms, pop-in %llu textures %.1f frames on average and %llu at most in this stretch, %llu ready at "
-             "their first draw, %u textures %.0f MiB",
+             "their first draw, %llu taken out (%.1f MiB), %llu back, %llu no room, budget %.0f MiB, %u textures %.0f MiB",
              static_cast<unsigned long long>(span.frames), static_cast<unsigned long long>(span.loads),
              static_cast<unsigned long long>(span.failures), double(span.disk_us) / 1000.0 / loads,
              double(span.upload_us) / 1000.0 / loads, double(span.worst_frame_us) / 1000.0,
              double(span.wait_us) / 1000.0 / double(std::max<uint64_t>(span.waits, 1)),
              static_cast<unsigned long long>(span.pop_ins),
              double(span.pop_frames) / double(std::max<uint64_t>(span.pop_ins, 1)),
-             static_cast<unsigned long long>(span.pop_max), static_cast<unsigned long long>(span.ready), span.resident,
-             double(span.resident_bytes) / 1048576.0);
+             static_cast<unsigned long long>(span.pop_max), static_cast<unsigned long long>(span.ready),
+             static_cast<unsigned long long>(span.evictions), double(span.evicted_bytes) / 1048576.0,
+             static_cast<unsigned long long>(span.reloads), static_cast<unsigned long long>(span.no_room),
+             double(span.budget_bytes) / 1048576.0, span.resident, double(span.resident_bytes) / 1048576.0);
     }
     uint32_t mark = 0;
     if (texpack::TakeMarker(mark)) {
         const auto stats = texpack::GetStats();
-        LOGI("Texture pack: marker %u: %u textures %.0f MiB, %llu loads in all", mark, stats.resident,
-             double(stats.resident_bytes) / 1048576.0, static_cast<unsigned long long>(stats.loads));
+        LOGI("Texture pack: marker %u: %u textures %.0f MiB, %llu loads in all, %llu taken out, %llu back", mark, stats.resident,
+             double(stats.resident_bytes) / 1048576.0, static_cast<unsigned long long>(stats.loads),
+             static_cast<unsigned long long>(stats.evictions), static_cast<unsigned long long>(stats.reloads));
     }
 }
 
