@@ -2339,11 +2339,17 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     if (first >= e.levels) return HdUpload::Data;
     // the image is made and filled as the game's own textures are, so a device without BC gets the blocks decoded
     Tex hd;
-    const bool bc1 = e.format == texpack::BcFormat::Bc1;
+    const bool bc1 = e.format == texpack::BcFormat::Bc1, raw = e.format == texpack::BcFormat::Rgba8;
     hd.fmt = bc1 ? VK_FORMAT_BC1_RGBA_UNORM_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
     hd.bc = bc1 ? 1 : 3;
-    if (bc_) hd.bc = 0;
-    else hd.fmt = kBgra;
+    if (raw) {  // the developer mode's pictures, not compressed: sent as they are
+        hd.fmt = VK_FORMAT_R8G8B8A8_UNORM;
+        hd.bc = 0;
+    } else if (bc_) {
+        hd.bc = 0;
+    } else {
+        hd.fmt = kBgra;
+    }
     hd.levels = e.levels - first;
     ImageSpec spec;
     spec.format = hd.fmt;
@@ -2357,8 +2363,8 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
     size_t offset = 0;
     for (uint32_t l = 0; l < hd.levels; l++) {
         const uint32_t lw = std::max(1u, spec.w >> l), lh = std::max(1u, spec.h >> l);
-        const uint32_t pitch = (lw + 3) / 4 * block;
-        const size_t size = size_t(pitch) * ((lh + 3) / 4);
+        const uint32_t pitch = raw ? lw * 4 : (lw + 3) / 4 * block;
+        const size_t size = size_t(pitch) * (raw ? lh : (lh + 3) / 4);
         if (offset + size > loaded.blocks.size()) return HdUpload::Data;
         UploadTextureLevel(hd, 0, l, loaded.blocks.data() + offset, size, pitch);
         offset += size;

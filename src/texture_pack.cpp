@@ -1,5 +1,6 @@
 #include "texture_pack.h"
 #include "texture_pack_file.h"
+#include "texture_dev_folder.h"
 #include "core/log.h"
 #include <algorithm>
 #include <atomic>
@@ -183,7 +184,17 @@ void SetPacks(const std::vector<PackSpec>& packs) {
     for (const auto& spec : packs) {
         const auto& path = spec.path;
         std::error_code ec;
-        if (std::filesystem::is_directory(path, ec)) {
+        if (std::filesystem::is_directory(path, ec) && !std::filesystem::exists(path / "index.txt", ec)) {
+            // no index: a folder of pictures, as the developer mode reads it; only what was edited counts
+            DevFolderReport report;
+            auto source = OpenDevFolder(path, report);
+            LOGI("Texture pack: developer folder %s: %zu pictures, %zu edited (%zu without a signature), %zu as extracted, %zu refused, "
+                 "%zu ignored, %zu duplicates, looked at in %.2f s",
+                 path.string().c_str(), report.files, report.edited, report.unsigned_files, report.unchanged, report.refused, report.ignored,
+                 report.duplicates, report.seconds);
+            for (const auto& line : report.problems) LOGI("Texture pack: developer folder: %s", line.c_str());
+            if (source) members.push_back(std::move(source));
+        } else if (std::filesystem::is_directory(path, ec)) {
             auto set = std::make_shared<Set>();
             ReadIndex(path, set->index);
             ReadPreload(path, *set);
