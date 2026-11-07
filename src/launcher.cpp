@@ -168,10 +168,10 @@ bool ChooseGameSource(fs::path& path, bool folder) {
 }
 
 // Game is the source selection page. It replaces the tabs until a usable game is chosen.
-enum class Page { Play, Mods, Files, Support, About, Game };
+enum class Page { Play, Mods, Files, Developer, Support, About, Game };
 const char* PageName(Page page) {
     switch (page) {
-        case Page::Mods: return "mods"; case Page::Files: return "files"; case Page::About: return "about";
+        case Page::Mods: return "mods"; case Page::Files: return "files"; case Page::Developer: return "developer"; case Page::About: return "about";
         case Page::Support: return "support";
         case Page::Game: return "game"; default: return "play";
     }
@@ -228,6 +228,12 @@ struct Session {
     };
     std::map<std::string, Logo> logos;       // by mod id
     std::set<std::string> details_open;      // mods whose details are shown
+    bool developer_mode = false;  // the Developer page, and the game reading the texture folder below
+    fs::path developer_folder;
+    struct DeveloperStatus {
+        bool exists = false, manifest = false;
+        size_t pictures = 0;
+    } developer_status;
     Page page = Page::Play;
     Settings settings;
     fs::path source;
@@ -446,6 +452,48 @@ struct Session {
         if (fs::is_directory(root, ec)) OpenLocation(files::Utf8(root));
         else Message("No saves yet", "The game creates this folder the first time it saves:\n" + files::Utf8(root));
     }
+    // Developer mode: kept in settings.toml beside the update preference, under [launcher]
+    void SaveDeveloper() {
+        try {
+            auto table = Disk();
+            auto launcher = table["launcher"].as_table() ? *table["launcher"].as_table() : toml::table{};
+            launcher.insert_or_assign("developer_mode", developer_mode);
+            launcher.insert_or_assign("developer_texture_folder", files::Utf8(developer_folder));
+            table.insert_or_assign("launcher", launcher);
+            std::string error;
+            if (!Write(paths::Config(), table, error)) throw std::runtime_error(error);
+        } catch (const std::exception& e) { Message("Cannot save the developer settings", e.what()); }
+    }
+    void RefreshDeveloperStatus() {
+        developer_status = {};
+        std::error_code ec;
+        if (developer_folder.empty() || !fs::is_directory(developer_folder, ec)) return;
+        developer_status.exists = true;
+        developer_status.manifest = fs::is_regular_file(developer_folder / "manifest.json", ec);
+        for (const auto& item : fs::directory_iterator(developer_folder, ec)) {
+            auto ext = item.path().extension().string();
+            for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+            if (ext == ".png") ++developer_status.pictures;
+        }
+    }
+    void SetDeveloperMode(bool on) {
+        developer_mode = on;
+        if (!on && page == Page::Developer) page = Page::Files;
+        if (on) RefreshDeveloperStatus();
+        SaveDeveloper();
+    }
+    void ChooseDeveloperFolder() {
+        fs::path selected;
+        if (!ChooseFolder(selected, "Choose the folder of texture pictures")) return;
+        developer_folder = selected;
+        RefreshDeveloperStatus();
+        SaveDeveloper();
+    }
+    void ClearDeveloperFolder() {
+        developer_folder.clear();
+        RefreshDeveloperStatus();
+        SaveDeveloper();
+    }
     void SetCheckUpdates(bool enabled) {
         try {
             auto table = Disk();
@@ -549,13 +597,18 @@ void TopBar(Session& s, const Canvas& c, float W) {
             s.page = support ? Page::Game : Page::Support;
         return;
     }
-    const Page pages[] = {Page::Play, Page::Mods, Page::Files, Page::Support, Page::About};
-    const char* labels[] = {"Play", "Mods", "Files", "Support", "About"};
+    // The Developer page is there only while developer mode is on (the switch is on the Files page)
+    std::vector<Page> pages{Page::Play, Page::Mods, Page::Files};
+    std::vector<const char*> labels{"Play", "Mods", "Files"};
+    if (s.developer_mode) { pages.push_back(Page::Developer); labels.push_back("Developer"); }
+    pages.push_back(Page::Support); labels.push_back("Support");
+    pages.push_back(Page::About); labels.push_back("About");
+    const int count = int(pages.size());
     float x = W - 40;
-    float xs[5];
-    for (int i = 4; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[i]).x; xs[i] = x; x -= 34; }
+    std::vector<float> xs(size_t(count), 0.f);
+    for (int i = count - 1; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[size_t(i)]).x; xs[size_t(i)] = x; x -= 34; }
     const bool updates = s.mods->View().updates;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < count; ++i) {
         const float width = c.Measure(Weight::Medium, 19, labels[i]).x;
         const auto hit = Item(labels[i], c, xs[i] - 8, 18, xs[i] + width + 8, 56);
         if (hit.clicked) s.page = pages[i];
@@ -890,9 +943,53 @@ void FilesPage(Session& s, const Canvas& parent, float W, float H) {
     const auto discord_toggle = Item("##discord-presence", c, right - 38, y + 22, right, y + 44);
     art::Toggle(c, right - 38, y + 22, s.discord_presence, discord_toggle.hovered);
     if (discord_toggle.clicked) s.SetDiscordPresence(!s.discord_presence);
+    y += 60;
+    c.Rule(48, right, y);
+    c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), "Developer");
+    c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), "Test texture pictures from a folder (adds a Developer page)");
+    const auto developer = Item("##developer-mode", c, right - 38, y + 22, right, y + 44);
+    art::Toggle(c, right - 38, y + 22, s.developer_mode, developer.hovered);
+    if (developer.clicked) s.SetDeveloperMode(!s.developer_mode);
     ImGui::SetCursorScreenPos(c.P(0, y + 54));
     ImGui::Dummy(ImVec2(1, 1));
     ImGui::EndChild();
+}
+
+void DeveloperPage(Session& s, const Canvas& c, float W, float) {
+    Header(c, "Developer", "Test texture pictures from a folder, without building a pack.");
+    const float right = W - 48, wrap = right - 48;
+    c.Rule(48, right, 200);
+    c.Text(Weight::SemiBold, 20, 48, 225, Rgb(color::Paper), "Texture folder");
+    const bool has_folder = !s.developer_folder.empty();
+    const std::string value = has_folder ? files::Utf8(s.developer_folder) : std::string("No folder chosen");
+    c.Text(Weight::Regular, 19, 190, 225, Rgb(has_folder ? color::Mist : color::Dim), c.Fit(Weight::Regular, 19, right - 190 - 200, value).c_str());
+    if (Button("Choose##developer", c, right - 84, 216, right, 250, "Choose", false)) s.ChooseDeveloperFolder();
+    if (Button("Clear##developer", c, right - 180, 216, right - 96, 250, "Clear", false, has_folder)) s.ClearDeveloperFolder();
+    float y = 276;
+    std::string line;
+    uint32_t tone = color::Mist;
+    if (!has_folder) line = "Choose the folder where the extraction tool put the pictures.";
+    else if (!s.developer_status.exists) { line = "This folder cannot be read."; tone = color::Warning; }
+    else {
+        line = std::to_string(s.developer_status.pictures) + " pictures";
+        line += s.developer_status.manifest ? ", with a manifest." : ", and no manifest: every picture will count as edited.";
+        if (!s.developer_status.manifest) tone = color::Warning;
+    }
+    c.Text(Weight::Medium, 19, 48, y, Rgb(tone), line.c_str(), wrap);
+    if (has_folder && Link("Refresh##developer", c, right, y, "Refresh", true)) s.RefreshDeveloperStatus();
+    y += 44;
+    c.Rule(48, right, y);
+    const char* paragraphs[] = {
+        "The game reads the pictures in this folder when it starts, before the texture mods you turned on. Only a picture whose pixels differ from "
+        "the extraction counts, so a single changed pixel is enough and the ones you did not touch are left alone.",
+        "Nothing is compressed in this mode. When the textures are ready, build the pack in the mods tool.",
+        "Restart the game to see a change. The game's log says how many pictures it found and how many it uses.",
+    };
+    y += 24;
+    for (const char* text : paragraphs) {
+        c.Text(Weight::Regular, 19, 48, y, Rgb(color::Mist), text, wrap);
+        y += c.Measure(Weight::Regular, 19, text, wrap).y + 14;
+    }
 }
 
 void SupportPage(Session& s, const Canvas& c, float W, float) {
@@ -956,7 +1053,7 @@ void AboutPage(Session&, const Canvas& c, float W, float) {
     struct Component { const char* name; const char* license; };
     static constexpr Component components[] = {
         {"XboxXBERecomp", "MIT"}, {"SDL 3", "zlib"}, {"Dear ImGui", "MIT"}, {"toml++", "MIT"},
-        {"Lua 5.4", "MIT"}, {"miniz", "MIT"}, {"XZ Embedded", "0BSD"}, {"Vulkan-Headers", "Apache-2.0 or MIT"},
+        {"Lua 5.4", "MIT"}, {"miniz", "MIT"}, {"stb_image", "Public domain or MIT"}, {"XZ Embedded", "0BSD"}, {"Vulkan-Headers", "Apache-2.0 or MIT"},
         {"glslang", "BSD-3-Clause and others"}, {"Hanken Grotesk", "SIL Open Font License 1.1"},
         {"discord-rpc and RapidJSON", "MIT"}, {"Keyboard input integration", "GPL-2.0-or-later"},
     };
@@ -1072,6 +1169,7 @@ void Draw(Session& s, float scale) {
         case Page::Play: PlayPage(s, c, W, H); break;
         case Page::Mods: ModsPage(s, c, W, H); break;
         case Page::Files: FilesPage(s, c, W, H); break;
+        case Page::Developer: DeveloperPage(s, c, W, H); break;
         case Page::Support: SupportPage(s, c, W, H); break;
         case Page::About: AboutPage(s, c, W, H); break;
         case Page::Game: GamePage(s, c, W, H); break;
@@ -1191,7 +1289,9 @@ public:
                 << ",\"enabled\":" << (installed && installed->enabled ? "true" : "false") << "}";
             first = false;
         }
-        out << "],\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
+        out << "],\"developer_mode\":" << (s.developer_mode ? "true" : "false") << ",\"developer_folder\":\"" << Escape(files::Utf8(s.developer_folder))
+            << "\",\"developer_pictures\":" << s.developer_status.pictures << ",\"developer_manifest\":" << (s.developer_status.manifest ? "true" : "false")
+            << ",\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
             << ",\"discord_presence\":" << (s.discord_presence ? "true" : "false")
             << ",\"game_error\":\"" << Escape(s.game_error) << "\",\"report_busy\":" << (s.report_job.valid()?"true":"false")
             << ",\"report_path\":\"" << Escape(files::Utf8(s.report.zip)) << "\",\"report_error\":\"" << Escape(s.report.error) << "\"}";
@@ -1220,7 +1320,8 @@ private:
         if (command == "page") {
             if (argument == "support") s.page = Page::Support;
             else if (!s.game_required)
-                for (Page page : {Page::Play, Page::Mods, Page::Files, Page::About}) if (argument == PageName(page)) s.page = page;
+                for (Page page : {Page::Play, Page::Mods, Page::Files, Page::Developer, Page::About})
+                    if (argument == PageName(page) && (page != Page::Developer || s.developer_mode)) s.page = page;
         }
         else if (command == "generate-report") s.GenerateReport();
         else if (command == "play") s.Play();
@@ -1233,6 +1334,8 @@ private:
         else if (command == "renderer") s.SetRenderer(argument);
         else if (command == "check-updates") s.SetCheckUpdates(argument == "on");
         else if (command == "discord-presence") s.SetDiscordPresence(argument == "on");
+        else if (command == "developer-mode") s.SetDeveloperMode(argument == "on");
+        else if (command == "developer-folder") { s.developer_folder = files::FromUtf8(argument); s.RefreshDeveloperStatus(); s.SaveDeveloper(); }
         else if (command == "mods-refresh") s.mods->Refresh();
         else if (command == "mod-install") s.InstallMod(argument);
         else if (command == "mod-install-file") s.InstallModFile(files::FromUtf8(argument));
@@ -1249,6 +1352,18 @@ private:
 
 bool CheckUpdatesEnabled() {
     try { return Disk()["launcher"]["check_updates"].value_or(true); } catch (...) { return true; }
+}
+
+void LoadDeveloper(Session& s) {
+    try {
+        const auto table = Disk();
+        const auto* launcher = table["launcher"].as_table();
+        if (launcher) {
+            s.developer_mode = (*launcher)["developer_mode"].value_or(false);
+            s.developer_folder = files::FromUtf8((*launcher)["developer_texture_folder"].value_or(std::string{}));
+        }
+    } catch (...) {}
+    s.RefreshDeveloperStatus();
 }
 
 bool RunAutomated(Session& s) {
@@ -1283,6 +1398,15 @@ bool RunAutomated(Session& s) {
 }
 }
 
+std::filesystem::path DeveloperTextureFolder() {
+    try {
+        const auto table = Disk();
+        const auto* launcher = table["launcher"].as_table();
+        if (!launcher || !(*launcher)["developer_mode"].value_or(false)) return {};
+        return files::FromUtf8((*launcher)["developer_texture_folder"].value_or(std::string{}));
+    } catch (...) { return {}; }
+}
+
 bool Show() {
     update::RemovePreviousFiles(app::ExeDir());
     Session s;
@@ -1304,6 +1428,7 @@ bool Show() {
     s.data_folder = paths::Root(); s.save_folder = paths::SaveRoot();
     s.check_updates = CheckUpdatesEnabled();
     s.discord_presence = DiscordPresenceEnabled();
+    LoadDeveloper(s);
     if (!options.launcher_test.empty()) return RunAutomated(s);
 
     Window window;

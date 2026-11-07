@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <string>
 #include <toml++/toml.hpp>
 #include "launcher_settings.h"
@@ -17,4 +18,6 @@ const Settings& Current();
 bool ApplyInGame(const Settings& settings,bool save,std::string& error);
 Settings Saved();
 bool LanguageAvailable(std::string_view language);
+// The folder of texture pictures for the developer mode, empty when the mode is off or no folder is chosen
+std::filesystem::path DeveloperTextureFolder();
 }

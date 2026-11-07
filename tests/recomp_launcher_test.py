@@ -259,6 +259,24 @@ def main():
             launcher.wait(lambda s: s['popup'] and s['popup']['title'] == 'Video settings restored', 'Restore must confirm the change')
             launcher.send('dismiss', 'check-updates off')
             launcher.wait(lambda s: s['popup'] is None and not s['check_updates'], 'Turning off update checks must be visible')
+            # Developer mode: the switch, and the folder of texture pictures the game will read
+            pictures = root / 'dev-textures'
+            pictures.mkdir()
+            for name in ('0000000000000001_DXT5_16x16.png', '0000000000000002_DXT5_16x16.PNG', 'notes.txt'):
+                (pictures / name).write_bytes(b'x')
+            launcher.send('developer-folder ' + str(pictures))
+            launcher.wait(lambda s: s['developer_pictures'] == 2 and not s['developer_manifest'] and not s['developer_mode'],
+                          'A folder of pictures is counted, and chosen without turning the mode on')
+            (pictures / 'manifest.json').write_text('{}')
+            launcher.send('developer-mode on')
+            launcher.wait(lambda s: s['developer_mode'] and s['developer_manifest'] and s['developer_folder'] == str(pictures),
+                          'Developer mode on must show the folder and its manifest')
+            launcher.send('page developer')
+            launcher.wait(lambda s: s['page'] == 'developer', 'The Developer page must open while the mode is on')
+            launcher.send('developer-mode off')
+            launcher.wait(lambda s: not s['developer_mode'] and s['page'] == 'files', 'Turning the mode off must leave the Developer page')
+            launcher.send('developer-mode on')
+            launcher.wait(lambda s: s['developer_mode'], 'The mode turns on again')
             launcher.send('close')
             assert launcher.exit_code() == 0
             config = tomllib.loads(settings.read_text())
@@ -275,6 +293,8 @@ def main():
             assert config['mouse']['invert_x'] and config['mouse']['motion'] == 'left_stick'
             assert config['keyboard']['bindings']['a'] == [ord('Z'), ord('V')]
             assert config['launcher']['check_updates'] is False, 'The update preference must be saved'
+            assert config['launcher']['developer_mode'] is True and config['launcher']['developer_texture_folder'] == str(pictures), \
+                'Developer mode and its folder must be saved beside the update preference'
 
             # The Discord switch applies and persists even when the launcher is closed without Play.
             launcher = Launcher(exe, ['--configure', '--data-dir', data], root, 'discord-off', desktop)

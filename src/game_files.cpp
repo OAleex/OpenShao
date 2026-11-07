@@ -144,6 +144,8 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
             std::stable_sort(hd_packs.begin(),hd_packs.end(),[&](const auto& a,const auto& b){return rank(a.first)<rank(b.first);});
             for(auto& pack:hd_packs)ordered.push_back(std::move(pack.second));
         }
+        // The developer mode's folder (the launcher's Developer page) comes before every texture mod; the variable below before it
+        if(const auto developer=launcher::DeveloperTextureFolder();!developer.empty())ordered.insert(ordered.begin(),texpack::PackSpec{developer});
         if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)ordered.insert(ordered.begin(),texpack::PackSpec{std::filesystem::path(folder)});
         texpack::SetPacks(ordered);
         const auto& stats=language::Statistics();
