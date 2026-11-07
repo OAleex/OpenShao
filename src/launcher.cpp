@@ -19,9 +19,11 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -219,6 +221,13 @@ struct Popup {
 };
 
 struct Session {
+    Window* window = nullptr;  // for the pictures of mods
+    struct Logo {
+        const void* source = nullptr;  // the pixels it was made from, to tell when the mod's logo changed
+        uint64_t handle = 0;           // 0 when the renderer could not make it
+    };
+    std::map<std::string, Logo> logos;       // by mod id
+    std::set<std::string> details_open;      // mods whose details are shown
     Page page = Page::Play;
     Settings settings;
     fs::path source;
@@ -367,6 +376,29 @@ struct Session {
         const auto id = mod.id;
         Confirm("Remove " + mod.name + "?", "The mod's files are removed from your data folder. You can install it again later.", "Remove",
                 [this, id] { mods->Remove(id); });
+    }
+    // The picture for a mod's logo, made when first needed and again if the mod's logo changes; 0 when there is none to show
+    uint64_t LogoFor(const std::string& id, const mods::Details& details) {
+        auto& entry = logos[id];
+        if (entry.source != details.logo.get()) {
+            if (entry.handle && window) window->DestroyImage(entry.handle);
+            entry = {};
+            entry.source = details.logo.get();
+            if (details.logo && window && details.logo->size() == size_t(details.logo_width) * details.logo_height * 4)
+                entry.handle = window->CreateImage(details.logo->data(), int(details.logo_width), int(details.logo_height));
+        }
+        return entry.handle;
+    }
+    void ForgetLogos(const mods::BrowserState& view) {
+        for (auto it = logos.begin(); it != logos.end();) {
+            if (view.details.count(it->first)) { ++it; continue; }
+            if (it->second.handle && window) window->DestroyImage(it->second.handle);
+            it = logos.erase(it);
+        }
+    }
+    void ReleaseLogos() {
+        for (auto& [id, entry] : logos) if (entry.handle && window) window->DestroyImage(entry.handle);
+        logos.clear();
     }
     void ToggleMod(const std::string& id) {
         for (const auto& installed : mods->View().installed)
@@ -660,6 +692,7 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
     c.Rule(48, right, top);
 
     const auto rows = mods::DisplayMods(view);
+    s.ForgetLogos(view);
     ImGui::SetCursorScreenPos(c.P(0, top + 1));
     ImGui::BeginChild("##mod-list", ImVec2(c.S(W), c.S(std::max(40.f, H - top - 24))), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
     const Canvas list{ImGui::GetWindowDrawList(), c.scale, ImGui::GetCursorScreenPos()};
@@ -673,12 +706,35 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         const float text_x = 48 + 76, actions = installed ? 38 + 24 + (update ? 160 : 0) : 120;
         const float wrap = right - text_x - actions - 24;
         const float summary_h = list.Measure(Weight::Regular, 19, mod.summary.c_str(), wrap).y;
-        const float row_h = std::max(56.f + 44, 32 + summary_h + 28 + 44);
+        // What a texture pack file says about itself, shown under the mod when the user asks for it
+        const auto about = view.details.find(mod.id);
+        const mods::Details* details = installed && about != view.details.end() ? &about->second : nullptr;
+        std::vector<std::pair<const char*, const std::string*>> facts;
+        if (details) {
+            if (!details->description.empty()) facts.push_back({"", &details->description});
+            if (!details->credits.empty()) facts.push_back({"Credits", &details->credits});
+            if (!details->website.empty()) facts.push_back({"Website", &details->website});
+            if (!details->license.empty()) facts.push_back({"License", &details->license});
+        }
+        const bool open = !facts.empty() && s.details_open.count(mod.id);
+        const float fact_x = text_x + 84, fact_wrap = right - fact_x - 24;
+        float facts_h = 0;
+        if (open)
+            for (const auto& fact : facts)
+                facts_h += std::max(24.f, list.Measure(Weight::Regular, 18, fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24).y) + 8;
+        const float row_h = std::max(56.f + 44, 32 + summary_h + 28 + 44) + (open ? facts_h + 14 : 0);
         const float ty = y + 22;
         list.Rect(48, ty, 104, ty + 56, Rgb(color::Slate), 12);
         const float icon_alpha = installed && installed->enabled ? 1.f : 0.45f;
+        const uint64_t logo = details ? s.LogoFor(mod.id, *details) : 0;
+        if (logo) {
+            // the mod's own logo, as large as fits the square and in its proportion
+            const float lw = float(details->logo_width), lh = float(details->logo_height), fit = std::min(52.f / lw, 52.f / lh);
+            const float w = lw * fit, h = lh * fit, cx = 76, cy = ty + 28;
+            list.list->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(logo)), list.P(cx - w / 2, cy - h / 2), list.P(cx + w / 2, cy + h / 2),
+                                       ImVec2(0, 0), ImVec2(1, 1), Rgb(0xFFFFFF, icon_alpha), list.S(6));
         // A flag stays bright until its pack is installed and disabled.
-        if (!art::LanguageFlag(list, {76, ty + 28}, 38, mod.language, installed && !installed->enabled ? 0.45f : 1.f)) art::Enso(list, {76, ty + 28}, 15, 5, 1.f, icon_alpha, 7, 10);
+        } else if (!art::LanguageFlag(list, {76, ty + 28}, 38, mod.language, installed && !installed->enabled ? 0.45f : 1.f)) art::Enso(list, {76, ty + 28}, 15, 5, 1.f, icon_alpha, 7, 10);
         list.Text(Weight::SemiBold, 22, text_x, ty + 2, Rgb(color::Paper), mod.name.c_str());
         list.Text(Weight::Regular, 19, text_x, ty + 32, Rgb(color::Mist), mod.summary.c_str(), wrap);
         std::string meta;
@@ -699,16 +755,36 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             ImGui::EndDisabled();
             list.Text(Weight::Medium, 18, remove_x, meta_y, Rgb(remove.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), "Remove");
             if (remove.clicked) s.RemoveMod(mod);
+            float link_x = remove_x + list.Measure(Weight::Medium, 18, "Remove").x + 18;
             if (const auto quality = view.quality.find(mod.id); quality != view.quality.end()) {
                 // A texture pack file: High uses every level of its textures, Medium leaves them at twice the game's size
                 const bool medium = quality->second == texpack::Quality::Medium;
                 const std::string label = std::string("Quality: ") + (medium ? "Medium" : "High");
-                const float quality_x = remove_x + list.Measure(Weight::Medium, 18, "Remove").x + 18;
+                const float quality_x = link_x, quality_w = list.Measure(Weight::Medium, 18, label.c_str()).x;
                 ImGui::BeginDisabled(view.busy);
-                const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + list.Measure(Weight::Medium, 18, label.c_str()).x, meta_y + 17);
+                const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + quality_w, meta_y + 17);
                 ImGui::EndDisabled();
                 list.Text(Weight::Medium, 18, quality_x, meta_y, Rgb(choose.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), label.c_str());
                 if (choose.clicked) s.mods->SetQuality(mod.id, medium ? texpack::Quality::High : texpack::Quality::Medium);
+                link_x += quality_w + 18;
+            }
+            if (!facts.empty()) {
+                const char* label = open ? "Hide details" : "Details";
+                const float label_w = list.Measure(Weight::Medium, 18, label).x;
+                const auto show = Item("##details", list, link_x, meta_y - 1, link_x + label_w, meta_y + 17);
+                list.Text(Weight::Medium, 18, link_x, meta_y, Rgb(show.hovered ? color::Paper : color::Mist), label);
+                if (show.clicked) {
+                    if (open) s.details_open.erase(mod.id);
+                    else s.details_open.insert(mod.id);
+                }
+            }
+            if (open) {
+                float fy = meta_y + 34;
+                for (const auto& fact : facts) {
+                    if (fact.first[0]) list.Text(Weight::Medium, 18, text_x, fy, Rgb(color::Dim), fact.first);
+                    list.Text(Weight::Regular, 18, fact.first[0] ? fact_x : text_x, fy, Rgb(color::Mist), fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24);
+                    fy += std::max(24.f, list.Measure(Weight::Regular, 18, fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24).y) + 8;
+                }
             }
             ImGui::BeginDisabled(view.busy);
             const auto toggle = Item("##toggle", list, right - 38, ty + 6, right, ty + 28);
@@ -1254,12 +1330,15 @@ bool Show() {
             if (!window.BeginFrame(s.Animating())) s.Close();
             if (s.check_updates && s.updater) s.updater->Tick();
             gamepads.Poll(s);
+            s.window = &window;
             Draw(s, window.Scale());
             window.EndFrame();
             if (s.updater && s.updater->Get().state == update::State::Ready) { s.relaunch = true; s.result = 0; }
         }
     }
+    s.ReleaseLogos();
     window.Close();
+    s.window = nullptr;
     s.mods.reset();
     s.updater.reset();
     if (s.relaunch) {

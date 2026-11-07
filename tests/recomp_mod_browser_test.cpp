@@ -104,13 +104,21 @@ int main(int argc,char** argv){
         // Texture packs: the order they are read in, and the textures two of them both have
         {
             const auto make=[&](const std::string& id,std::vector<Tex> textures){
-                auto info=InfoFor(textures.size());info.replace(info.find("Test_Pack-1"),11,id);
+                auto info=InfoFor(textures.size(),R"(,"description":"Longer text.","website":"https://example.org","credits":"Art by someone","license":"CC-BY")");info.replace(info.find("Test_Pack-1"),11,id);
                 const auto bytes=Build(textures,info);const auto path=fixtures/(id+".ostp");
                 std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
                 return path;};
             const auto texture=[](uint64_t hash,uint8_t fill){return Tex{hash,64,64,16,16,7,2,0,fill};};
             browser.InstallFile(make("PackA",{texture(0x100,1),texture(0x101,2),texture(0x102,3)}),fixtures/"game");state=Ready(browser);
             Check(state.error.empty()&&state.overlaps.empty(),"One texture pack file has nothing in common with another");
+            {
+                const auto about=state.details.find("PackA");
+                Check(about!=state.details.end()&&about->second.description=="Longer text."&&about->second.website=="https://example.org"&&
+                      about->second.credits=="Art by someone"&&about->second.license=="CC-BY",
+                      "What the texture pack says about itself reaches the page");
+                Check(about->second.logo&&about->second.logo_width==2&&about->second.logo_height==2&&about->second.logo->size()==16&&(*about->second.logo)[1]==10,
+                      "Its logo comes as raw RGBA with its size");
+            }
             browser.InstallFile(make("PackB",{texture(0x101,4),texture(0x102,5),texture(0x103,6)}),fixtures/"game");state=Ready(browser);
             const auto place=[](const BrowserState& view,const std::string& id){return std::find(view.order.begin(),view.order.end(),id)-view.order.begin();};
             Check(state.error.empty()&&place(state,"PackA")<place(state,"PackB")&&place(state,"PackB")<ptrdiff_t(state.order.size()),

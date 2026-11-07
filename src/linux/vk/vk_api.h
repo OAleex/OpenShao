@@ -61,6 +61,7 @@
     X(vkAllocateMemory)               \
     X(vkFreeMemory)                   \
     X(vkMapMemory)                    \
+    X(vkUnmapMemory)                  \
     X(vkCreateImageView)              \
     X(vkDestroyImageView)             \
     X(vkCreateSampler)                \

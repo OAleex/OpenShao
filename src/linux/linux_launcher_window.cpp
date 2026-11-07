@@ -109,6 +109,14 @@ struct Window::State {
     VkSemaphore acquired[kFrames] = {};
     uint32_t frame = 0;
     VkDescriptorPool ui_pool = VK_NULL_HANDLE;
+    struct Image {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
+    std::vector<Image> ui_images;  // images made for the interface, by the handle they gave out minus one
+    VkSampler ui_sampler = VK_NULL_HANDLE;
     bool imgui = false;
     bool imgui_vulkan = false;
     bool dirty = false;
@@ -121,6 +129,9 @@ struct Window::State {
     bool Swapchain();
     void DestroySwapchain();
     void Render();
+    uint64_t MakeImage(const uint8_t* rgba, int width, int height);
+    void FreeImage(Image& image);
+    uint32_t MemoryType(uint32_t bits, VkMemoryPropertyFlags want) const;
 };
 
 bool Window::State::Instance() {
@@ -217,10 +228,10 @@ bool Window::State::Device() {
         VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         if (vk.vkCreateSemaphore(device, &si, nullptr, &acquired[i]) != VK_SUCCESS) return false;
     }
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    pi.maxSets = 8;
+    pi.maxSets = 64;
     pi.poolSizeCount = 1;
     pi.pPoolSizes = &size;
     return vk.vkCreateDescriptorPool(device, &pi, nullptr, &ui_pool) == VK_SUCCESS;
@@ -383,6 +394,151 @@ void Window::State::Render() {
     frame = (frame + 1) % kFrames;
 }
 
+uint32_t Window::State::MemoryType(uint32_t bits, VkMemoryPropertyFlags want) const {
+    VkPhysicalDeviceMemoryProperties props{};
+    vk.vkGetPhysicalDeviceMemoryProperties(gpu, &props);
+    for (uint32_t i = 0; i < props.memoryTypeCount; i++)
+        if ((bits & (1u << i)) && (props.memoryTypes[i].propertyFlags & want) == want) return i;
+    return UINT32_MAX;
+}
+
+void Window::State::FreeImage(Image& image) {
+    if (image.set) ImGui_ImplVulkan_RemoveTexture(image.set);
+    if (image.view) vk.vkDestroyImageView(device, image.view, nullptr);
+    if (image.image) vk.vkDestroyImage(device, image.image, nullptr);
+    if (image.memory) vk.vkFreeMemory(device, image.memory, nullptr);
+    image = {};
+}
+
+// Makes a sampled image and fills it through a staging buffer, waiting for the copy: it is for a few small pictures
+uint64_t Window::State::MakeImage(const uint8_t* rgba, int width, int height) {
+    if (!imgui_vulkan || !device || !rgba || width <= 0 || height <= 0 || width > 4096 || height > 4096) return 0;
+    const VkDeviceSize bytes = VkDeviceSize(width) * VkDeviceSize(height) * 4;
+    Image made;
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    const auto fail = [&]() -> uint64_t {
+        if (fence) vk.vkDestroyFence(device, fence, nullptr);
+        if (pool) vk.vkDestroyCommandPool(device, pool, nullptr);
+        if (staging) vk.vkDestroyBuffer(device, staging, nullptr);
+        if (staging_memory) vk.vkFreeMemory(device, staging_memory, nullptr);
+        FreeImage(made);
+        return 0;
+    };
+    VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ic.imageType = VK_IMAGE_TYPE_2D;
+    ic.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ic.extent = {uint32_t(width), uint32_t(height), 1};
+    ic.mipLevels = 1;
+    ic.arrayLayers = 1;
+    ic.samples = VK_SAMPLE_COUNT_1_BIT;
+    ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ic.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vk.vkCreateImage(device, &ic, nullptr, &made.image) != VK_SUCCESS) return fail();
+    VkMemoryRequirements req{};
+    vk.vkGetImageMemoryRequirements(device, made.image, &req);
+    uint32_t type = MemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type == UINT32_MAX) type = MemoryType(req.memoryTypeBits, 0);
+    if (type == UINT32_MAX) return fail();
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    if (vk.vkAllocateMemory(device, &ai, nullptr, &made.memory) != VK_SUCCESS) return fail();
+    vk.vkBindImageMemory(device, made.image, made.memory, 0);
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = made.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = ic.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vk.vkCreateImageView(device, &vi, nullptr, &made.view) != VK_SUCCESS) return fail();
+
+    VkBufferCreateInfo bc{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bc.size = bytes;
+    bc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vk.vkCreateBuffer(device, &bc, nullptr, &staging) != VK_SUCCESS) return fail();
+    vk.vkGetBufferMemoryRequirements(device, staging, &req);
+    type = MemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (type == UINT32_MAX) return fail();
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    if (vk.vkAllocateMemory(device, &ai, nullptr, &staging_memory) != VK_SUCCESS) return fail();
+    vk.vkBindBufferMemory(device, staging, staging_memory, 0);
+    void* mapped = nullptr;
+    if (vk.vkMapMemory(device, staging_memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) return fail();
+    std::memcpy(mapped, rgba, size_t(bytes));
+    vk.vkUnmapMemory(device, staging_memory);
+
+    VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pi.queueFamilyIndex = family;
+    if (vk.vkCreateCommandPool(device, &pi, nullptr, &pool) != VK_SUCCESS) return fail();
+    VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ca.commandPool = pool;
+    ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ca.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vk.vkAllocateCommandBuffers(device, &ca, &cmd) != VK_SUCCESS) return fail();
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vk.vkBeginCommandBuffer(cmd, &bi);
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = made.image;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {uint32_t(width), uint32_t(height), 1};
+    vk.vkCmdCopyBufferToImage(cmd, staging, made.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vk.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    vk.vkEndCommandBuffer(cmd);
+    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (vk.vkCreateFence(device, &fi, nullptr, &fence) != VK_SUCCESS) return fail();
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    if (vk.vkQueueSubmit(queue, 1, &si, fence) != VK_SUCCESS) return fail();
+    if (vk.vkWaitForFences(device, 1, &fence, VK_TRUE, 5'000'000'000ull) != VK_SUCCESS) {
+        vk.vkDeviceWaitIdle(device);  // the copy must be over before what it reads from is freed
+        return fail();
+    }
+    vk.vkDestroyFence(device, fence, nullptr);
+    vk.vkDestroyCommandPool(device, pool, nullptr);
+    vk.vkDestroyBuffer(device, staging, nullptr);
+    vk.vkFreeMemory(device, staging_memory, nullptr);
+    fence = VK_NULL_HANDLE;
+    pool = VK_NULL_HANDLE;
+    staging = VK_NULL_HANDLE;
+    staging_memory = VK_NULL_HANDLE;
+
+    if (!ui_sampler) {
+        VkSamplerCreateInfo sc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sc.magFilter = sc.minFilter = VK_FILTER_LINEAR;
+        sc.addressModeU = sc.addressModeV = sc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vk.vkCreateSampler(device, &sc, nullptr, &ui_sampler) != VK_SUCCESS) return fail();
+    }
+    made.set = ImGui_ImplVulkan_AddTexture(ui_sampler, made.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (!made.set) return fail();
+    for (size_t i = 0; i < ui_images.size(); i++)
+        if (!ui_images[i].set) {  // a place a destroyed image left
+            ui_images[i] = made;
+            return uint64_t(i) + 1;
+        }
+    ui_images.push_back(made);
+    return uint64_t(ui_images.size());
+}
+
 Window::Window() : s_(new State) {}
 Window::~Window() {
     Close();
@@ -390,6 +546,23 @@ Window::~Window() {
 }
 
 float Window::Scale() const { return s_->scale; }
+
+// The handle is what ImGui_ImplVulkan_AddTexture gave (a descriptor set), so ImGui::Image takes it as it is
+uint64_t Window::CreateImage(const uint8_t* rgba, int width, int height) {
+    const uint64_t slot = s_->MakeImage(rgba, width, height);
+    return slot ? uint64_t(reinterpret_cast<uintptr_t>(s_->ui_images[size_t(slot - 1)].set)) : 0;
+}
+
+void Window::DestroyImage(uint64_t image) {
+    State& s = *s_;
+    if (!image || !s.device) return;
+    for (auto& entry : s.ui_images)
+        if (entry.set && uint64_t(reinterpret_cast<uintptr_t>(entry.set)) == image) {
+            vk.vkDeviceWaitIdle(s.device);  // a frame in flight may still draw it
+            s.FreeImage(entry);
+            return;
+        }
+}
 
 bool Window::Open(const char* title, int width, int height, const std::function<void(float)>& prepare) {
     State& s = *s_;
@@ -520,6 +693,11 @@ void Window::EndFrame() {
 void Window::Close() {
     State& s = *s_;
     if (s.device) vk.vkDeviceWaitIdle(s.device);
+    if (s.imgui_vulkan)
+        for (auto& image : s.ui_images) s.FreeImage(image);
+    s.ui_images.clear();
+    if (s.device && s.ui_sampler) vk.vkDestroySampler(s.device, s.ui_sampler, nullptr);
+    s.ui_sampler = VK_NULL_HANDLE;
     if (s.imgui_vulkan) ImGui_ImplVulkan_Shutdown();
     s.imgui_vulkan = false;
     if (s.imgui) ImGui::DestroyContext();

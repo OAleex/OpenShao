@@ -73,7 +73,27 @@ void Browser::Reload(){
     for(const auto& i:rows)if(i.mod.type=="texture")textures.push_back(i.mod.id);
     auto order=TextureOrder(root_,textures);
     auto overlaps=FindOverlaps(root_,rows,order);
-    std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.quality=std::move(quality);state_.order=std::move(order);
+    std::map<std::string,Details> details;
+    for(const auto& i:rows)if(i.mod.ostp) {
+        const auto key=i.mod.id+"|"+i.mod.ostp->sha256;
+        auto cached=details_cache_.find(key);
+        if(cached==details_cache_.end()) {
+            std::string error;
+            const auto pack=texpack::PackFile::Open(root_/files::FromUtf8(i.mod.install_dir)/"pack.ostp",error);
+            Details d;
+            if(pack) {
+                const auto& info=pack->info();
+                d.description=info.description;d.credits=info.credits;d.website=info.website;d.license=info.license;
+                if(pack->logo()) {
+                    d.logo_width=pack->logo()->width;d.logo_height=pack->logo()->height;
+                    d.logo=std::make_shared<const std::vector<uint8_t>>(pack->logo()->rgba);
+                }
+            }
+            cached=details_cache_.emplace(key,std::move(d)).first;
+        }
+        details[i.mod.id]=cached->second;
+    }
+    std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.quality=std::move(quality);state_.order=std::move(order);state_.details=std::move(details);
     state_.overlaps=std::move(overlaps);state_.updates=false;
     for(const auto& m:state_.catalog)for(const auto& i:state_.installed)if(i.mod.id==m.id)if(const auto* v=LatestCompatible(m))if(CompareVersions(v->version,i.mod.version)>0)state_.updates=true;
 }
