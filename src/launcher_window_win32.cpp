@@ -224,7 +224,7 @@ Window::Window() : s_(new State) {}
 Window::~Window() { Close(); delete s_; }
 float Window::Scale() const { return s_->scale; }
 
-// Not done for Direct3D 12 yet: the launcher draws its own mark where a mod has no logo to show
+// Images are not implemented for Direct3D 12: returning 0 makes the launcher draw its default mark where a mod has no logo
 uint64_t Window::CreateImage(const uint8_t*, int, int) { return 0; }
 void Window::DestroyImage(uint64_t) {}
 
