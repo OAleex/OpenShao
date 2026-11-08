@@ -38,8 +38,8 @@ bool ReadAt(const std::filesystem::path& path, uint64_t offset, uint8_t* out, ui
     return bool(in) && bool(in.read(reinterpret_cast<char*>(out), std::streamsize(size)));
 }
 
-// Number of code points of well formed UTF-8 without control characters; false when it is not
-bool Utf8Length(const std::string& text, size_t& points) {
+// Number of code points of well formed UTF-8 without control characters (a line feed is allowed when `lines`); false when it is not
+bool Utf8Length(const std::string& text, size_t& points, bool lines = false) {
     points = 0;
     for (size_t i = 0; i < text.size();) {
         const uint8_t c = uint8_t(text[i]);
@@ -56,21 +56,21 @@ bool Utf8Length(const std::string& text, size_t& points) {
         }
         const uint32_t least[] = {0, 0x80, 0x800, 0x10000};
         if (code < least[extra] || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) return false;
-        if (code < 0x20 || code == 0x7F) return false;
+        if ((code < 0x20 || code == 0x7F) && !(lines && code == 0x0A)) return false;
         i += extra + 1;
         ++points;
     }
     return true;
 }
 
-bool Text(const mods::Json& object, const char* key, size_t most, bool required, std::string& out, std::string& error) {
+bool Text(const mods::Json& object, const char* key, size_t most, bool required, std::string& out, std::string& error, bool lines = false) {
     if (!object.Has(key)) {
         if (required) error = std::string("information: \"") + key + "\" is missing";
         return !required;
     }
     const auto* text = std::get_if<std::string>(&object.At(key).value);
     size_t points = 0;
-    if (!text || !Utf8Length(*text, points) || points > most || (required && points == 0)) {
+    if (!text || !Utf8Length(*text, points, lines) || points > most || (required && points == 0)) {
         error = std::string("information: \"") + key + "\" is not valid text within its limit";
         return false;
     }
@@ -144,9 +144,9 @@ bool ReadInfo(const std::vector<uint8_t>& bytes, uint32_t count, PackInfo& info,
         !Text(root, "version", 32, true, info.version, error) || !Text(root, "summary", 200, true, info.summary, error) ||
         !Text(root, "min_recomp", 32, true, info.min_recomp, error) || !Text(root, "type", 32, true, type, error) ||
         !List(root, "authors", 16, 64, info.authors, error) || !List(root, "features", 32, 64, info.features, error) ||
-        !Text(root, "description", 4000, false, info.description, error) ||
+        !Text(root, "description", 4000, false, info.description, error, true) ||
         !Text(root, "website", 256, false, info.website, error) || !Text(root, "license", 128, false, info.license, error) ||
-        !Text(root, "credits", 4000, false, info.credits, error))
+        !Text(root, "credits", 4000, false, info.credits, error, true))
         return false;
     if (!IdChars(info.id)) return Fail(error, "information: \"id\" has characters outside letters, digits, _ and -");
     if (!VersionChars(info.version) || !VersionChars(info.min_recomp))

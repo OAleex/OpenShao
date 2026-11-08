@@ -56,6 +56,7 @@ A JSON object.
 - **Required:** `id`, `name`, `version`, `authors` (a list of text), `summary`, `min_recomp`, `features` (it must include `"hdtextures"`), `type` (`"texture"`).
 - **Optional:** `description`, `website`, `license`, `credits`, and `preload`: a list of up to 4,096 hashes of 16 hexadecimal digits, the textures to have ready before the game draws them, those of the menus and of the first picture the game shows (version 1.1).
   The reader keeps only the ones the pack has, without repeats, in the order given. A value that is not a hash makes the file invalid.
+- **Text rules:** every text is well formed UTF-8 within its limit (in characters, not bytes) and has no control characters. The one exception is the **line feed (`\n`) in `description` and `credits`**, which may have paragraphs; a tab or a carriage return anywhere, and a line feed in any other text, makes the file invalid.
 - **Written by the tool that makes the file:** `texture_count`, `max_scale` (the largest factor over the original, an integer rounded up), `formats` (for example `["BC1","BC3"]`) and `format_version`.
 
 Numbers in the metadata are integers: the project's JSON reader does not accept fractions. `id` matches `[A-Za-z0-9_-]{1,80}`, the rule of the mod system. `version` and `min_recomp` are three numbers separated by dots.

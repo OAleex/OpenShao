@@ -208,6 +208,16 @@ int main() try {
     info_refused("name too long", R"({"id":"i","name":")" + std::string(65, 'n') +
                                       R"(","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
     info_refused("control character", R"({"id":"i","name":"a\u0001b","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("line feed in a name", R"({"id":"i","name":"a\nb","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("line feed in a summary", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"a\nb","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("tab in a description", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","description":"a\tb"})");
+    {
+        // a description and the credits may have paragraphs
+        std::string lines_error;
+        const auto lines = texpack::PackFile::Open(Write("lines.ostp", Build(Three(), R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","description":"one\n\ntwo","credits":"a\nb"})")), lines_error);
+        Check(lines != nullptr && lines->info().description == "one\n\ntwo" && lines->info().credits == "a\nb",
+              "line feeds in the description and the credits are allowed: " + lines_error);
+    }
     info_refused("count differs", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","texture_count":9})");
     {
         // text of a different alphabet counts by character, not by byte
