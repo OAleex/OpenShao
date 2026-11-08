@@ -117,7 +117,7 @@ The page shows the mod's logo, and **Details** opens its description, credits, w
 - **Video memory.** The pictures a pack puts in video memory are kept within a budget, and the ones not drawn for the longest time go first, never
   one drawn in the last two seconds. The budget is 60% of what the driver says the game may use (`VK_EXT_memory_budget` with Vulkan, the adapter's
   video memory budget with Direct3D 12, both of which leave out other programs), or 40% of the largest local heap (of the adapter's own memory with
-  Direct3D 12) without it. `OPENSHAO_HD_VRAM_MB` sets it by hand. A picture that is taken out is read again when the game draws it.
+  Direct3D 12) without it. `OPENSHAO_HD_VRAM_MB` sets it by hand. `OPENSHAO_HD_LOG_MISSES=1` writes to the log, once each, the textures the game drew that no pack replaces (`no replacement for <hash>`) and the kinds that cannot be replaced (`not replaceable`: pictures the game draws into, depth and linear textures). A picture that is taken out is read again when the game draws it.
 - The pack file can list the textures to have ready before the game draws them (`preload`): those of the menus, which keeps them from changing a
   few frames after they appear, and the first picture the game shows, which it draws for only a few frames before it stops to load.
 

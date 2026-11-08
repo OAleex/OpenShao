@@ -143,7 +143,8 @@ private:
     texpack::Residency residency_;
     texpack::ResidencyLimits limits_;
     uint64_t limits_frame_ = 0;       // presents_ plus one when `limits_` was last worked out
-    uint64_t empty_since_ = 0;        // presents_ plus one when the last texture heap became empty, 0 while it has textures
+    std::unordered_set<uint64_t> missed_hashes_, missed_kinds_;  // for OPENSHAO_HD_LOG_MISSES
+    uint64_t empty_since_ = 0;       // presents_ plus one when the last texture heap became empty, 0 while it has textures
     uint64_t limits_logged_ = 0;      // the budget the log last named
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter_;  // for the driver's video memory budget; null when it cannot be had
     bool adapter_tried_ = false;

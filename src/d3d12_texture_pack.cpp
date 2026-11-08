@@ -153,6 +153,17 @@ void D3D12HdTextures::Lookup(HdTexState& state, const gpu::TextureDesc& desc, co
             LOGI("Texture pack (Direct3D 12): %016llx is no longer replaceable, at frame %llu",
                  static_cast<unsigned long long>(before_hash), static_cast<unsigned long long>(presents_));
     }
+    // OPENSHAO_HD_LOG_MISSES=1 lists the textures the game uploads that no pack replaces, once each: those the pack format cannot replace
+    // (render targets, depth, cube, volume and palette textures) and those whose hash no pack has (not from the game's archive).
+    static const bool log_misses = std::getenv("OPENSHAO_HD_LOG_MISSES") != nullptr;
+    if (source_ && log_misses && !(guest && texpack::CanReplace(desc, format))) {
+        const uint64_t key = (uint64_t(desc.width) << 40) ^ (uint64_t(desc.height) << 20) ^ (uint64_t(desc.format) << 8) ^ (desc.cube ? 1 : 0) ^
+                             (desc.linear ? 2 : 0) ^ (guest ? 4 : 0) ^ (desc.depth > 1 ? 8 : 0);
+        if (missed_kinds_.insert(key).second)
+            LOGI("Texture pack (Direct3D 12): not replaceable: %ux%u, guest format 0x%x, depth %u, %s%s%s%s", desc.width, desc.height,
+                 unsigned(desc.format), unsigned(desc.depth), desc.cube ? "cube " : "", desc.linear ? "linear " : "", format.depth ? "depth " : "",
+                 guest ? "" : "no guest memory");
+    }
     if (!source_ || !guest || !texpack::CanReplace(desc, format)) return;
     const uint32_t bytes = gpu::LevelSize(desc, 0);
     const uint64_t hash = gpu::Hash(guest, bytes);
@@ -161,7 +172,13 @@ void D3D12HdTextures::Lookup(HdTexState& state, const gpu::TextureDesc& desc, co
     hashed_bytes_ += bytes;
     if (bad_.count(hash)) return;
     const auto entry = texpack::Match(*source_, desc, hash);
-    if (!entry) return;
+    if (!entry) {
+        if (log_misses && missed_hashes_.insert(hash).second && missed_hashes_.size() <= 2000)
+            LOGI("Texture pack (Direct3D 12): no replacement for %016llx, %ux%u, guest format 0x%x, %u bytes, at frame %llu%s",
+                 static_cast<unsigned long long>(hash), desc.width, desc.height, unsigned(desc.format), bytes,
+                 static_cast<unsigned long long>(presents_), source_->Find(hash) ? " (its proportion differs)" : "");
+        return;
+    }
     state.rep = entry;
     state.rep_hash = hash;
     ++matches_;
