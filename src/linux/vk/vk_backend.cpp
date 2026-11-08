@@ -22,6 +22,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <cstdlib>
 #include <unordered_set>
 #include <vector>
 
@@ -2239,18 +2240,40 @@ bool SameTexture(const Tex& tx, const TextureDesc& d) {
 
 std::unordered_set<uint64_t> g_bad_replacements;
 
-// The texture pack's replacement for a game texture, matched by the hash of its level 0 bytes
+// The texture pack's replacement for a game texture, matched by the hash of its level 0 bytes.
+// OPENSHAO_HD_LOG_MISSES=1 lists, once each, the textures the game draws that no pack replaces: the kinds the pack format cannot replace
+// (render targets, depth, cube, volume, linear and palette textures) and the hashes no pack has.
 std::optional<texpack::SourceEntry> FindReplacement(const texpack::PackSource* source, const TextureDesc& d,
-                                                    const FormatInfo& fi, const uint8_t* guest, uint64_t& hash) {
+                                                    const FormatInfo& fi, const uint8_t* guest, uint64_t& hash, uint64_t frame) {
     constexpr uint32_t kFmtP8 = 0x0B;
-    if (!source || d.cube || d.depth != 1 || d.linear || fi.depth || d.format == kFmtP8) return std::nullopt;
-    if (fi.host != Host::BGRA8 && fi.host != Host::BC1 && fi.host != Host::BC2 && fi.host != Host::BC3) return std::nullopt;
+    static const bool log_misses = std::getenv("OPENSHAO_HD_LOG_MISSES") != nullptr;
+    static std::unordered_set<uint64_t> missed_kinds, missed_hashes;
+    if (!source) return std::nullopt;
+    const bool replaceable = !d.cube && d.depth == 1 && !d.linear && !fi.depth && d.format != kFmtP8 &&
+                             (fi.host == Host::BGRA8 || fi.host == Host::BC1 || fi.host == Host::BC2 || fi.host == Host::BC3);
+    if (!replaceable) {
+        if (log_misses) {
+            const uint64_t key = (uint64_t(d.width) << 40) ^ (uint64_t(d.height) << 20) ^ (uint64_t(d.format) << 8) ^ (d.cube ? 1 : 0) ^
+                                 (d.linear ? 2 : 0) ^ (d.depth > 1 ? 8 : 0);
+            if (missed_kinds.insert(key).second)
+                LOGI("Texture pack: not replaceable: %ux%u, guest format 0x%x, depth %u, %s%s%s", d.width, d.height, unsigned(d.format),
+                     unsigned(d.depth), d.cube ? "cube " : "", d.linear ? "linear " : "", fi.depth ? "depth " : "");
+        }
+        return std::nullopt;
+    }
     hash = Hash(guest, LevelSize(d, 0));
     texpack::NoteHash(LevelSize(d, 0));
     if (g_bad_replacements.count(hash)) return std::nullopt;
     auto entry = source->Find(hash);
     // a replacement is a redraw of the same picture
-    if (entry && uint64_t(entry->width) * d.height != uint64_t(entry->height) * d.width) return std::nullopt;
+    const bool other_proportion = entry && uint64_t(entry->width) * d.height != uint64_t(entry->height) * d.width;
+    if (!entry || other_proportion) {
+        if (log_misses && missed_hashes.insert(hash).second && missed_hashes.size() <= 2000)
+            LOGI("Texture pack: no replacement for %016llx, %ux%u, guest format 0x%x, %u bytes, at frame %llu%s",
+                 static_cast<unsigned long long>(hash), d.width, d.height, unsigned(d.format), LevelSize(d, 0),
+                 static_cast<unsigned long long>(frame), other_proportion ? " (its proportion differs)" : "");
+        return std::nullopt;
+    }
     return entry;
 }
 
@@ -2716,7 +2739,7 @@ void VulkanBackend::BindGuestTexture(const State& s, int stage, const TextureDes
     uint64_t rep_hash = 0;
     if (!same) {
         if (!CreateTexture(tx, d, fi, key)) return;
-        tx.rep = FindReplacement(hd_source_.get(), d, fi, static_cast<const uint8_t*>(kernel::HostPtr(d.data)), rep_hash);
+        tx.rep = FindReplacement(hd_source_.get(), d, fi, static_cast<const uint8_t*>(kernel::HostPtr(d.data)), rep_hash, presents_);
         tx.rep_hash = tx.rep ? rep_hash : 0;
     }
     // Check dirty epochs and sampled bytes once per frame.
@@ -2734,7 +2757,7 @@ void VulkanBackend::BindGuestTexture(const State& s, int stage, const TextureDes
             tx.sig = sig;
             if (hd_source_ && same) {
                 // the game rewrote the memory: the replacement may no longer apply
-                const auto rep = FindReplacement(hd_source_.get(), d, fi, p, rep_hash);
+                const auto rep = FindReplacement(hd_source_.get(), d, fi, p, rep_hash, presents_);
                 if (rep.has_value() != tx.rep.has_value() || (rep && rep_hash != tx.rep_hash)) {
                     tx.rep = rep;
                     tx.rep_hash = rep ? rep_hash : 0;
