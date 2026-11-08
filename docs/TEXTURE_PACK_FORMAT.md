@@ -136,3 +136,5 @@ The reader does these checks in order. Any failure refuses the file and none of 
 
 The game reads the largest 2D image size of the graphics card. A texture past it skips levels (the same rule as Medium) until it fits, and if it still does not fit the game's own texture is used.
 Sums and products of sizes are checked for overflow, the reader never reads past `file_size`, and a short read makes the file invalid. At run time, a texture whose data cannot be read stays the game's own.
+
+**Sizes up to 8K.** The largest texture of the game is 1,024 pixels on a side, so a side of 8192 (8K, 8x) is the format's limit and a texture that large has 14 levels. It costs about 85 MB of video memory as BC3. Cards with a lot of memory can show many; a card of 4 GB shows a few at once, and the runtime keeps within a budget of the memory the driver reports and takes out the pictures not drawn for the longest time. Sizes beyond 4K have not been measured in the game.
