@@ -796,6 +796,8 @@ uint32_t OpenOnDisc(''')
         backend = adapt_backend(backend, replace_once)
     from prepare_graphics_cache import adapt_backend as adapt_graphics_cache
     backend = adapt_graphics_cache(backend, replace_once)
+    from prepare_texture_packs import adapt_backend as adapt_texture_packs
+    backend = adapt_texture_packs(backend, replace_once)
     from prepare_pipeline_precompile import adapt_backend as adapt_pipeline_precompile
     backend = adapt_pipeline_precompile(backend, replace_once)
     from prepare_perf_present import adapt_backend as adapt_perf_present

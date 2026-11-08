@@ -80,6 +80,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_audio_runtime.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/audio_xaudio2.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_graphics_cache.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/d3d12_cache.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/d3d12_cache.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_texture_packs.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/d3d12_texture_pack.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/d3d12_texture_pack.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_pipeline_precompile.py" "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_pipeline_layout.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_perf_present.py" "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_pipeline_pixel_key.py")
 file(GLOB_RECURSE OPENSHAO_MOD_HOST_SOURCES CONFIGURE_DEPENDS
@@ -316,6 +317,7 @@ set_source_files_properties(resources/app.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_
 target_sources(OpenShao PRIVATE resources/app.rc src/runtime_paths.cpp src/game_setup.cpp src/game_import.cpp "${HOST_ADAPTED}/settings.cpp" src/raster_compat.cpp src/controller.cpp src/save_storage.cpp src/performance_overlay.cpp src/texture_pack.cpp src/texture_dev_folder.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/texture_loader.cpp src/texture_residency.cpp "${HOST_ADAPTED}/files.cpp")
 target_sources(OpenShao PRIVATE src/shadow_depth_format.cpp)
 target_sources(OpenShao PRIVATE src/graphics_cache.cpp src/d3d12_cache.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp)
+target_sources(OpenShao PRIVATE src/texture_pack_match.cpp src/texture_range_allocator.cpp src/texture_budget.cpp src/d3d12_texture_pack.cpp)
 target_sources(OpenShao PRIVATE src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp src/difficulty.cpp src/difficulty_progress.cpp src/save_pages.cpp src/save_pages_book.cpp src/audio_flags.cpp src/audio_options.cpp)
 target_sources(OpenShao PRIVATE src/survival_mode.cpp src/survival_session.cpp src/survival_levels.cpp src/survival_unlock.cpp)
 target_sources(OpenShao PRIVATE src/model_instances.cpp src/audio_load_wait.cpp)
@@ -546,6 +548,18 @@ add_executable(recomp_texture_residency_test tests/recomp_texture_residency_test
 target_include_directories(recomp_texture_residency_test PRIVATE src)
 target_link_options(recomp_texture_residency_test PRIVATE -fuse-ld=lld)
 add_test(NAME recomp_texture_residency COMMAND recomp_texture_residency_test)
+add_executable(recomp_texture_pack_match_test tests/recomp_texture_pack_match_test.cpp src/texture_pack_match.cpp)
+target_include_directories(recomp_texture_pack_match_test PRIVATE src "${OPENSHAO_RECOMP_SDK}/runtime")
+target_link_options(recomp_texture_pack_match_test PRIVATE -fuse-ld=lld)
+add_test(NAME recomp_texture_pack_match COMMAND recomp_texture_pack_match_test)
+add_executable(recomp_texture_range_allocator_test tests/recomp_texture_range_allocator_test.cpp src/texture_range_allocator.cpp)
+target_include_directories(recomp_texture_range_allocator_test PRIVATE src)
+target_link_options(recomp_texture_range_allocator_test PRIVATE -fuse-ld=lld)
+add_test(NAME recomp_texture_range_allocator COMMAND recomp_texture_range_allocator_test)
+add_executable(recomp_texture_budget_test tests/recomp_texture_budget_test.cpp src/texture_budget.cpp)
+target_include_directories(recomp_texture_budget_test PRIVATE src)
+target_link_options(recomp_texture_budget_test PRIVATE -fuse-ld=lld)
+add_test(NAME recomp_texture_budget COMMAND recomp_texture_budget_test)
 add_executable(recomp_texture_dev_folder_test tests/recomp_texture_dev_folder_test.cpp src/texture_dev_folder.cpp src/mods/json.cpp src/mods/sha256.cpp)
 target_include_directories(recomp_texture_dev_folder_test PRIVATE src tests)
 target_link_options(recomp_texture_dev_folder_test PRIVATE -fuse-ld=lld)

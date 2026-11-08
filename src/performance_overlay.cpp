@@ -1,3 +1,12 @@
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include "performance_overlay.h"
 #include "mods/version.h"
 #include "texture_pack_stats.h"
@@ -32,8 +41,15 @@ void SetVisible(bool value) { visible.store(value, std::memory_order_relaxed); }
 bool Message(uint32_t message, uintptr_t key, intptr_t flags) {
     constexpr uint32_t keydown = 0x100, keyup = 0x101, f9 = 0x78;
     if (key != f9 || (message != keydown && message != keyup)) return false;
-    if (message == keydown && !(uintptr_t(flags) & (uintptr_t(1) << 30)))
-        visible.store(!Visible(), std::memory_order_relaxed);
+    const bool first = message == keydown && !(uintptr_t(flags) & (uintptr_t(1) << 30));
+#ifdef _WIN32
+    // Ctrl+F9 marks the log where a scene began, for the texture pack measurements; the panel keeps plain F9.
+    if (GetKeyState(VK_CONTROL) & 0x8000) {
+        if (first) texpack::RequestMarker();
+        return true;
+    }
+#endif
+    if (first) visible.store(!Visible(), std::memory_order_relaxed);
     return true;
 }
 std::string Format(double fps) {
