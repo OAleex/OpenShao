@@ -102,6 +102,15 @@ It also supports xdelta3 application headers and Adler-32 checks for each window
 The OpenShao-Mods release builder uses xdelta3 with `-S none`.
 The game applies patches without an xdelta3 executable.
 
+## Texture packs
+
+PNG pictures of the developer mode's texture folder are decoded with [stb_image 2.30](https://github.com/nothings/stb), PNG only.
+The header is vendored in `src/vendor/stb_image.h` and is available under the MIT license or the public domain.
+See the [stb_image license](licenses/stb_image-LICENSE.txt).
+
+Texture pack files (`.ostp`) are read by project code in `src/texture_*.cpp`. The format is described in `docs/TEXTURE_PACK_FORMAT.md`.
+Packs are extracted and compiled with the separate [OpenShao-ModKit](https://github.com/HexAbyss/OpenShao-ModKit) tool, which the game does not need to run.
+
 ## Routine scripts
 
 Routine mods use [Lua 5.4.9](https://www.lua.org/) under the MIT license.

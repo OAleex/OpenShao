@@ -63,6 +63,7 @@ OpenShao migrates recognized data and saves from earlier releases to the current
 - Restored missing and unused dialogue using only the original recordings. Lines whose original
   trigger is lost are placed by their map, scene and script context; this is optional.
 - Optional enhancements, including Easy and Monk difficulties and cinematic bars, plus ten pages of save slots.
+- Texture packs (`.ostp`) that replace the game's textures with larger ones, installed on the Mods page. See the [format](docs/TEXTURE_PACK_FORMAT.md).
 - Separate text and voice languages, with an optional Brazilian Portuguese fan translation and dub as a language pack mod.
 - A launcher with [mods](https://github.com/OAleex/OpenShao-Mods), automatic updates and optional Discord Rich Presence.
 
@@ -132,7 +133,7 @@ For a controller without a mapping, put an SDL `gamecontrollerdb.txt` in the dat
 ### How do I install mods or the Brazilian Portuguese fan translation?
 
 Open **Mods** in the launcher. Select **Install**.
-For a downloaded `.tar.xz`, use **Install from file**.
+For a downloaded `.tar.xz` or a texture pack (`.ostp`), use **Install from file**.
 Choose the language in **Konfigure Recompilation > Language**.
 Mod authors can read the [mod guide](docs/MODS.md).
 

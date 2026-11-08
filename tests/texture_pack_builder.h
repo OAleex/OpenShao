@@ -104,4 +104,3 @@ inline std::vector<Tex> Three() {
             {0x20, 32, 16, 32, 16, 6, 1, 0, 0x40},   // as large as the game's, BC1
             {0x30, 128, 128, 32, 32, 8, 2, 0, 0x60}};
 }
-
