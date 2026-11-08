@@ -2350,7 +2350,7 @@ VulkanBackend::HdUpload VulkanBackend::UploadHd(const texpack::Loaded& loaded) {
         }
         if (needed > loaded.blocks.size()) return HdUpload::Data;
     }
-    // The device has a largest image side. A picture past it starts at a smaller level, as the Medium quality does; if no level fits, the
+    // The device has a largest image side. A picture past it starts at a smaller level, as the Low quality does; if no level fits, the
     // game's own texture stays.
     const uint32_t limit = gpu_props_.limits.maxImageDimension2D;
     uint32_t begin = first;

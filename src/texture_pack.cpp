@@ -125,7 +125,7 @@ public:
         const auto it = set_->index.find(hash);
         if (it == set_->index.end()) return std::nullopt;
         const Entry& e = it->second.entry;
-        // the folders do not say how large the game's texture is, so the Medium quality is the High one
+        // the folders do not say how large the game's texture is, so the Low quality is the High one
         return SourceEntry{hash, uint16_t(e.w), uint16_t(e.h), uint8_t(e.levels), BcFormat::Bc3, 0, 0};
     }
     bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
@@ -211,7 +211,7 @@ void SetPacks(const std::vector<PackSpec>& packs) {
                 continue;
             }
             LOGI("Texture pack: file: %zu replacements, %zu to load ahead, %s quality, file %s", file->entries().size(),
-                 file->info().preload.size(), spec.quality == Quality::Medium ? "medium" : "high", path.string().c_str());
+                 file->info().preload.size(), spec.quality == Quality::Low ? "low" : "high", path.string().c_str());
             members.push_back(AsSource(std::move(file), spec.quality));
         } else {
             LOGE("Texture pack: %s is neither a folder nor a file", path.string().c_str());

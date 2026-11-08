@@ -191,12 +191,12 @@ int main(int argc,char** argv){try{
     {   // What the user chose is kept by the mod's id, apart from the mod's own files
         const auto folder=fs::temp_directory_path()/"openshao-mod-settings-test";fs::remove_all(folder);
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"Nothing chosen means High, even without the folder");
-        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Low);
         mods::WriteTextureQuality(folder,"B.x-1",texpack::Quality::High);
-        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::High,
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Low&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::High,
                 "Each mod keeps its own choice");
-        mods::WriteTextureQuality(folder,"B.x-1",texpack::Quality::Medium);
-        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::Medium,
+        mods::WriteTextureQuality(folder,"B.x-1",texpack::Quality::Low);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Low&&mods::ReadTextureQuality(folder,"B.x-1")==texpack::Quality::Low,
                 "Changing one choice keeps the others");
         mods::WriteTextureQuality(folder,"A",texpack::Quality::High);
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A choice can change back");
@@ -205,14 +205,14 @@ int main(int argc,char** argv){try{
         // Writing must not start from nothing: a damaged file would be replaced by one key and every other choice lost
         const auto damaged=[&]{std::ifstream f(folder/"settings.toml");return std::string(std::istreambuf_iterator<char>(f),{});};
         bool refused=false;
-        try{mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);}catch(const std::exception&){refused=true;}
+        try{mods::WriteTextureQuality(folder,"A",texpack::Quality::Low);}catch(const std::exception&){refused=true;}
         Require(refused&&damaged()=="this is [not toml","A file that cannot be read is not written over");
         refused=false;
         try{mods::WriteTextureOrder(folder,{"A","B"});}catch(const std::exception&){refused=true;}
         Require(refused&&damaged()=="this is [not toml","The order is not written over it either");
         fs::remove(folder/"settings.toml");
-        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
-        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,"With the damaged file gone, a choice is written");
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Low);
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Low,"With the damaged file gone, a choice is written");
         fs::remove_all(folder);
         // The order of the texture mods: the user's first, then the others as installed, and none that is gone
         using Ids=std::vector<std::string>;
@@ -221,8 +221,8 @@ int main(int argc,char** argv){try{
         Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"C","A","B"}),"The user's order comes first and the others follow");
         Require(mods::TextureOrder(folder,{"A","D"})==Ids({"A","D"}),"A mod that is no longer installed leaves the order");
         Require(mods::TextureOrder(folder,{})==Ids{},"No mods, no order");
-        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
-        Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"C","A","B"})&&mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Low);
+        Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"C","A","B"})&&mods::ReadTextureQuality(folder,"A")==texpack::Quality::Low,
                 "The order and the quality share the file without touching each other");
         fs::remove_all(folder);
     }

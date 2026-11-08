@@ -810,15 +810,15 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             if (remove.clicked) s.RemoveMod(mod);
             float link_x = remove_x + list.Measure(Weight::Medium, 18, "Remove").x + 18;
             if (const auto quality = view.quality.find(mod.id); quality != view.quality.end()) {
-                // A texture pack file: High uses every level of its textures, Medium leaves them at twice the game's size
-                const bool medium = quality->second == texpack::Quality::Medium;
-                const std::string label = std::string("Quality: ") + (medium ? "Medium" : "High");
+                // A texture pack file: High uses every level of its textures, Low leaves them at twice the game's size
+                const bool low = quality->second == texpack::Quality::Low;
+                const std::string label = std::string("Quality: ") + (low ? "Low" : "High");
                 const float quality_x = link_x, quality_w = list.Measure(Weight::Medium, 18, label.c_str()).x;
                 ImGui::BeginDisabled(view.busy);
                 const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + quality_w, meta_y + 17);
                 ImGui::EndDisabled();
                 list.Text(Weight::Medium, 18, quality_x, meta_y, Rgb(choose.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), label.c_str());
-                if (choose.clicked) s.mods->SetQuality(mod.id, medium ? texpack::Quality::High : texpack::Quality::Medium);
+                if (choose.clicked) s.mods->SetQuality(mod.id, low ? texpack::Quality::High : texpack::Quality::Low);
                 link_x += quality_w + 18;
             }
             if (!facts.empty()) {

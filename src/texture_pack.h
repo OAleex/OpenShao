@@ -16,7 +16,7 @@ struct Entry {
 };
 // Replaces the packs in use, the first being the one that wins when several have a texture. Each is a folder that holds an
 // index.txt, or a texture pack file. One that cannot be read is skipped. An empty list turns the replacement off.
-// The quality applies to a pack file: Medium starts each texture at the level that leaves it at twice the game's size. A
+// The quality applies to a pack file: Low starts each texture at the level that leaves it at twice the game's size. A
 // folder pack is always read whole.
 struct PackSpec {
     std::filesystem::path path;
