@@ -821,6 +821,8 @@ private:
     uint64_t hd_generation_ = ~0ull, hd_pumped_ = ~0ull;
     uint32_t scene_world_ = ~0u, scene_room_ = ~0u, scene_flag_a_ = ~0u, scene_flag_b_ = ~0u;  // as the game says where it is
     texpack::Loader hd_loader_;
+    std::vector<texpack::Loaded> hd_waiting_;               // read and not yet sent to the GPU
+    std::unordered_map<uint64_t, uint64_t> hd_wanted_;      // hash to the last frame a draw waited for it
     texpack::Residency hd_residency_;  // which replacements are in video memory and which to take out when they take too much
     texpack::ResidencyLimits hd_limits_;
     uint64_t hd_limits_frame_ = 0;  // presents_ plus one when hd_limits_ was last worked out
@@ -2470,6 +2472,8 @@ void VulkanBackend::SyncHdSource() {
     hd_evicted_.clear();
     hd_memory_failures_.clear();
     hd_read_failures_.clear();
+    hd_waiting_.clear();
+    hd_wanted_.clear();
     hd_limits_frame_ = 0;
     g_bad_replacements.clear();
     for (auto& entry : textures_) {
@@ -2587,15 +2591,29 @@ void VulkanBackend::PumpHdUploads() {
     using Clock = std::chrono::steady_clock;
     constexpr uint64_t kBytesPerFrame = 16ull << 20;
     constexpr auto kTimePerFrame = std::chrono::microseconds(2000);
+    constexpr uint64_t kWantedFrames = 120;                // a texture drawn this recently counts as wanted
+    constexpr uint64_t kMaxWaitingBytes = 256ull << 20;    // read and not yet sent to the GPU, at most
     const auto start = Clock::now();
     uint64_t bytes = 0;
     const texpack::ResidencyLimits limits = HdLimits();
     EvictHd(hd_residency_.Plan(presents_, limits).drop);  // the budget fell, or an earlier frame left it over
-    std::vector<texpack::Loaded> ready;
-    while (bytes < kBytesPerFrame && Clock::now() - start < kTimePerFrame) {
-        ready.clear();
-        if (!hd_loader_.TakeReady(ready, 1)) break;
-        texpack::Loaded& r = ready[0];
+    hd_loader_.TakeReady(hd_waiting_);
+    // What a draw is waiting for goes first: the menus' preload, which nothing draws yet, must not hold up a texture that is on screen,
+    // because a frame sends only as many as its budget allows.
+    std::stable_partition(hd_waiting_.begin(), hd_waiting_.end(), [&](const texpack::Loaded& loaded) {
+        const auto asked = hd_wanted_.find(loaded.hash);
+        return asked != hd_wanted_.end() && presents_ - asked->second <= kWantedFrames;
+    });
+    uint64_t held = 0;
+    for (const auto& loaded : hd_waiting_) held += loaded.blocks.size();
+    while (held > kMaxWaitingBytes && !hd_waiting_.empty()) {  // the least wanted go; a texture that is drawn asks again
+        held -= hd_waiting_.back().blocks.size();
+        hd_loader_.Recycle(std::move(hd_waiting_.back().blocks));
+        hd_waiting_.pop_back();
+    }
+    size_t used = 0;
+    for (; used < hd_waiting_.size() && bytes < kBytesPerFrame && Clock::now() - start < kTimePerFrame; ++used) {
+        texpack::Loaded& r = hd_waiting_[used];
         if (!r.ok) {
             // the texture asks again after a while, so a read that failed once (a busy disk, a file that was briefly out of reach)
             // gets another try; only the third failure turns the replacement off
@@ -2641,6 +2659,7 @@ void VulkanBackend::PumpHdUploads() {
         }
         hd_loader_.Recycle(std::move(r.blocks));
     }
+    hd_waiting_.erase(hd_waiting_.begin(), hd_waiting_.begin() + used);
 }
 
 // The replacement of a texture, once it is here; until then the texture is asked for, again before the request grows old
@@ -2678,6 +2697,7 @@ void VulkanBackend::UseHd(Tex& tx) {
     if (tx.last_wait && presents_ + 1 - tx.last_wait > 60) tx.first_request = tx.waited_frames = 0;
     if (tx.last_wait != presents_ + 1) ++tx.waited_frames;
     tx.last_wait = presents_ + 1;
+    hd_wanted_[tx.rep_hash] = presents_;
     constexpr uint64_t kAskAgainEvery = 30;  // frames; a request is dropped after 240 not asked for again
     if (!tx.requested || presents_ + 1 - tx.requested >= kAskAgainEvery) {
         hd_loader_.Request(tx.rep_hash);
