@@ -469,6 +469,17 @@ target_compile_definitions(recomp_launcher_window_test PRIVATE _CRT_SECURE_NO_WA
 target_link_options(recomp_launcher_window_test PRIVATE -fuse-ld=lld)
 target_link_libraries(recomp_launcher_window_test PRIVATE d3d12 dxgi dxguid d3dcompiler dwmapi)
 add_test(NAME recomp_launcher_window_failure COMMAND recomp_launcher_window_test)
+add_executable(recomp_launcher_image_test tests/recomp_launcher_image_test.cpp
+    "${HOST_ADAPTED}/imgui_impl_dx12.cpp" "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
+    "${OPENSHAO_RECOMP_SDK}/runtime/core/log.cpp" "${imgui_SOURCE_DIR}/imgui.cpp"
+    "${imgui_SOURCE_DIR}/imgui_draw.cpp" "${imgui_SOURCE_DIR}/imgui_widgets.cpp" "${imgui_SOURCE_DIR}/imgui_tables.cpp")
+target_include_directories(recomp_launcher_image_test PRIVATE src "${OPENSHAO_RECOMP_SDK}/runtime")
+target_include_directories(recomp_launcher_image_test SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
+target_compile_definitions(recomp_launcher_image_test PRIVATE _CRT_SECURE_NO_WARNINGS
+    OPENSHAO_LAUNCHER_WINDOW_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/src/launcher_window_win32.cpp")
+target_link_options(recomp_launcher_image_test PRIVATE -fuse-ld=lld)
+target_link_libraries(recomp_launcher_image_test PRIVATE d3d12 dxgi dxguid d3dcompiler dwmapi)
+add_test(NAME recomp_launcher_image COMMAND recomp_launcher_image_test)
 add_executable(recomp_capabilities_test tests/recomp_capabilities_test.cpp)
 target_include_directories(recomp_capabilities_test PRIVATE src "${HOST_ADAPTED}" "${OPENSHAO_RECOMP_SDK}/runtime")
 target_link_options(recomp_capabilities_test PRIVATE -fuse-ld=lld)
