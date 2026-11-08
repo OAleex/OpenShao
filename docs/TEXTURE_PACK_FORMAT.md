@@ -54,7 +54,7 @@ There is no header checksum: the cross checks of section 8 and the SHA-256 of th
 A JSON object.
 
 - **Required:** `id`, `name`, `version`, `authors` (a list of text), `summary`, `min_recomp`, `features` (it must include `"hdtextures"`), `type` (`"texture"`).
-- **Optional:** `description`, `website`, `license`, `credits`, and `preload`: a list of up to 4,096 hashes of 16 hexadecimal digits, the textures to have ready before the menus draw them (version 1.1).
+- **Optional:** `description`, `website`, `license`, `credits`, and `preload`: a list of up to 4,096 hashes of 16 hexadecimal digits, the textures to have ready before the game draws them, those of the menus and of the first picture the game shows (version 1.1).
   The reader keeps only the ones the pack has, without repeats, in the order given. A value that is not a hash makes the file invalid.
 - **Written by the tool that makes the file:** `texture_count`, `max_scale` (the largest factor over the original, an integer rounded up), `formats` (for example `["BC1","BC3"]`) and `format_version`.
 
