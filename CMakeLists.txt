@@ -650,6 +650,7 @@ add_test(NAME recomp_startup_diagnostics COMMAND "${Python3_EXECUTABLE}" "${CMAK
     --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --main "${HOST_ADAPTED}/main.cpp")
 add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_model_instances_test.py"
     --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
+    add_test(NAME recomp_texture_pack_source COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_texture_pack_source_test.py" --exe "$<TARGET_FILE:OpenShao>" --disc "${OPENSHAO_TEST_DISC}")
 add_test(NAME recomp_setup_dialog COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_setup_dialog_test.py" --exe "$<TARGET_FILE:OpenShao>" --xbe "${OPENSHAO_GAME_XBE}")
 install(TARGETS OpenShao RUNTIME DESTINATION .)
 install(FILES resources/readme.txt DESTINATION .)
