@@ -32,17 +32,22 @@ uint32_t TopMenu(){
 constexpr std::array<std::string_view,4> Keys{
     "survival.complete","survival.unlock_new","survival.unlock_pending","survival.unlock_saved"};
 static_assert(PortalSavedLabel-LabelBase==Keys.size()-1);
-enum class Page {Idle,Modes,Players,Characters,Difficulty,Starting};
+enum class Page {Idle,Modes,Online,Players,Characters,Difficulty,Starting};
 Page page=Page::Idle,view=Page::Idle;
 // Game Mode lists: add a mode here and handle its row in AcceptMode().
-enum ModeRow : unsigned {SurvivalRow};
-constexpr std::array<std::string_view,1> ModeOptions{"game_mode.survival"};
+enum ModeRow : unsigned {SurvivalRow,OnlineRow};
+constexpr std::array<std::string_view,2> ModeOptions{"game_mode.survival","game_mode.online"};
+// Online modes reuse the main menu's labels so each name matches its offline mode.
+enum OnlineModeRow : unsigned {OnlineKoopRow,OnlineVersusRow,OnlineSurvivalRow};
+constexpr std::array<std::string_view,3> OnlineOptions{"main.koop","main.versus","game_mode.survival"};
 constexpr std::array<std::string_view,2> PlayerOptions{"main.single_player","main.koop"};
 std::span<const std::string_view> Options(Page shown){
     if(shown==Page::Modes)return ModeOptions;
+    if(shown==Page::Online)return OnlineOptions;
     if(shown==Page::Players)return PlayerOptions;
     return {};
 }
+// Online modes are always fully unlocked for balance, so only offline Survival can be locked.
 bool Locked(Page shown,unsigned row){return shown==Page::Modes && row==SurvivalRow && !unlock::Available();}
 bool release=true;
 bool direction_held=true;
@@ -122,7 +127,7 @@ void NativeAccept(X86Context& ctx,uint8_t* base,unsigned row){
 void ShowMenu(X86Context& ctx,Page next,unsigned selected=0){
     page=view=next;release=true;direction_held=true;
     Select(ctx,selected);
-    LOGI("Survival menu: %s",next==Page::Modes?"modes":"players");
+    LOGI("Game Mode menu: %s",next==Page::Modes?"modes":next==Page::Online?"online":"players");
 }
 }
 void Open(X86Context& ctx,uint8_t*){if(EnsureStorage())ShowMenu(ctx,Page::Modes);}
@@ -131,8 +136,8 @@ uint32_t Label(uint32_t id){
     if(id==RulesLabel)return storage+TableBytes+uint32_t(Keys.size())*TextBytes;
     return id>=LabelBase && id<LabelBase+Keys.size()?storage+TableBytes+(id-LabelBase)*TextBytes:0;
 }
-bool MedallionMenu(){return page==Page::Modes || page==Page::Players;}
-bool OverlayShown(){return view==Page::Modes || view==Page::Players;}
+bool MedallionMenu(){return page==Page::Modes || page==Page::Online || page==Page::Players;}
+bool OverlayShown(){return view==Page::Modes || view==Page::Online || view==Page::Players;}
 // Emblem shortened 28 canvas pixels per row, as in Konfigure Recompilation.
 float OrnamentExtension(){
     const auto rows=Options(view).size();
@@ -176,6 +181,7 @@ bool MenuInput(X86Context& ctx,uint8_t* base,bool keyboard_enter){
     if(!release && (pressed&0x20)){
         StopAnnouncement(ctx);
         if(page==Page::Players){Sound(ctx,0x6CA3BC);ShowMenu(ctx,Page::Modes,SurvivalRow);kernel::Return(ctx,0,2);}
+        else if(page==Page::Online){Sound(ctx,0x6CA3BC);ShowMenu(ctx,Page::Modes,OnlineRow);kernel::Return(ctx,0,2);}
         else {page=view=Page::Idle;Sound(ctx,0x6CA3BC);Select(ctx,menu::MainGameModeRow);kernel::Return(ctx,0,2);}
         return true;
     }
@@ -193,8 +199,13 @@ bool MenuInput(X86Context& ctx,uint8_t* base,bool keyboard_enter){
             NativeAccept(ctx,base,2);
             kernel::W32(0x598DF0+0x30,confirming_port);
             kernel::Return(ctx,0,2);
+        }else if(page==Page::Online){
+            // Online sessions are not implemented yet; the rows only reserve the menu layout.
+            Sound(ctx,0x6CA3BC);release=true;kernel::Return(ctx,0,2);
         }else if(selected==SurvivalRow){
             Sound(ctx,0x6CA3B8);AnnounceMode(ctx);ShowMenu(ctx,Page::Players);kernel::Return(ctx,0,2);
+        }else if(selected==OnlineRow){
+            Sound(ctx,0x6CA3B8);ShowMenu(ctx,Page::Online);kernel::Return(ctx,0,2);
         }else kernel::Return(ctx,0,2);
         return true;
     }

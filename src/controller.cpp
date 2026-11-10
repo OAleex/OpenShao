@@ -17,6 +17,7 @@
 #include "host.h"
 #include "keyboard.h"
 #include "mouse.h"
+#include "netplay/session.h"
 #include "app/app.h"
 #include "core/input.h"
 #include "core/log.h"
@@ -362,7 +363,9 @@ void Init() {
     }
     LOGI("input: SDL %d, %d gamepads; PS4 Bluetooth/USB via HIDAPI",SDL_GetVersion(),count);
 }
-Pad Poll(int port) {
+namespace {
+// The physical devices and keyboard, before session samples and pause filtering.
+Pad LivePoll(int port) {
     Pad p{};bool standby=false;
     if (Enabled()) {
         std::lock_guard guard(lock);const int index=PhysicalPort(port);if (index>=0) p=slots[index].state;
@@ -373,6 +376,13 @@ Pad Poll(int port) {
         // Ko-op requires two advertised sources; never copy P1 input into P2.
         Pad keyboard{};app::kGame.pad(0,keyboard);p.connected=keyboard.connected;
     }
+    return p;
+}
+[[maybe_unused]] const bool live_source=(openshao::netplay::session::SetLiveSource(LivePoll),true);
+}
+Pad Poll(int port) {
+    // A recording or replay hands every game thread the same sample for the whole frame.
+    Pad p=openshao::netplay::session::Poll(port);
     if(p.connected)p.buttons=openshao::survival::PauseButtons(p.buttons,openshao::survival::ActiveSession());
     return p;
 }

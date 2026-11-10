@@ -143,6 +143,7 @@ Follow the [mod publishing instructions](MODS.md#publish-and-update).
 | --- | --- |
 | `src/` | Host integration, launcher and compatibility code |
 | `src/mods/` | Mod catalog, downloads and installation |
+| `src/netplay/` | Per-frame input samples, session recording and state hashes |
 | `src/linux/` | SDL platform services and the Vulkan renderer |
 | `cmake/` | Build modules |
 | `config/` | Executable profile and ABI metadata |
@@ -151,4 +152,4 @@ Follow the [mod publishing instructions](MODS.md#publish-and-update).
 | `tools/` | Build, SDK adaptation and packaging scripts |
 | `licenses/` | Dependency licenses and notices |
 
-More developer guides: [mods](MODS.md), [language packs](LANGUAGE_PACKS.md), [menu text](MENU_TEXT.md) and [graphics diagnostics](GRAPHICS_DIAGNOSTICS.md).
+More developer guides: [mods](MODS.md), [language packs](LANGUAGE_PACKS.md), [menu text](MENU_TEXT.md), [graphics diagnostics](GRAPHICS_DIAGNOSTICS.md) and [netplay determinism](NETPLAY.md).

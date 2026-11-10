@@ -155,10 +155,27 @@ int main(){
     const auto rules=std::string(static_cast<const char*>(kernel::HostPtr(Label(RulesLabel))));
     Check(std::count(rules.begin(),rules.end(),'\n')==1 && rules.find("difficulty")==std::string::npos,
           "Survival rules use only the two native gameplay instructions, without redundant difficulty text");
-    Graphics();Check(captions==std::vector<std::string>{"Survival Mode"},"the Modes overlay draws only the Survival option without a redundant heading");
-    Check(OrnamentExtension()==-156.f,"a one-row page uses the shortest native emblem");
+    Graphics();Check(captions==std::vector<std::string>{"Survival Mode","Online"},"the Modes overlay draws Survival and Online without a redundant heading");
+    Check(OrnamentExtension()==-128.f,"a two-row page lengthens the shortest native emblem by one row");
     Input(0x4000);Settle();
-    Check(kernel::R32(Main+0x38)==0 && MedallionMenu(),"a one-row page keeps its focus when Down is pressed");
+    Check(kernel::R32(Main+0x38)==1 && MedallionMenu(),"Down moves from Survival Mode to Online");
+    Input();
+    Accept();Settle();
+    captions.clear();ctx=Context();DrawMenu(ctx);
+    Check(!HideMainCaption("main.versus") && HideMainCaption("main.load_game"),
+          "the three-row Online page keeps Main's first three rows and hides the rest");
+    Check(MedallionMenu() && Top()==Main && native_entries==0 && kernel::R32(Main+0x38)==0 &&
+          captions==std::vector<std::string>{"Ko-op","Versus Mode","Survival Mode"},
+          "Online lists Ko-op, Versus Mode and Survival Mode with the main menu's names");
+    Check(OrnamentExtension()==-100.f,"the three-row Online page uses a three-row emblem");
+    Accept();Settle();
+    Check(MedallionMenu() && Top()==Main && native_entries==0 && !CharacterSelection() && kernel::R32(Main+0x18)!=Characters,
+          "Online rows stay on the overlay until online sessions exist");
+    Back();Settle();Graphics();
+    Check(MedallionMenu() && kernel::R32(Main+0x38)==1 && captions==std::vector<std::string>{"Survival Mode","Online"},
+          "Back from Online restores Modes with Online focused");
+    Input(0x1000);Settle();
+    Check(kernel::R32(Main+0x38)==0,"Up returns from Online to Survival Mode");
     Input();
     Accept();Check(MedallionMenu() && Top()==Main && native_entries==0 &&
                    kernel::R32(Main+0x18)!=RetailKontent,"Modes to Players changes only the Main overlay");
@@ -171,7 +188,7 @@ int main(){
     Check(kernel::R32(Main+0x38)==0,"Down from the last row wraps to the first row");
     Input();
     Back();Settle();Graphics();
-    Check(stops>0 && MedallionMenu() && Top()==Main && captions==std::vector<std::string>{"Survival Mode"},
+    Check(stops>0 && MedallionMenu() && Top()==Main && captions==std::vector<std::string>{"Survival Mode","Online"},
           "Back from Players restores Modes over the same Main background");
     Accept();Settle();Input(0x4000);
     Check(Transitioning(),"the native focus animation blocks another selection until it finishes");
@@ -279,13 +296,19 @@ int main(){
     const auto old_announcements=announcements,old_entries=native_entries;
     ctx=Context();Open(ctx,memory.data());Settle();
     captions.clear();ctx=Context(Main);DrawMenu(ctx);
-    Check(captions.size()==2 && captions[0]=="Survival Mode" &&
-          captions[1]=="Complete the secret challenge in Story Mode to unlock Survival Mode.",
+    Check(captions.size()==3 && captions[0]=="Survival Mode" && captions[1]=="Online" &&
+          captions[2]=="Complete the secret challenge in Story Mode to unlock Survival Mode.",
           "locked Survival option shows the localized bottom description without a modal");
     Accept();
     Check(MedallionMenu() && !CharacterSelection() && Top()==Main &&
           announcements==old_announcements && native_entries==old_entries,
           "accepting locked Survival never enters Players or the Versus character roster");
+    Input();Input(0x4000);Settle();Input();Accept();Settle();Input(0x1000);Settle();Input();
+    captions.clear();ctx=Context(Main);DrawMenu(ctx);
+    Check(kernel::R32(Main+0x38)==2 && captions==std::vector<std::string>{"Ko-op","Versus Mode","Survival Mode"},
+          "Online Survival stays available without the offline unlock");
+    Back();Settle();Input(0x1000);Settle();Input();
+    Check(MedallionMenu() && kernel::R32(Main+0x38)==0,"Back from Online returns to Modes for the unlock check");
     globally_unlocked=true;Input();Accept();Settle();
     Check(announcements==old_announcements+1 && MedallionMenu(),
           "saving a global unlock makes the same menu entry available immediately");

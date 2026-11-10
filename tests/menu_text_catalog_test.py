@@ -23,7 +23,7 @@ REQUIRED = {
     "footer.default", "footer.accept",
     "character_select.title", "level_select.title", "load.title",
     "source.none", "source.leftx-", "source.righty+", "source.touchpad",
-    "main.game_mode", "game_mode.survival", "survival.rules_1", "survival.rules_2",
+    "main.game_mode", "game_mode.survival", "game_mode.online", "survival.rules_1", "survival.rules_2",
     "survival.locked_hint", "survival.unlock_new", "survival.unlock_pending", "survival.unlock_saved",
     "survival.complete",
     "key.0", "key.32", "key.37", "key.38", "key.39", "key.40", "key.46",

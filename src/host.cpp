@@ -25,6 +25,7 @@
 #include "runtime_paths.h"
 #include "support_report.h"
 #include "restart.h"
+#include "netplay/session.h"
 #include "launcher_settings.h"
 #include <cerrno>
 #include <limits>
@@ -125,11 +126,16 @@ int Configure() {
         else if (arg == L"--launcher-test" && i + 1 < argc) options.launcher_test = argv[++i];
         else if (arg == L"--game" && i + 1 < argc) options.game = argv[++i];
         else if (arg == L"--disc" && i + 1 < argc) options.disc = argv[++i];
+        else if (arg == L"--record" && i + 1 < argc) options.record = argv[++i];
+        else if (arg == L"--replay" && i + 1 < argc) options.replay = argv[++i];
+        else if (arg == L"--hash-out" && i + 1 < argc) options.hash_out = argv[++i];
+        else if (arg == L"--hash-every" && i + 1 < argc) options.hash_every = unsigned(number(argv[++i], 36000));
         else if (arg == L"--timeout" && i + 1 < argc) {
             const wchar_t* value = argv[++i];
             wchar_t* end = nullptr;
             unsigned long seconds = std::wcstoul(value, &end, 10);
-            if (!*value || *end || seconds > 600 || *value == L'-') invalid = true;
+            // A replay runs as long as its recording, so it may take up to an hour.
+            if (!*value || *end || seconds > 3600 || *value == L'-') invalid = true;
             else { options.timeout = unsigned(seconds); explicit_timeout = true; }
         } else invalid = true;
     }
@@ -137,6 +143,13 @@ int Configure() {
     LocalFree(argv);
 #endif
     if (options.background && !explicit_timeout) options.timeout = 20;
+    if (options.timeout > 600 && options.replay.empty()) invalid = true;
+    if (!options.record.empty() && !options.replay.empty()) invalid = true;
+    if ((options.hash_every || !options.hash_out.empty()) && options.record.empty() && options.replay.empty()) invalid = true;
+    if (!options.record.empty() && (options.hash_every != 0) != !options.hash_out.empty()) invalid = true;
+    if (!options.replay.empty() && options.hash_out.empty() && options.hash_every) invalid = true;
+    if ((!options.record.empty() || !options.replay.empty()) && (options.host_test || options.setup || options.configure_only ||
+        options.validate_disc || options.validate_language_pack || options.resume_main_menu || options.virtual_gamepads)) invalid = true;
     if ((options.background && !options.timeout) || (options.host_test && !options.background)) invalid = true;
     if (options.virtual_gamepads && (!options.background || options.host_test)) invalid=true;
     if (options.portable_saves && !options.save_dir.empty()) invalid = true;
@@ -153,7 +166,7 @@ int Configure() {
            options.validate_disc || options.validate_language_pack)invalid=true;
     }
     if (invalid) {
-        std::fprintf(stderr, "Usage: OpenShao [--configure | --no-launcher | --setup] [--disc game.iso | --game folder] [--register-disc game.iso | --validate-disc game.iso] [--validate-language-pack] [--language-pack folder] [--paths] [--data-dir folder] [--save-dir folder | --portable-saves]\n");
+        std::fprintf(stderr, "Usage: OpenShao [--configure | --no-launcher | --setup] [--disc game.iso | --game folder] [--register-disc game.iso | --validate-disc game.iso] [--validate-language-pack] [--language-pack folder] [--paths] [--data-dir folder] [--save-dir folder | --portable-saves] [--record file.smrec | --replay file.smrec] [--hash-every frames --hash-out report.jsonl]\n");
         return 2;
     }
 #ifdef _WIN32
@@ -197,6 +210,7 @@ int Configure() {
         return 1;
     }
     options.data_dir = paths::Root();
+    netplay::session::Configure({options.record, options.replay, options.hash_out, options.hash_every});
     return 0;
 }
 
@@ -218,6 +232,13 @@ bool OpenSaveDirectory(const std::wstring& name, std::filesystem::path& result, 
             LOGR("Save directory: %s%s", result.string().c_str(), migrate ? " (configured save location)" : " (explicit/portable/isolated)");
 #endif
             restart::SaveDirectory(result);
+            if (netplay::session::Requested() && !netplay::session::Start(result, error)) {
+                // A replay under other conditions would measure the wrong thing; stop before boot.
+                LOGE("netplay: %s", error.c_str());
+                logx::Flush();
+                std::fprintf(stderr, "%s\n", error.c_str());
+                std::exit(netplay::session::kMismatch);
+            }
             return true;
         }
     } catch (const std::exception& e) { error = e.what(); }

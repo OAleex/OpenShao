@@ -32,6 +32,8 @@ struct Options {
     std::filesystem::path data_dir;
     std::filesystem::path language_pack;
     std::filesystem::path launcher_test; // hidden: runs the launcher without a window for automated checks
+    std::filesystem::path record, replay, hash_out; // netplay determinism sessions
+    unsigned hash_every = 0;
 };
 extern Options options;
 // Exit code of a start that found another OpenShao using the same data folder.

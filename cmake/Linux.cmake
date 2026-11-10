@@ -17,6 +17,7 @@ set(OPENSHAO_SHARED_SOURCES
     src/recomp_settings_model.cpp src/recomp_settings.cpp src/native_frames.cpp src/frame_rate.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
     src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp src/difficulty.cpp src/difficulty_progress.cpp src/save_pages.cpp src/save_pages_book.cpp src/audio_flags.cpp src/audio_options.cpp
     src/survival_mode.cpp src/survival_session.cpp src/survival_levels.cpp src/survival_unlock.cpp
+    src/netplay/recording.cpp src/netplay/state_hash.cpp src/netplay/session.cpp
     src/language_pack.cpp src/language_archive.cpp src/language_credits.cpp src/virtual_file.cpp src/mods/runtime.cpp)
 
 # Vulkan: pinned Khronos headers and glslang's HLSL front end; the loader is opened

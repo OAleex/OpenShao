@@ -395,6 +395,9 @@ uint32_t OpenOnDisc(''')
     boot = replace_once(boot, '    std::_Exit(code);',
         '    openshao::discord::Shutdown();\n'
         '    if (code) openshao::paths::ReportError(L"The game stopped with error code " + std::to_wstring(code) + L".");\n    openshao::support::StopMonitor();\n    std::_Exit(code);')
+    # The runtime exits with _Exit, which skips atexit: complete netplay files first.
+    boot = '#include "netplay/session.h"\n' + boot
+    boot = replace_once(boot, '    LOGR("Exit (%d)", code);', '    openshao::netplay::session::Finish();\n    LOGR("Exit (%d)", code);')
     boot = replace_once(boot, "void Relaunch(const char* exe) {", "void Relaunch(const char* exe) {\n    if (openshao::options.background) { LOGE(\"Relaunch refused during isolated background test\"); Shutdown(50); }")
     (args.out / "boot.cpp").write_text(boot, encoding="utf-8")
     pads = (args.sdk / "runtime/core/input.cpp").read_text(encoding="utf-8")
@@ -524,6 +527,10 @@ uint32_t OpenOnDisc(''')
         'openshao::aspect::WithCanvasClip(g_state, [&] { g_backend->Draw(g_state, prim, 0, count, nullptr); }, viewport_tint);')
     from prepare_pipeline_precompile import adapt_d3d8 as adapt_pipeline_programs
     d3d = adapt_pipeline_programs(d3d, replace_once)
+    # Netplay frame boundary: the next frame's input sample and scheduled state hashes.
+    d3d = '#include "netplay/session.h"\n' + d3d
+    d3d = replace_once(d3d, '    SetDev(kDevSwapCount, n);\n    return n;',
+        '    SetDev(kDevSwapCount, n);\n    openshao::netplay::session::FrameBoundary();\n    return n;')
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
     backend = (args.sdk / "runtime/gpu/d3d12.cpp").read_text(encoding="utf-8")
     from prepare_depth_compat import adapt_backend as adapt_depth

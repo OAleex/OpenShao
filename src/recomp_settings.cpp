@@ -14,6 +14,7 @@
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
 #include <bit>
+#include "netplay/session.h"
 #include <chrono>
 #include <charconv>
 
@@ -292,7 +293,8 @@ bool MainInput(X86Context& ctx,uint8_t* base) {
         (survival::MedallionMenu() || highlighted==menu::MainGameModeRow);
     raw::NativeEnterAccept(game_mode);
     // Consume Enter on this update so it cannot activate another page later.
-    const bool enter_pressed=raw::TakeEnter() && game_mode;
+    // Recorded sessions take input only from the per-frame samples, so the raw Enter shortcut is ignored.
+    const bool enter_pressed=raw::TakeEnter() && game_mode && !netplay::session::Active();
     if(closing && Top()==0x598430){
         active=closing=exit_prompt=false;extra_selected=true;
         State(ctx,return_row);
