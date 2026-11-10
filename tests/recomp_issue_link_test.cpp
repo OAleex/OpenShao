@@ -17,14 +17,14 @@ int main() {
     settings.height = 1080;
     settings.aspect_ratio = "16:9";
     settings.language = "pt-BR";
-    const auto environment = IssueEnvironment(settings, "0.5.0", "Windows");
-    Check(environment.starts_with("OpenShao 0.5.0 (Windows)\n"), "environment starts with version and platform");
+    const auto environment = IssueEnvironment(settings, OPENSHAO_RECOMP_VERSION, "Windows");
+    Check(environment.starts_with("OpenShao " OPENSHAO_RECOMP_VERSION " (Windows)\n"), "environment starts with version and platform");
     Check(environment.find("Renderer: Vulkan\n") != std::string::npos, "renderer uses its display name");
     Check(environment.find("1920 x 1080, aspect 16:9") != std::string::npos, "display size and aspect ratio are listed");
     Check(environment.find("Menu language: pt-BR") != std::string::npos, "menu language is listed");
 
     settings.width = settings.height = 0;
-    Check(IssueEnvironment(settings, "0.5.0", "Linux").find("desktop x desktop") != std::string::npos,
+    Check(IssueEnvironment(settings, OPENSHAO_RECOMP_VERSION, "Linux").find("desktop x desktop") != std::string::npos,
           "automatic resolution is reported as the desktop size");
 
     const auto bug = IssueLink(IssueKind::Bug, "line 1\nline 2");
