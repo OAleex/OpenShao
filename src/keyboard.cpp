@@ -10,6 +10,7 @@
 #include <bitset>
 #include <mutex>
 #include "keyboard.h"
+#include "cheat_menu.h"
 #include "recomp_input.h"
 #include "controller.h"
 #include "mouse.h"
@@ -53,6 +54,8 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
     if(wp==VK_SHIFT)if(const auto side=MapVirtualKeyW((unsigned(lp)>>16)&255,MAPVK_VSC_TO_VK_EX))wp=side;
     if(wp==VK_CONTROL)wp=(lp&(intptr_t(1)<<24))?VK_RCONTROL:VK_LCONTROL;
     if(wp==VK_MENU)wp=(lp&(intptr_t(1)<<24))?VK_RMENU:VK_LMENU;
+    if((msg==WM_KEYDOWN || msg==WM_KEYUP) && cheat::Message(msg==WM_KEYDOWN?0x100:0x101,wp,lp)){*result=0;return true;}
+    if((msg==WM_KEYDOWN || msg==WM_KEYUP) && cheat::HandleKey(unsigned(wp),msg==WM_KEYDOWN)){*result=0;return true;}
     // A key pressed before opening the custom menu must release even when that menu consumes key-up.
     if((msg==WM_KEYUP || msg==WM_SYSKEYUP) && wp<keys.size())keys.reset(wp);
     if((msg==WM_KEYDOWN || msg==WM_KEYUP || msg==WM_SYSKEYDOWN || msg==WM_SYSKEYUP) &&

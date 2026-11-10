@@ -25,7 +25,7 @@ bool extra_selected=false,active=false,closing=false,release=true,exit_prompt=fa
 constexpr unsigned MainRecompRow=6,MainEnhancementsRow=7,MainExitRow=8,MainRows=9;
 unsigned return_row=6;
 unsigned selection=0;
-std::array<unsigned,size_t(Page::Enhancements)+1> selections{};
+std::array<unsigned,size_t(Page::Cheats)+1> selections{};
 uint32_t pending_directions=0;
 std::string notice;
 launcher::Settings trial_previous;
@@ -386,6 +386,11 @@ void Draw(X86Context& ctx) {
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
         else if(selection==3)message="settings.improved_difficulty_hint";
+        else if(selection==4)message="settings.statue_heal_hint";
+    }
+    else if(!exit_prompt && page==Page::Cheats && message.empty()) {
+        if(selection==0)message="settings.cheats_hint";
+        else if(selection==1)message="settings.cheat_key_hint";
     }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }

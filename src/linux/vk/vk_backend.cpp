@@ -29,6 +29,8 @@
 #include <backends/imgui_impl_vulkan.h>
 
 #include "app/app.h"
+#include "cheat_menu.h"
+#include "launcher_fonts.h"
 #include "core/diag.h"
 #include "core/log.h"
 #include "gpu/backend.h"
@@ -1315,7 +1317,20 @@ bool VulkanBackend::InitUi() {
     if (openshao::options.background) return false;
     if (!ImGui::GetCurrentContext()) {
         ImGui::CreateContext();
-        ImGui::GetIO().IniFilename = nullptr;
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        // The default font stays first so existing overlays keep their look; the cheat
+        // menu uses the launcher typeface, baked large enough to scale down cleanly.
+        io.Fonts->AddFontDefault();
+        ImFontConfig config;
+        config.FontDataOwnedByAtlas = false;
+        config.OversampleH = 2;
+        namespace fonts = openshao::launcher::fonts;
+        ImFont* regular = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(fonts::kMedium), int(fonts::kMediumSize),
+                                                         40.f, &config, io.Fonts->GetGlyphRangesDefault());
+        ImFont* bold = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(fonts::kSemiBold), int(fonts::kSemiBoldSize),
+                                                      40.f, &config, io.Fonts->GetGlyphRangesDefault());
+        openshao::cheat::SetFonts(regular, bold);
     }
     VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};

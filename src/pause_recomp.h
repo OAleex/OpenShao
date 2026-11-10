@@ -5,11 +5,11 @@
 
 namespace openshao::pause_recomp {
 enum class Item : uint32_t {
-    OpenSettings, OpenExit, ShowFps, Vsync, Bloom, Return, Warning, No, Yes, Count
+    OpenSettings, OpenExit, ShowFps, Vsync, Bloom, Return, Warning, No, Yes, SaveGame, Count
 };
 enum class Page : uint8_t {
     Categories, Controls, Graphics, Display, Audio,
-    Controller, Keyboard, KeyboardAlternate, Mouse, DisplayConfirm
+    Controller, Keyboard, KeyboardAlternate, Mouse, DisplayConfirm, Cheats
 };
 inline constexpr unsigned MaxRows=7;
 std::string Text(Item item);

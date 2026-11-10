@@ -2,8 +2,22 @@
 #include "keyboard.h"
 #include "controller.h"
 #include "performance_overlay.h"
+#include "cheat_menu.h"
 #include "launcher.h"
 #include "brightness.h"
+
+namespace {
+void DrawOverlays(double fps) {
+    openshao::performance::Draw(fps);
+    openshao::cheat::Draw(fps);
+}
+
+// The SDK creates the ImGui context just before this runs and the renderer builds the font atlas later.
+void OnWindow(void* hwnd) {
+    openshao::cheat::InitFonts();
+    openshao::controller::Window(hwnd);
+}
+}
 
 const app::GameInfo app::kGame = {
     .title = L"OpenShao",
@@ -17,6 +31,6 @@ const app::GameInfo app::kGame = {
     .options = {},
     .load = openshao::launcher::Load, .save = openshao::launcher::Save, .init = nullptr,
     .loaded = [] { openshao::brightness::Initialize(openshao::launcher::Current().brightness); },
-    .window = openshao::controller::Window, .message = openshao::controller::Message, .ui = openshao::performance::Draw,
+    .window = OnWindow, .message = openshao::controller::Message, .ui = DrawOverlays,
     .pad = openshao::keyboard::Poll, .rumble = nullptr,
 };

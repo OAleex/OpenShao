@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 namespace openshao::recomp {
-enum class Page {Home,Display,Graphics,Controls,Controller,Keyboard,KeyboardAlternate,Mouse,Audio,Language,Enhancements};
+enum class Page {Home,Display,Graphics,Controls,Controller,Keyboard,KeyboardAlternate,Mouse,Audio,Language,Enhancements,Cheats};
 struct Row {std::string key,value;bool action=false;};
 class Model {
     launcher::Settings initial_,draft_;

@@ -10,7 +10,7 @@ set(OPENSHAO_IMGUI_CORE
 
 set(OPENSHAO_SHARED_SOURCES
     src/host.cpp src/keyboard.cpp src/game_info.cpp src/game_files.cpp src/runtime_paths.cpp
-    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp
+    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp src/cheat_menu.cpp
     src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
     src/model_instances.cpp src/audio_load_wait.cpp
