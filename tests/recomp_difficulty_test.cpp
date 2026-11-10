@@ -76,18 +76,25 @@ int main() {
     Check(HeapExtras(2, 4u << 20, 1u << 20) == 2 && HeapExtras(2, HeapReserve + HeapPerExtra, 1u << 20) == 1 &&
           HeapExtras(2, HeapReserve, 1u << 20) == 0 && HeapExtras(2, 8u << 20, HeapBlock - 1) == 0,
           "reinforcements stop before the object heap runs out");
-    Check(Reinforcements(97, 1, 2) == 1 && Reinforcements(97, 2, 2) == 1 && Reinforcements(97, 2, 8) == 0,
+    Check(Reinforcements(97, 15, 1, 2) == 1 && Reinforcements(97, 15, 2, 2) == 1 && Reinforcements(97, 15, 2, 8) == 0,
           "small ordinary encounters receive one reinforcement within the actor limit");
-    Check(Reinforcements(96, 1, 2) == 0 && Reinforcements(96, 3, 2) == 0,
+    Check(Reinforcements(96, 15, 1, 2) == 0 && Reinforcements(96, 15, 3, 2) == 0,
           "the Wu Shi tutorial keeps its original encounter sizes");
     for (const unsigned members : {1u, 2u, 3u, 4u, 5u})
-        Check(Reinforcements(7, members, 0, 32) == 0,
+        Check(Reinforcements(7, 15, members, 0, 32) == 0,
               "Tombs Map 8 never receives extra enemies even when capacity is available");
-    Check(Reinforcements(6, 1, 0) == 1 && Reinforcements(6, 3, 0) == 2 &&
-          Reinforcements(8, 1, 0) == 1 && Reinforcements(8, 3, 0) == 2,
+    Check(Reinforcements(6, 15, 1, 0) == 1 && Reinforcements(6, 15, 3, 0) == 2 &&
+          Reinforcements(8, 15, 1, 0) == 1 && Reinforcements(8, 15, 3, 0) == 2,
           "the Tombs Map 8 exception leaves both neighboring maps eligible for reinforcements");
-    Check(Reinforcements(97, 3, 2) == 2 && Reinforcements(97, 5, 2) == 2 && Reinforcements(97, 6, 2) == 0 &&
-          Reinforcements(97, 3, 5) == 1 && Reinforcements(97, 3, 6) == 0 && Reinforcements(97, 0, 2) == 0,
+    Check(Reinforcements(98, 15, 3, 0, 32) == 1 && Reinforcements(98, 15, 3, 6) == 0,
+          "Wu Shi Map 03 adds at most one enemy to the entry group within the actor limit");
+    for (const int group : {14, 16, 19})
+        Check(Reinforcements(98, group, 3, 0, 32) == 0,
+              "other Wu Shi Map 03 groups retain their original enemy counts");
+    Check(Reinforcements(97, 15, 3, 0) == 2 && Reinforcements(99, 15, 3, 0) == 2,
+          "the Wu Shi Map 03 exception leaves both neighboring maps eligible for reinforcements");
+    Check(Reinforcements(97, 15, 3, 2) == 2 && Reinforcements(97, 15, 5, 2) == 2 && Reinforcements(97, 15, 6, 2) == 0 &&
+          Reinforcements(97, 15, 3, 5) == 1 && Reinforcements(97, 15, 3, 6) == 0 && Reinforcements(97, 15, 0, 2) == 0,
           "reinforcements stay within group, actor and reserve limits");
 
     Progress progress;

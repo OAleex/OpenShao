@@ -160,7 +160,7 @@ void Reinforce(uint32_t manager, int32_t group) {
         const uint32_t descriptor = record + 0x18 + i * SpawnDescriptor;
         if (!Reinforceable(kernel::R32(descriptor)) || R8(descriptor + 0x58)) return;
     }
-    const unsigned wanted = Reinforcements(kernel::R32(RoomId), members, kernel::R16(ActorManager + 0x12),
+    const unsigned wanted = Reinforcements(kernel::R32(RoomId), group, members, kernel::R16(ActorManager + 0x12),
                                           kernel::R32(ActorPool), kernel::R32(GroupMembers));
     if (!wanted) return;
     const HeapRoom heap = ObjectHeapRoom();

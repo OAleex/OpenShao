@@ -76,14 +76,18 @@ constexpr bool Reinforceable(uint32_t type) {
 }
 // Wu Shi - Map 01 (room 96) is the tutorial and keeps its native encounters.
 inline constexpr uint32_t TutorialRoom = 96;
+inline constexpr uint32_t WuShiMap3Room = 98;
+inline constexpr int32_t WuShiMap3EntryGroup = 15;
 // Tombs - Map 8 also keeps the original enemy count.
 inline constexpr uint32_t TombsMap8Room = 7;
 // Extra members: one for a single enemy or a pair, two for larger groups.
-constexpr unsigned Reinforcements(uint32_t room, unsigned members, unsigned live_actors, unsigned actor_pool = 12,
+constexpr unsigned Reinforcements(uint32_t room, int32_t group, unsigned members, unsigned live_actors, unsigned actor_pool = 12,
                                   unsigned group_limit = 7, unsigned reserve = 3) {
     if (room == TutorialRoom || room == TombsMap8Room) return 0;
+    // Leave room in the object heap for the later scripted encounters in Wu Shi - Map 03.
+    if (room == WuShiMap3Room && group != WuShiMap3EntryGroup) return 0;
     if (!members || members > 5 || members >= group_limit) return 0;
-    unsigned extra = members <= 2 ? 1 : 2;
+    unsigned extra = members <= 2 || room == WuShiMap3Room ? 1 : 2;
     if (extra > group_limit - members) extra = group_limit - members;
     const unsigned used = live_actors + members + reserve;
     if (used >= actor_pool) return 0;
