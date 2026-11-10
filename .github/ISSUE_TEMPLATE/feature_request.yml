@@ -1,0 +1,24 @@
+name: Suggest a new feature
+description: Request a new mode, option or capability for OpenShao.
+title: "[Feature] "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like OpenShao to add?
+      description: Describe how the feature would work from a player's point of view.
+    validations:
+      required: true
+  - type: textarea
+    id: benefit
+    attributes:
+      label: How would it help?
+      description: Describe what players would be able to do with it.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Examples or related issues
+      description: Add links to references, related discussions or workarounds if useful.

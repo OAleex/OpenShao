@@ -1,18 +1,20 @@
 name: Gameplay or menu bug
-description: Something in the game, its menus or the launcher does not work as in the original game.
+description: Report an existing feature that behaves incorrectly in gameplay, menus or the launcher.
 title: "[Bug] "
 labels: ["bug", "needs triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve OpenShao. Use **Report a bug** on the launcher's **Support** page to fill the environment field automatically.
-        For a crash, freeze or startup failure, use the **Crash, freeze or startup failure** form instead.
+        Use **Report a bug** on the launcher's **Support** page to fill the environment field automatically.
+
+        For a crash, freeze or startup failure, use the [crash form](https://github.com/OAleex/OpenShao/issues/new?template=crash.yml).
+        To suggest a change, use [New feature](https://github.com/OAleex/OpenShao/issues/new?template=feature_request.yml) or [Quality of life](https://github.com/OAleex/OpenShao/issues/new?template=quality_of_life.yml).
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: Version, system, renderer and display settings. The launcher fills this field. Otherwise, copy the version from the launcher's About page.
+      description: The launcher fills this field. If you opened it directly, enter your OpenShao version and operating system.
       render: text
     validations:
       required: true
@@ -40,26 +42,42 @@ body:
       options:
         - Single Player
         - Ko-op
+        - Two players (Versus)
         - Not in gameplay
+        - Unsure
     validations:
       required: true
+  - type: dropdown
+    id: characters
+    attributes:
+      label: Playable characters
+      description: Select all fighters involved. Name any modded fighter in the report.
+      multiple: true
+      options:
+        - Liu Kang
+        - Kung Lao
+        - Scorpion
+        - Sub-Zero
+        - Baraka
+        - Johnny Cage
+        - Kitana
+        - Reptile
+        - Other (modded character)
   - type: dropdown
     id: difficulty
     attributes:
       label: Difficulty
+      description: For Story or Survival.
       options:
         - Easy
         - Normal
         - Hard
         - Monk
-        - Not applicable
   - type: input
     id: location
     attributes:
-      label: Location in the game
-      description: Chapter, area or Survival level, and the characters you were using.
-    validations:
-      required: true
+      label: In-game location
+      description: Enter the chapter, room, arena or Survival level if relevant.
   - type: textarea
     id: steps
     attributes:
@@ -75,7 +93,7 @@ body:
     id: expected
     attributes:
       label: Expected behavior
-      description: What happens in the original Xbox game.
+      description: Describe what you expected OpenShao to do.
     validations:
       required: true
   - type: textarea
@@ -104,24 +122,9 @@ body:
     id: mods
     attributes:
       label: Enabled mods and language packs
-      description: Write "None" if you play without mods.
-    validations:
-      required: true
+      description: List the enabled mods if they are relevant and you did not attach a diagnostic report.
   - type: textarea
     id: attachments
     attributes:
       label: Diagnostic report, screenshots or video
-      description: Generate a report on the launcher's Support page and drag the ZIP here. Add screenshots or a short video if the problem is visible.
-    validations:
-      required: true
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Checks
-      options:
-        - label: I use my own copy of the USA/Europe Xbox release of Mortal Kombat - Shaolin Monks.
-          required: true
-        - label: I use the latest OpenShao release.
-          required: true
-        - label: I searched the existing issues for this problem.
-          required: true
+      description: Attach a reviewed diagnostic ZIP from the launcher's Support page if available. Screenshots or a short video can help show the problem.

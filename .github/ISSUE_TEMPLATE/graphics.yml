@@ -6,12 +6,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Compare with the original game when you can. A screenshot or short video is required for visual problems.
+        A screenshot helps show a visual problem. A short video helps show stutter or animation problems.
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: Version, system, renderer and display settings. **Report a bug** on the launcher's Support page copies this information. Paste it here.
+      description: Paste the environment copied by **Report a bug** on the launcher's Support page. Otherwise, enter your OpenShao version and operating system.
       render: text
     validations:
       required: true
@@ -41,48 +41,46 @@ body:
         - It happens only with the renderer in the environment
         - I did not test the other renderer
         - Not available on my system
-    validations:
-      required: true
+  - type: dropdown
+    id: characters
+    attributes:
+      label: Playable characters
+      description: Select all fighters involved. Name any modded fighter in the report.
+      multiple: true
+      options:
+        - Liu Kang
+        - Kung Lao
+        - Scorpion
+        - Sub-Zero
+        - Baraka
+        - Johnny Cage
+        - Kitana
+        - Reptile
+        - Other (modded character)
   - type: input
     id: location
     attributes:
-      label: Location in the game
-      description: Chapter, area, Survival level or menu.
-    validations:
-      required: true
+      label: In-game location or menu
+      description: Enter the chapter, room, arena, Survival level or menu if relevant.
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: What is wrong, and what the original game shows.
+      description: Describe what you see, what you expected and how to reproduce it.
     validations:
       required: true
   - type: textarea
     id: hardware
     attributes:
       label: Graphics card and driver
-    validations:
-      required: true
+      description: List the graphics card and driver version if known and you did not attach a diagnostic report.
   - type: textarea
     id: mods
     attributes:
       label: Enabled mods and language packs
-      description: Write "None" if you play without mods.
-    validations:
-      required: true
+      description: List the enabled mods if they are relevant and you did not attach a diagnostic report.
   - type: textarea
     id: attachments
     attributes:
       label: Screenshots, video and diagnostic report
-      description: Drag the files here. Include the diagnostic ZIP from the launcher's Support page.
-    validations:
-      required: true
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Checks
-      options:
-        - label: I use the latest OpenShao release and my graphics driver is up to date.
-          required: true
-        - label: I searched the existing issues for this problem.
-          required: true
+      description: Attach a screenshot, a short video or a reviewed diagnostic ZIP from the launcher's Support page.

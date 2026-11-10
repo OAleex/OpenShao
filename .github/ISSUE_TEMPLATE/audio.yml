@@ -7,7 +7,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Version, system, renderer and settings. **Report a bug** on the launcher's Support page copies this information. Paste it here.
+      description: Paste the environment copied by **Report a bug** on the launcher's Support page. Otherwise, enter your OpenShao version and operating system.
       render: text
     validations:
       required: true
@@ -36,8 +36,6 @@ body:
         - Mono
         - Stereo
         - Surround
-    validations:
-      required: true
   - type: dropdown
     id: restored_dialogue
     attributes:
@@ -47,20 +45,32 @@ body:
         - "On"
         - "Off"
         - Same problem with both settings
-    validations:
-      required: true
+  - type: dropdown
+    id: characters
+    attributes:
+      label: Playable characters
+      description: Select all fighters involved. Name any modded fighter in the report.
+      multiple: true
+      options:
+        - Liu Kang
+        - Kung Lao
+        - Scorpion
+        - Sub-Zero
+        - Baraka
+        - Johnny Cage
+        - Kitana
+        - Reptile
+        - Other (modded character)
   - type: input
     id: location
     attributes:
-      label: Location in the game
-      description: Chapter, area, cutscene or Survival level, and the characters you were using.
-    validations:
-      required: true
+      label: In-game location
+      description: Enter the chapter, room, cutscene, arena or Survival level if relevant.
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: What you hear, and what the original game plays at the same moment.
+      description: Describe what you hear, what you expected and how to reach that moment.
     validations:
       required: true
   - type: textarea
@@ -72,22 +82,9 @@ body:
     id: mods
     attributes:
       label: Enabled mods and language packs
-      description: Write "None" if you play without mods. Dubbing and voice mods can replace original lines.
-    validations:
-      required: true
+      description: List relevant mods or language packs if you did not attach a diagnostic report.
   - type: textarea
     id: attachments
     attributes:
       label: Recording and diagnostic report
-      description: Drag a short video or audio recording and the diagnostic ZIP from the launcher's Support page here.
-    validations:
-      required: true
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Checks
-      options:
-        - label: I use the latest OpenShao release.
-          required: true
-        - label: I searched the existing issues for this problem.
-          required: true
+      description: Attach a short recording or a reviewed diagnostic ZIP from the launcher's Support page if available.

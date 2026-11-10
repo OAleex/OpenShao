@@ -1,0 +1,24 @@
+name: Suggest a quality-of-life improvement
+description: Make an existing action, menu, setting or control easier to use.
+title: "[QoL] "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: textarea
+    id: current_flow
+    attributes:
+      label: What is inconvenient today?
+      description: Describe what you are trying to do and where you run into extra steps or confusion.
+    validations:
+      required: true
+  - type: textarea
+    id: improvement
+    attributes:
+      label: What change would help?
+      description: Describe how you would like the action to work.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add a mode, menu, input device or related issue if it helps explain the suggestion.

@@ -6,12 +6,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        After a crash, OpenShao can create a diagnostic ZIP with the crash dump. Open the launcher's **Support** page, select **Generate report**, then **Report a bug**. The launcher opens this form and fills the environment field.
+        If the launcher opens, go to **Support** and select **Generate report**. Select **Report a bug** to fill in the environment. Review the diagnostic ZIP before attaching it.
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: Version, system, renderer and display settings. The launcher fills this field.
+      description: The launcher fills this field. If you opened it directly, enter your OpenShao version and operating system.
       render: text
     validations:
       required: true
@@ -42,15 +42,52 @@ body:
         - In the launcher
     validations:
       required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game mode
+      options:
+        - Story Mode (Single Player)
+        - Story Mode (Ko-op)
+        - Survival Mode (Single Player)
+        - Survival Mode (Ko-op)
+        - Versus Mode
+  - type: dropdown
+    id: characters
+    attributes:
+      label: Playable characters
+      description: Select all fighters involved. Name any modded fighter in the report.
+      multiple: true
+      options:
+        - Liu Kang
+        - Kung Lao
+        - Scorpion
+        - Sub-Zero
+        - Baraka
+        - Johnny Cage
+        - Kitana
+        - Reptile
+        - Other (modded character)
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Difficulty
+      description: For Story or Survival.
+      options:
+        - Easy
+        - Normal
+        - Hard
+        - Monk
   - type: input
     id: location
     attributes:
-      label: Location in the game
-      description: Chapter, area, Survival level or menu, and the characters you were using.
+      label: In-game location or menu
+      description: Enter the chapter, room, arena, Survival level or menu if relevant.
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
+      description: If it happened once, describe what you were doing right before it happened.
       placeholder: |
         1.
         2.
@@ -78,31 +115,14 @@ body:
     id: hardware
     attributes:
       label: Hardware and drivers
-      description: Processor, graphics card and driver version.
-    validations:
-      required: true
+      description: List your processor, graphics card and driver version if known and you did not attach a diagnostic report.
   - type: textarea
     id: mods
     attributes:
       label: Enabled mods and language packs
-      description: Write "None" if you play without mods.
-    validations:
-      required: true
+      description: List the enabled mods if they are relevant and you did not attach a diagnostic report.
   - type: textarea
     id: attachments
     attributes:
       label: Diagnostic report
-      description: Drag the diagnostic ZIP here. It includes the crash dump when one is available.
-    validations:
-      required: true
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Checks
-      options:
-        - label: I use my own copy of the USA/Europe Xbox release of Mortal Kombat - Shaolin Monks.
-          required: true
-        - label: I use the latest OpenShao release.
-          required: true
-        - label: I searched the existing issues for this problem.
-          required: true
+      description: Attach the reviewed diagnostic ZIP if you can generate one. It includes the crash dump when available.

@@ -172,6 +172,9 @@ Only one copy can run at a time with the same data folder.
 
 For graphics or audio problems, choose that form on GitHub. **Report a bug** also copies your version and settings to the clipboard.
 
+Use the [new feature form](https://github.com/OAleex/OpenShao/issues/new?template=feature_request.yml) to request something new.
+Use the [quality-of-life form](https://github.com/OAleex/OpenShao/issues/new?template=quality_of_life.yml) to suggest an improvement to an existing feature.
+
 OpenShao saves reports in the data folder under `reports`.
 
 Reports include recent logs, selected settings, mod versions and a crash dump when available.
