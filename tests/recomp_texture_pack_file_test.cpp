@@ -1,0 +1,236 @@
+#include "texture_pack_builder.h"
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace fs = std::filesystem;
+using namespace openshao;
+static void Check(bool ok, const std::string& text) { if (!ok) throw std::runtime_error(text); }
+
+static fs::path root;
+static fs::path Write(const std::string& name, const Bytes& b) {
+    const fs::path path = root / name;
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(b.data()), std::streamsize(b.size()));
+    return path;
+}
+
+static std::string OpenError(const Bytes& b, const char* name = "bad.ostp") {
+    std::string error;
+    const auto pack = texpack::PackFile::Open(Write(name, b), error);
+    Check(!pack, std::string("A pack that should be refused was opened: ") + name);
+    Check(!error.empty(), "A refused pack says why");
+    return error;
+}
+
+// The error of the pack after a change, which must name `part`
+static void Refused(const char* what, const std::string& part, const std::function<void(Bytes&)>& change, bool fix_hash = false) {
+    Bytes b = Build(Three());
+    change(b);
+    if (fix_hash) FixIndexHash(b);
+    const std::string error = OpenError(b);
+    Check(error.find(part) != std::string::npos, std::string(what) + ": the reason names \"" + part + "\" but says: " + error);
+}
+
+static size_t Entry(const Bytes& b, int i) { return size_t(Get(b, 56, 8)) + size_t(i) * 40; }
+
+int main() try {
+    root = fs::temp_directory_path() / "openshao-texpack-file-test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+
+    // A valid pack
+    const Bytes good = Build(Three());
+    std::string error;
+    auto pack = texpack::PackFile::Open(Write("good.ostp", good), error);
+    Check(pack != nullptr, "A valid pack opens: " + error);
+    Check(pack->info().id == "Test_Pack-1" && pack->info().name == "Test pack" && pack->info().version == "1.0.0" &&
+              pack->info().authors.size() == 2 && pack->info().min_recomp == "0.4.1" &&
+              pack->info().description == "Longer text." && pack->info().website == "https://example.org",
+          "The information is read");
+    Check(pack->logo() && pack->logo()->width == 2 && pack->logo()->height == 2 && pack->logo()->rgba.size() == 16 &&
+              pack->logo()->rgba[5] == 50,
+          "The logo is read");
+    Check(pack->entries().size() == 3 && pack->Find(0x20) && pack->Find(0x20)->format == texpack::BcFormat::Bc1 &&
+              !pack->Find(0x20)->alpha && pack->Find(0x10)->alpha && pack->Find(0x10)->orig_width == 16,
+          "The index is read");
+    Check(!pack->Find(0x15) && !pack->Find(0) && !pack->Find(0xFFFF), "An unknown hash is not found");
+
+    // Reading levels
+    const auto* a = pack->Find(0x10);
+    Bytes blocks;
+    Check(pack->ReadLevels(*a, 0, blocks), "The levels are read");
+    uint64_t all = 0;
+    for (uint32_t l = 0; l < a->levels; ++l) all += Level(a->width, a->height, l, uint8_t(a->format));
+    Check(blocks.size() == all && blocks.front() == 0x20 && blocks.back() == 0x26, "Every level, the largest first");
+    Check(pack->ReadLevels(*a, 2, blocks) && blocks.size() == all - Level(64, 64, 0, 2) - Level(64, 64, 1, 2) &&
+              blocks.front() == 0x22,
+          "Reading from a later level skips the earlier ones");
+    Check(!pack->ReadLevels(*a, 7, blocks) && !pack->ReadLevels(*a, 200, blocks), "A level the texture lacks is refused");
+
+    // The quality picks the level
+    Check(texpack::FirstLevel(*a, texpack::Quality::High) == 0, "High reads every level");
+    Check(texpack::FirstLevel(*a, texpack::Quality::Low) == 1, "Low leaves 4x at 2x");
+    Check(texpack::FirstLevel(*pack->Find(0x20), texpack::Quality::Low) == 0, "A texture as large as the game's is not reduced");
+    Check(texpack::FirstLevel(*pack->Find(0x30), texpack::Quality::Low) == 1 &&
+              texpack::FirstLevel(*pack->Find(0x30), texpack::Quality::High) == 0,
+          "Another 4x texture");
+
+    // Several threads read at once
+    {
+        std::vector<std::thread> threads;
+        std::vector<int> ok(8, 0);
+        for (int t = 0; t < 8; ++t)
+            threads.emplace_back([&, t] {
+                Bytes mine;
+                bool all_ok = true;
+                for (int i = 0; i < 200; ++i) {
+                    const auto* e = pack->Find(t % 2 ? 0x30 : 0x10);
+                    all_ok = all_ok && pack->ReadLevels(*e, 0, mine) && mine.front() == (t % 2 ? 0x60 : 0x20);
+                }
+                ok[size_t(t)] = all_ok;
+            });
+        for (auto& th : threads) th.join();
+        for (int v : ok) Check(v, "Threads read the same pack at once");
+    }
+
+    // A pack without a logo, and with no textures
+    Check(texpack::PackFile::Open(Write("nologo.ostp", Build(Three(), kInfo, false)), error) &&
+              !texpack::PackFile::Open(Write("nologo.ostp", Build(Three(), kInfo, false)), error)->logo(),
+          "A pack without a logo opens");
+    {
+        const std::string empty_info = R"({"id":"E","name":"Empty","version":"1.0.0","authors":["A"],"summary":"s",)"
+                                       R"("min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","texture_count":0})";
+        const auto empty = texpack::PackFile::Open(Write("empty.ostp", Build({}, empty_info)), error);
+        Check(empty && empty->entries().empty() && !empty->Find(1), "A pack with no textures opens: " + error);
+    }
+
+    // A logo that is not valid is dropped and the pack stays valid
+    {
+        Bytes b = Build(Three());
+        Put(b, size_t(Get(b, 40, 8)), 300, 2);  // a width of 300
+        const auto dropped = texpack::PackFile::Open(Write("badlogo.ostp", b), error);
+        Check(dropped && !dropped->logo() && dropped->entries().size() == 3, "A logo with a size out of its limit is dropped");
+        Bytes c = Build(Three());
+        c[size_t(Get(c, 40, 8))] = 3;  // says 3 wide, but the pixels are for 2
+        const auto mismatched = texpack::PackFile::Open(Write("badlogo2.ostp", c), error);
+        Check(mismatched && !mismatched->logo(), "A logo whose size disagrees with its pixels is dropped");
+    }
+
+    // The list to load ahead (version 1.1)
+    {
+        const auto pre = [&](const std::string& list) { return Build(Three(), InfoFor(3, ",\"preload\":" + list)); };
+        auto listed = texpack::PackFile::Open(
+            Write("preload.ostp", pre(R"(["0000000000000020","0000000000000010","00000000000000FF","0000000000000020"])")), error);
+        Check(listed && listed->info().preload == std::vector<uint64_t>({0x20, 0x10}), "The list keeps what the pack has, once, in order: " + error);
+        const std::shared_ptr<const texpack::PackFile> shared = std::move(listed);
+        const auto source = texpack::AsSource(shared);
+        Check(source->Preload() == std::vector<uint64_t>({0x20, 0x10}), "The source gives the list");
+        Check(pack->info().preload.empty(), "A pack without a list asks for nothing ahead");
+        for (const char* bad : {R"(["not a hash"])", R"(["00000000000000200"])", R"([16])", R"("0000000000000010")", R"(["000000000000001g"])"})
+            Check(OpenError(pre(bad)).find("preload") != std::string::npos, std::string("A list with ") + bad + " is refused");
+        std::string many = "[";
+        for (int i = 0; i < 4097; ++i) many += std::string(i ? "," : "") + "\"0000000000000010\"";
+        Check(OpenError(pre(many + "]")).find("preload") != std::string::npos, "A list over its limit is refused");
+    }
+
+    // Header
+    Refused("magic", "not a texture pack", [](Bytes& b) { b[0] = 'X'; });
+    Refused("major version", "version", [](Bytes& b) { Put(b, 8, 2, 2); });
+    Refused("header size", "size or flags", [](Bytes& b) { Put(b, 12, 64, 4); });
+    Refused("flags", "size or flags", [](Bytes& b) { Put(b, 92, 1, 4); });
+    Refused("file size", "file size", [](Bytes& b) { Put(b, 16, Get(b, 16, 8) + 16, 8); });
+    Refused("truncated", "file size", [](Bytes& b) { b.resize(b.size() - 16); });
+    {
+        Bytes tiny(40, 0);
+        Check(OpenError(tiny).find("shorter") != std::string::npos, "A file shorter than a header is refused");
+        Check(OpenError(Bytes{}).find("shorter") != std::string::npos, "An empty file is refused");
+        std::string e;
+        Check(!texpack::PackFile::Open(root / "missing.ostp", e) && !e.empty(), "A missing file is refused");
+    }
+
+    // Sections
+    Refused("section outside", "section", [](Bytes& b) { Put(b, 72, Get(b, 16, 8) + 16, 8); });
+    Refused("section size overflow", "section", [](Bytes& b) { Put(b, 80, ~0ull, 8); });
+    Refused("misaligned", "section", [](Bytes& b) { Put(b, 24, Get(b, 24, 8) + 1, 8); });
+    Refused("overlap", "section", [](Bytes& b) { Put(b, 56, Get(b, 24, 8), 8); });
+    Refused("information too large", "limit", [](Bytes& b) { Put(b, 32, (1u << 20) + 16, 8); });
+    Refused("no information", "limit", [](Bytes& b) { Put(b, 32, 0, 8); });
+    Refused("too many textures", "limit", [](Bytes& b) { Put(b, 88, 100001, 4); });
+    Refused("index size", "limit", [](Bytes& b) { Put(b, 64, 80, 8); });
+    Refused("logo too large", "limit", [](Bytes& b) { Put(b, 48, 262149, 8); });
+    Refused("logo offset without a logo", "limit", [](Bytes& b) { Put(b, 48, 0, 8); });
+
+    // Index
+    Refused("checksum", "checksum", [](Bytes& b) { b[size_t(Get(b, 56, 8)) + 1] ^= 1; });
+    Refused("order", "ascending", [](Bytes& b) { Put(b, Entry(b, 1), 0x05, 8); }, true);
+    Refused("repeated hash", "ascending", [](Bytes& b) { Put(b, Entry(b, 1), 0x10, 8); }, true);
+    Refused("width not a multiple of 4", "multiple of 4", [](Bytes& b) { Put(b, Entry(b, 0) + 8, 62, 2); }, true);
+    Refused("width too small", "multiple of 4", [](Bytes& b) { Put(b, Entry(b, 0) + 8, 0, 2); }, true);
+    Refused("width too large", "multiple of 4", [](Bytes& b) { Put(b, Entry(b, 0) + 8, 8196, 2); }, true);
+    Refused("no original size", "original", [](Bytes& b) { Put(b, Entry(b, 0) + 12, 0, 2); }, true);
+    Refused("proportion", "proportion", [](Bytes& b) { Put(b, Entry(b, 0) + 14, 8, 2); }, true);
+    Refused("no levels", "levels", [](Bytes& b) { b[Entry(b, 0) + 16] = 0; }, true);
+    Refused("too many levels", "levels", [](Bytes& b) { b[Entry(b, 0) + 16] = 8; }, true);
+    Refused("unknown format", "format", [](Bytes& b) { b[Entry(b, 0) + 17] = 3; }, true);
+    Refused("unknown flags", "flags", [](Bytes& b) { b[Entry(b, 0) + 18] = 2; }, true);
+    Refused("compression", "compressed", [](Bytes& b) { b[Entry(b, 0) + 19] = 1; }, true);
+    Refused("reserved", "reserved", [](Bytes& b) { b[Entry(b, 0) + 20] = 1; }, true);
+    Refused("data size", "does not match its levels", [](Bytes& b) { Put(b, Entry(b, 0) + 32, 100, 8); }, true);
+    Refused("data offset misaligned", "aligned", [](Bytes& b) { Put(b, Entry(b, 1) + 24, Get(b, Entry(b, 1) + 24, 8) + 1, 8); }, true);
+    Refused("data outside", "outside the data", [](Bytes& b) { Put(b, Entry(b, 2) + 24, Get(b, 80, 8), 8); }, true);
+    Refused("data offset overflow", "outside the data", [](Bytes& b) { Put(b, Entry(b, 2) + 24, ~0ull - 15, 8); }, true);
+    Refused("data overlap", "overlap", [](Bytes& b) { Put(b, Entry(b, 1) + 24, Get(b, Entry(b, 0) + 24, 8), 8); }, true);
+
+    // Information
+    auto info_refused = [](const char* what, const std::string& info) {
+        const std::string error = OpenError(Build(Three(), info));
+        Check(error.find("information") != std::string::npos, std::string(what) + ": " + error);
+    };
+    info_refused("not JSON", "{not json");
+    info_refused("not an object", "[1,2]");
+    info_refused("no id", R"({"name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("an id with a dot", R"({"id":"has.dot","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("bad id", R"({"id":"has space","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("bad version", R"({"id":"i","name":"n","version":"1.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("bad min version", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"x","features":["hdtextures"],"type":"texture"})");
+    info_refused("wrong type", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"language"})");
+    info_refused("no feature", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["fonts"],"type":"texture"})");
+    info_refused("no authors", R"({"id":"i","name":"n","version":"1.0.0","authors":[],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("authors not text", R"({"id":"i","name":"n","version":"1.0.0","authors":[1],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("name too long", R"({"id":"i","name":")" + std::string(65, 'n') +
+                                      R"(","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("control character", R"({"id":"i","name":"a\u0001b","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("line feed in a name", R"({"id":"i","name":"a\nb","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("line feed in a summary", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"a\nb","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})");
+    info_refused("tab in a description", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","description":"a\tb"})");
+    {
+        // a description and the credits may have paragraphs
+        std::string lines_error;
+        const auto lines = texpack::PackFile::Open(Write("lines.ostp", Build(Three(), R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","description":"one\n\ntwo","credits":"a\nb"})")), lines_error);
+        Check(lines != nullptr && lines->info().description == "one\n\ntwo" && lines->info().credits == "a\nb",
+              "line feeds in the description and the credits are allowed: " + lines_error);
+    }
+    info_refused("count differs", R"({"id":"i","name":"n","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture","texture_count":9})");
+    {
+        // text of a different alphabet counts by character, not by byte
+        std::string accents = R"({"id":"i","name":")";
+        for (int i = 0; i < 64; ++i) accents += "\xC3\xA9";
+        accents += R"(","version":"1.0.0","authors":["a"],"summary":"s","min_recomp":"0.4.1","features":["hdtextures"],"type":"texture"})";
+        Check(texpack::PackFile::Open(Write("accents.ostp", Build(Three(), accents)), error) != nullptr,
+              "Sixty four accented characters fit the limit of the name: " + error);
+    }
+
+    fs::remove_all(root);
+    std::cout << "PASS: texture pack files\n";
+} catch (const std::exception& e) {
+    std::cerr << "FAIL: " << e.what() << "\n";
+    return 1;
+}

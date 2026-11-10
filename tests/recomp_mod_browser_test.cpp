@@ -3,6 +3,7 @@
 #include "mods/browser.h"
 #include "mods/http.h"
 #include "mods/sha256.h"
+#include "texture_pack_builder.h"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -78,6 +79,66 @@ int main(int argc,char** argv){
         browser.InstallFile(fixtures/"bad-local.tar.xz",fixtures/"game");state=Ready(browser);
         Check(!state.error.empty()&&state.installed.size()==3&&Sha256File(local_file)==local_hash&&!state.installed.back().enabled,
               "A corrupt local update must preserve the installed files and enabled state");
+        // asking before a mod that is already installed is replaced
+        const auto asked=[&]{
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+            for(;;){auto view=browser.View();if(view.asking)return view;
+                Check(view.busy&&std::chrono::steady_clock::now()<deadline,"An installation over an installed mod must wait for an answer");
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));}};
+        browser.Answer(true);Check(!browser.View().asking,"Answering when nothing asks changes nothing");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);
+        auto waiting=asked();
+        Check(waiting.asking->installed=="2.0.0"&&waiting.asking->incoming=="1.0.0"&&!waiting.asking->name.empty()&&waiting.busy,
+              "The question names the mod and the installed and the incoming versions");
+        browser.Answer(false);state=Ready(browser);
+        Check(state.error.empty()&&!state.asking&&state.status=="Installation cancelled"&&state.installed.back().mod.version=="2.0.0"&&Sha256File(local_file)==local_hash,
+              "Saying no leaves what is installed as it was");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);asked();browser.Answer(true);state=Ready(browser);
+        Check(state.error.empty()&&state.installed.back().mod.version=="1.0.0"&&!state.installed.back().enabled,
+              "Saying yes replaces it, with an older version too, and keeps it disabled");
+        browser.InstallFile(fixtures/"NewMod-1.0.0.tar.xz",fixtures/"game",true);
+        waiting=asked();
+        Check(waiting.asking->installed==waiting.asking->incoming,"The same version asks too, to install it again");
+        browser.Cancel();state=Ready(browser);
+        Check(state.error.empty()&&!state.asking&&state.installed.back().mod.version=="1.0.0","Cancelling while it asks ends the installation without changes");
+        // Texture packs: the order they are read in, and the textures two of them both have
+        {
+            const auto make=[&](const std::string& id,std::vector<Tex> textures){
+                auto info=InfoFor(textures.size(),R"(,"description":"Longer text.","website":"https://example.org","credits":"Art by someone","license":"CC-BY")");info.replace(info.find("Test_Pack-1"),11,id);
+                const auto bytes=Build(textures,info);const auto path=fixtures/(id+".ostp");
+                std::ofstream(path,std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+                return path;};
+            const auto texture=[](uint64_t hash,uint8_t fill){return Tex{hash,64,64,16,16,7,2,0,fill};};
+            browser.InstallFile(make("PackA",{texture(0x100,1),texture(0x101,2),texture(0x102,3)}),fixtures/"game");state=Ready(browser);
+            Check(state.error.empty()&&state.overlaps.empty(),"One texture pack file has nothing in common with another");
+            {
+                const auto about=state.details.find("PackA");
+                Check(about!=state.details.end()&&about->second.description=="Longer text."&&about->second.website=="https://example.org"&&
+                      about->second.credits=="Art by someone"&&about->second.license=="CC-BY",
+                      "What the texture pack says about itself reaches the page");
+                Check(about->second.logo&&about->second.logo_width==2&&about->second.logo_height==2&&about->second.logo->size()==16&&(*about->second.logo)[1]==10,
+                      "Its logo comes as raw RGBA with its size");
+            }
+            browser.InstallFile(make("PackB",{texture(0x101,4),texture(0x102,5),texture(0x103,6)}),fixtures/"game");state=Ready(browser);
+            const auto place=[](const BrowserState& view,const std::string& id){return std::find(view.order.begin(),view.order.end(),id)-view.order.begin();};
+            Check(state.error.empty()&&place(state,"PackA")<place(state,"PackB")&&place(state,"PackB")<ptrdiff_t(state.order.size()),
+                  "Without a choice the packs are in the installation order");
+            Check(state.overlaps.size()==1&&state.overlaps[0].winner=="PackA"&&state.overlaps[0].loser=="PackB"&&state.overlaps[0].count==2,
+                  "The first pack wins the two textures both have");
+            browser.MoveTexture("PackB",true);state=Ready(browser);
+            Check(state.error.empty()&&place(state,"PackB")<place(state,"PackA"),"Moving a pack up puts it before the one above");
+            Check(state.overlaps.size()==1&&state.overlaps[0].winner=="PackB"&&state.overlaps[0].loser=="PackA"&&state.overlaps[0].count==2,
+                  "The pack that moved up now wins");
+            const auto moved=state.order;
+            browser.MoveTexture(moved.front(),true);state=Ready(browser);
+            Check(state.order==moved,"The first pack cannot move up");
+            browser.MoveTexture("PackB",false);state=Ready(browser);
+            Check(place(state,"PackA")<place(state,"PackB")&&state.overlaps[0].winner=="PackA","Moving it down gives the win back");
+            browser.Enable("PackB",false);state=Ready(browser);
+            Check(state.overlaps.empty(),"A pack that is off does not take part");
+            browser.Remove("PackA");Ready(browser);browser.Remove("PackB");state=Ready(browser);
+            Check(state.error.empty()&&place(state,"PackA")==ptrdiff_t(state.order.size()),"Removed packs leave the order");
+        }
         offline=true;browser.Refresh();state=Ready(browser);offline=false;
         Check(!state.error.empty()&&state.catalog.size()==3&&state.installed.size()==3,"Network failure must preserve cached catalog and installations");
         Check(progress_calls>0,"Downloads must report progress");

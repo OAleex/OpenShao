@@ -10,8 +10,11 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 #include <algorithm>
+#include <cstring>
 #include <exception>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include "launcher_window.h"
 #include "core/log.h"
 
@@ -20,6 +23,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM,
 namespace openshao::launcher {
 namespace {
 constexpr UINT kFrames = 2;
+// The descriptor heap holds the font at slot 0 and the interface's images after it.
+constexpr UINT kMaxImages = 128;
 constexpr wchar_t kClass[] = L"OpenShaoLauncher";
 template <class T> void Release(T*& object) { if (object) { object->Release(); object = nullptr; } }
 bool Succeeded(HRESULT result, const char* operation) {
@@ -43,6 +48,13 @@ struct Window::State {
     IDXGISwapChain3* swap = nullptr;
     ID3D12Resource* targets[kFrames] = {};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv[kFrames] = {};
+    struct Image {
+        ID3D12Resource* texture = nullptr;
+        UINT slot = 0;
+    };
+    std::unordered_map<uint64_t, Image> images;  // by the GPU descriptor handle, which is what ImGui takes as a texture
+    std::vector<bool> slot_used;                 // the heap's slots; slot 0 is the font's
+    UINT srv_step = 0;
     bool imgui = false, win32 = false, dx12 = false, closing = false, occluded = false, resized = false, failed = false;
     float scale = 1.f;
 
@@ -112,9 +124,14 @@ bool Window::State::Device() {
     if (ok) {
         D3D12_DESCRIPTOR_HEAP_DESC desc{};
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = 1;
+        desc.NumDescriptors = 1 + kMaxImages;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ok = Succeeded(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&srv_heap)), "CreateDescriptorHeap SRV");
+        if (ok) {
+            srv_step = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            slot_used.assign(1 + kMaxImages, false);
+            slot_used[0] = true;
+        }
     }
     for (UINT i = 0; ok && i < kFrames; ++i)
         ok = Succeeded(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators[i])), "CreateCommandAllocator");
@@ -224,6 +241,111 @@ Window::Window() : s_(new State) {}
 Window::~Window() { Close(); delete s_; }
 float Window::Scale() const { return s_->scale; }
 
+// The texture is made in the default heap and filled through an upload buffer with a command list of its own, which is run and
+// waited for at once: an image here is a mod's logo of at most 256 x 256 pixels, so the wait is short. Returns 0 when the image
+// cannot be made, and the launcher then draws its default mark.
+uint64_t Window::CreateImage(const uint8_t* rgba, int width, int height) {
+    State& s = *s_;
+    if (!rgba || width <= 0 || height <= 0 || width > int(D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION) ||
+        height > int(D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION) || !s.device || !s.queue || !s.srv_heap || s.failed)
+        return 0;
+    UINT slot = 0;
+    for (UINT i = 1; i < s.slot_used.size() && !slot; ++i)
+        if (!s.slot_used[i]) slot = i;
+    if (!slot) return 0;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = UINT64(width);
+    desc.Height = UINT(height);
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT rows = 0;
+    UINT64 row_size = 0, total = 0;
+    s.device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rows, &row_size, &total);
+
+    const D3D12_HEAP_PROPERTIES default_heap{D3D12_HEAP_TYPE_DEFAULT}, upload_heap{D3D12_HEAP_TYPE_UPLOAD};
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = total;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource* texture = nullptr;
+    ID3D12Resource* upload = nullptr;
+    ID3D12CommandAllocator* allocator = nullptr;
+    ID3D12GraphicsCommandList* commands = nullptr;
+    bool ok = Succeeded(s.device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                          nullptr, IID_PPV_ARGS(&texture)), "CreateCommittedResource image") &&
+              Succeeded(s.device->CreateCommittedResource(&upload_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                          nullptr, IID_PPV_ARGS(&upload)), "CreateCommittedResource image upload");
+    uint8_t* mapped = nullptr;
+    ok = ok && Succeeded(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped)), "Map image upload");
+    if (ok) {
+        // Rows are packed in `rgba` and padded to the row pitch the copy asks for.
+        for (UINT row = 0; row < rows; ++row)
+            std::memcpy(mapped + footprint.Offset + size_t(row) * footprint.Footprint.RowPitch, rgba + size_t(row) * width * 4, size_t(width) * 4);
+        upload->Unmap(0, nullptr);
+        ok = Succeeded(s.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "CreateCommandAllocator image") &&
+             Succeeded(s.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_PPV_ARGS(&commands)), "CreateCommandList image");
+    }
+    if (ok) {
+        D3D12_TEXTURE_COPY_LOCATION destination{texture, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        D3D12_TEXTURE_COPY_LOCATION source{upload, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        source.PlacedFootprint = footprint;
+        commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = texture;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        commands->ResourceBarrier(1, &barrier);
+        ok = Succeeded(commands->Close(), "Close image command list");
+    }
+    if (ok) {
+        ID3D12CommandList* lists[] = {commands};
+        s.queue->ExecuteCommandLists(1, lists);
+        ok = s.Wait();  // the upload buffer and the list are free once the copy has run
+    }
+    Release(commands);
+    Release(allocator);
+    Release(upload);
+    if (!ok) {
+        Release(texture);
+        return 0;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = desc.Format;
+    view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    view.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = s.srv_heap->GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += size_t(slot) * s.srv_step;
+    s.device->CreateShaderResourceView(texture, &view, cpu);
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu = s.srv_heap->GetGPUDescriptorHandleForHeapStart();
+    gpu.ptr += UINT64(slot) * s.srv_step;
+    s.slot_used[slot] = true;
+    s.images[gpu.ptr] = {texture, slot};
+    return gpu.ptr;
+}
+
+// The frame before may still be drawing the image, so the GPU is let finish before it is released.
+void Window::DestroyImage(uint64_t image) {
+    State& s = *s_;
+    const auto found = s.images.find(image);
+    if (found == s.images.end()) return;
+    s.Wait();
+    Release(found->second.texture);
+    s.slot_used[found->second.slot] = false;
+    s.images.erase(found);
+}
+
 bool Window::Open(const char* title, int width, int height, const std::function<void(float)>& prepare) try {
     State& s = *s_;
     s.failed = s.closing = false;
@@ -327,6 +449,9 @@ void Window::Close() {
     if (s.win32) ImGui_ImplWin32_Shutdown();
     if (s.imgui) ImGui::DestroyContext();
     s.dx12 = s.win32 = s.imgui = false;
+    for (auto& image : s.images) Release(image.second.texture);
+    s.images.clear();
+    s.slot_used.clear();
     for (auto& target : s.targets) Release(target);
     Release(s.swap);
     for (auto& allocator : s.allocators) Release(allocator);

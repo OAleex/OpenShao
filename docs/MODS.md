@@ -61,6 +61,7 @@ Put finished files in `mods/<id>/pack/`:
 | `audio/voices/*.adx` | Replace matching recordings in the English and shared voice banks |
 | `audio/movies/<name>.adx` and `.aix` | Replace both audio representations of a movie |
 | `fonts/small.xpr`, `fonts/large.xpr` | Replace the embedded fonts |
+| `hd/index.txt`, `hd/*` | Replace game textures with high resolution ones, as a texture pack |
 | `files/<game path>` | Replace a directly read game file |
 | `scripts/*.lua` | Supply routine callbacks listed in `routines` |
 | `README.txt`, `CREDITS.md` | Instructions and attribution |
@@ -84,6 +85,64 @@ All patches use the original game as their source, including updates.
 `routines` contains the script paths to execute.
 The builder derives required `features`, package hashes and release records.
 New packages require Recomp 0.2.0 or later. Existing PT-BR packages remain supported.
+
+## Texture packs
+
+A texture pack replaces game textures with larger ones. The pictures are read outside the game archive and kept only in video memory.
+Several packs can be enabled at once. Direct3D 12 and Vulkan both replace textures.
+
+A game texture is identified by the SDK `Hash` of the bytes of its level 0, as 16 hexadecimal digits.
+A replacement must have the same proportion as the game's texture.
+The pictures are read on threads of their own. A texture is drawn as the game made it until its replacement is ready, which takes a few frames.
+
+### Single-file packs (`.ostp`)
+
+The mod's package holds one `pack.ostp`. Its manifest has `"schema": 3` and an `ostp` block with the file's `path`, `size` and `sha256`. It has no `files` or `patches`.
+[TEXTURE_PACK_FORMAT.md](TEXTURE_PACK_FORMAT.md) specifies the file.
+**Install from file** on the Mods page takes a `.ostp` directly. The launcher checks the file's structure and SHA-256 before it installs the pack.
+
+- **Quality.** High uses every level of each texture. Low uses each texture at twice the game's size, which needs a quarter of the video memory.
+  The choice is stored by mod ID in `settings.toml` and applies the next time the game starts.
+  Pictures can be up to 8192 pixels on a side. An 8K texture takes about 85 MB of video memory, so use Low on cards with little of it. Sizes above 4K are untested in the game.
+- **Order.** When several packs replace the same texture, the first in the order on the Mods page wins.
+  The order is stored by mod ID in `settings.toml`. Without a stored order, packs follow their installation order.
+- **Video memory.** Replacements stay within a budget. The ones drawn least recently go first, and a texture that was taken out is read again when it is drawn.
+  The budget is 60% of the memory the driver reports for the game (`VK_EXT_memory_budget` on Vulkan, the adapter's budget on Direct3D 12), or 40% of the largest local heap when the driver reports none.
+  `OPENSHAO_HD_VRAM_MB` sets it in MiB.
+- **Preload.** A pack can list textures to prepare before the game draws them: those of the menus and the first picture the game shows.
+- **Diagnostics.** `OPENSHAO_HD_LOG_MISSES=1` writes to the log, once each, the textures the game drew that no pack replaces (`no replacement for <hash>`)
+  and the kinds that cannot be replaced (`not replaceable`: render targets, depth textures and linear textures).
+
+The [OpenShao ModKit](https://github.com/HexAbyss/OpenShao-ModKit) extracts the textures from the player's own copy of the game and compiles edited pictures into a `.ostp`.
+
+### Folder packs (`hd/`)
+
+A mod with an `hd/` folder lists `hdtextures` in `features`.
+`hd/index.txt` has one line for each replaced texture: the hash, the width, the height, the number of levels and the file, separated by spaces.
+Lines starting with `#` are comments.
+
+```
+# hash width height levels file
+0bac2904604d3ecc 2048 2048 10 tex/0bac2904604d3ecc.dds
+```
+
+- Each file is a DDS in the `DXT5` format with every level, from the largest down. Each level has sides that are a multiple of 4.
+- A file that is missing or does not match its line is not used, and the game's texture stays.
+
+`hd/preload.txt` is optional. It lists, one hash per line, the replacements to prepare before the game draws them.
+Lines starting with `#` are comments, and a hash without a line in `index.txt` is ignored.
+Keep it short: each listed texture takes video memory from the start.
+
+### Developer mode
+
+Turn on **Developer** on the Files page to try textures without building a pack, then choose a folder on the Developer page.
+The folder holds PNG files named `<hash>_<format>_<width>x<height>.png` and the `manifest.json` that the ModKit's extraction writes.
+The game reads the folder when it starts, before every texture mod.
+It uses only the pictures whose pixels differ from the signature in the manifest. Nothing is compressed in this mode.
+Restart the game to see a change.
+
+To try a folder of `.dds` files with an `index.txt` the same way, set `OPENSHAO_HD_PACK_DIR` to the folder.
+The game reads it before the developer folder and the packs of the enabled mods.
 
 ## Routine scripts
 

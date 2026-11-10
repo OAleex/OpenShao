@@ -10,7 +10,7 @@ set(OPENSHAO_IMGUI_CORE
 
 set(OPENSHAO_SHARED_SOURCES
     src/host.cpp src/keyboard.cpp src/game_info.cpp src/game_files.cpp src/runtime_paths.cpp
-    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp
+    src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp src/texture_pack.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/texture_loader.cpp src/texture_residency.cpp src/texture_dev_folder.cpp
     src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
     src/model_instances.cpp src/audio_load_wait.cpp
@@ -64,6 +64,14 @@ endfunction()
 add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_model_instances_test.py"
     --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
 openshao_linux_test(recomp_virtual_file SOURCES tests/recomp_virtual_file_test.cpp src/virtual_file.cpp)
+openshao_linux_test(recomp_texture_pack SOURCES tests/recomp_texture_pack_test.cpp src/texture_pack.cpp src/texture_dev_folder.cpp src/texture_pack_file.cpp src/texture_pack_stats.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
+openshao_linux_test(recomp_texture_pack_file SOURCES tests/recomp_texture_pack_file_test.cpp src/texture_pack_file.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
+openshao_linux_test(recomp_texture_dev_folder SOURCES tests/recomp_texture_dev_folder_test.cpp src/texture_dev_folder.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
+openshao_linux_test(recomp_texture_residency SOURCES tests/recomp_texture_residency_test.cpp src/texture_residency.cpp)
+openshao_linux_test(recomp_texture_pack_match SOURCES tests/recomp_texture_pack_match_test.cpp src/texture_pack_match.cpp)
+openshao_linux_test(recomp_texture_range_allocator SOURCES tests/recomp_texture_range_allocator_test.cpp src/texture_range_allocator.cpp)
+openshao_linux_test(recomp_texture_budget SOURCES tests/recomp_texture_budget_test.cpp src/texture_budget.cpp)
+openshao_linux_test(recomp_texture_loader SOURCES tests/recomp_texture_loader_test.cpp src/texture_loader.cpp src/texture_pack_file.cpp src/mods/json.cpp src/mods/sha256.cpp LIBS Threads::Threads)
 openshao_linux_test(recomp_language_archive SOURCES tests/recomp_language_archive_test.cpp src/language_archive.cpp src/virtual_file.cpp LIBS miniz)
 openshao_linux_test(recomp_language_credits SOURCES tests/recomp_language_credits_test.cpp src/language_credits.cpp)
 openshao_linux_test(recomp_language_pack SOURCES tests/recomp_language_pack_test.cpp src/language_pack.cpp src/language_archive.cpp
@@ -83,7 +91,7 @@ target_include_directories(recomp_menu_renderer_test PRIVATE "${GEN}")
 openshao_linux_test(recomp_settings_model SOURCES tests/recomp_settings_model_test.cpp src/recomp_settings_model.cpp src/launcher_settings.cpp LIBS tomlplusplus::tomlplusplus openshao_mods)
 openshao_linux_test(recomp_settings_ui SOURCES tests/recomp_settings_ui_test.cpp src/recomp_settings_model.cpp src/launcher_settings.cpp src/menu_text.cpp src/mods/json.cpp LIBS tomlplusplus::tomlplusplus)
 target_include_directories(recomp_settings_ui_test PRIVATE "${GEN}")
-openshao_linux_test(recomp_performance_overlay SOURCES tests/recomp_performance_overlay_test.cpp src/performance_overlay.cpp ${OPENSHAO_IMGUI_CORE})
+openshao_linux_test(recomp_performance_overlay SOURCES tests/recomp_performance_overlay_test.cpp src/performance_overlay.cpp src/texture_pack_stats.cpp ${OPENSHAO_IMGUI_CORE})
 target_include_directories(recomp_performance_overlay_test SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 openshao_linux_test(recomp_input_capture SOURCES tests/recomp_input_capture_test.cpp)
 add_test(NAME menu_text_catalog COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/menu_text_catalog_test.py")

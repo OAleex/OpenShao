@@ -17,6 +17,7 @@
     X(vkGetPhysicalDeviceFeatures2)                \
     X(vkGetPhysicalDeviceQueueFamilyProperties)    \
     X(vkGetPhysicalDeviceMemoryProperties)         \
+    X(vkGetPhysicalDeviceMemoryProperties2)        \
     X(vkGetPhysicalDeviceFormatProperties)         \
     X(vkEnumerateDeviceExtensionProperties)        \
     X(vkCreateDevice)                              \
@@ -60,6 +61,7 @@
     X(vkAllocateMemory)               \
     X(vkFreeMemory)                   \
     X(vkMapMemory)                    \
+    X(vkUnmapMemory)                  \
     X(vkCreateImageView)              \
     X(vkDestroyImageView)             \
     X(vkCreateSampler)                \

@@ -15,6 +15,7 @@ std::filesystem::path EnabledLanguagePack(const std::filesystem::path& root,std:
 struct Package {
     Manifest mod;
     std::filesystem::path folder;
+    std::filesystem::path ostp_file;  // a texture pack file is checked where it is and copied once, not unpacked
     ~Package();
 };
 using Original=std::function<std::vector<uint8_t>(const Patch&)>;

@@ -67,7 +67,7 @@ bool ChooseWithSdl(fs::path& selected, bool folder, const std::string& title) {
     DialogResult result;
     static const SDL_DialogFileFilter filters[] = {
         {"Xbox game files (ISO, XISO, ZIP, default.xbe)", "iso;xiso;zip;xbe"},
-        {"Mod archives (.tar.xz)", "xz"},
+        {"Mod archives and texture packs (.tar.xz, .ostp)", "xz;ostp"},
         {"All files", "*"},
     };
     (void)title;
@@ -129,7 +129,7 @@ bool ChooseFile(fs::path& selected, bool folder, const std::string& title) {
     if (kde && OnPath("kdialog")) {
         const std::string command = folder ? "kdialog --title 'OpenShao' --getexistingdirectory \"$HOME\" 2>/dev/null"
                                            : "kdialog --title 'OpenShao' --getopenfilename \"$HOME\" "
-                                             "'*.iso *.xiso *.zip default.xbe *.tar.xz|Xbox game files and mods' 2>/dev/null";
+                                             "'*.iso *.xiso *.zip default.xbe *.tar.xz *.ostp|Xbox game files and mods' 2>/dev/null";
         if (Capture(command, line)) { selected = FromUtf8(line); return true; }
         return false;
     }
@@ -137,7 +137,7 @@ bool ChooseFile(fs::path& selected, bool folder, const std::string& title) {
         const std::string command = folder ? "zenity --file-selection --directory --title='OpenShao - Select your game folder' 2>/dev/null"
                                            : "zenity --file-selection --title='OpenShao - Select your game' "
                                              "--file-filter='Xbox game files | *.iso *.ISO *.xiso *.zip *.ZIP default.xbe' "
-                                             "--file-filter='Mod archives | *.tar.xz' "
+                                             "--file-filter='Mod archives and texture packs | *.tar.xz *.ostp' "
                                              "--file-filter='All files | *' 2>/dev/null";
         if (Capture(command, line)) { selected = FromUtf8(line); return true; }
         return false;

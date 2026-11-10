@@ -4,6 +4,7 @@
 #include "vcdiff.h"
 #include "routines.h"
 #include "../file_ops.h"
+#include "../texture_pack_file.h"
 #include "../save_storage.h"
 #include <toml++/toml.hpp>
 #include <fstream>
@@ -13,6 +14,40 @@
 namespace fs=std::filesystem;
 namespace openshao::mods {
 namespace {
+bool IsTexturePackFile(const fs::path& path) {
+    std::ifstream f(path,std::ios::binary);char magic[8]={};
+    return f.read(magic,8)&&std::string_view(magic,8)==std::string_view("OSTPACK\0",8);
+}
+std::string Quote(std::string_view text) {
+    std::string out="\"";
+    for(const unsigned char c:text) {
+        if(c=='"'||c=='\\'){out+='\\';out+=char(c);}
+        else if(c<0x20){char hex[8];std::snprintf(hex,sizeof hex,"\\u%04x",c);out+=hex;}
+        else out+=char(c);
+    }
+    return out+"\"";
+}
+// A texture pack file is read where it is: its structure and its whole file are checked once, and the metadata the mod
+// system keeps is made from what the file says of itself.
+std::shared_ptr<Package> InspectTexturePack(const fs::path& file,const Progress& progress) {
+    Report(progress,"Reading the texture pack",0,ProgressTotal);
+    std::string error;const auto pack=texpack::PackFile::Open(file,error);
+    if(!pack)throw std::runtime_error("This is not a valid texture pack file: "+error);
+    const auto& info=pack->info();
+    Report(progress,"Verifying the texture pack",1500,ProgressTotal);
+    const auto size=fs::file_size(file);const auto sha=Sha256File(file);
+    std::string authors;for(const auto& a:info.authors)authors+=(authors.empty()?"":",")+Quote(a);
+    const std::string raw="{\"schema\":3,\"game\":{\"xbe_sha256\":"+Quote(GameSha256)+"},\"id\":"+Quote(info.id)+",\"name\":"+Quote(info.name)+
+        ",\"summary\":"+Quote(info.summary)+",\"authors\":["+authors+"],\"type\":\"texture\",\"install_dir\":"+Quote("packages/"+info.id)+
+        ",\"features\":[\"hdtextures\"],\"version\":"+Quote(info.version)+",\"recomp\":"+Quote(info.min_recomp)+
+        ",\"ostp\":{\"path\":\"pack.ostp\",\"size\":"+std::to_string(size)+",\"sha256\":"+Quote(sha)+"},\"files\":[],\"patches\":[]}";
+    auto p=std::make_shared<Package>();
+    try {p->mod=ParseManifest(raw);}
+    catch(const std::exception& e){throw std::runtime_error("This texture pack cannot be installed: "+std::string(e.what()));}
+    p->ostp_file=file;
+    Report(progress,"Texture pack checked",ProgressTotal,ProgressTotal);
+    return p;
+}
 std::string ReadText(const fs::path& path) {
     std::ifstream f(path,std::ios::binary);if(!f)throw std::runtime_error("Cannot read mod metadata");return {std::istreambuf_iterator<char>(f),{}};
 }
@@ -71,6 +106,7 @@ void Switch(const fs::path& root,const fs::path& staging,const Manifest& mod,con
 }
 Package::~Package() { if(!folder.empty()){std::error_code ec;fs::remove_all(folder,ec);} }
 std::shared_ptr<Package> InspectPackage(const fs::path& archive,const fs::path& root,const Progress& progress) {
+    if(IsTexturePackFile(archive))return InspectTexturePack(archive,progress);
     auto p=std::make_shared<Package>();fs::create_directories(root);
     p->folder=files::UniqueSibling(root/".package","-");fs::create_directory(p->folder);
     ExtractTarXz(archive,p->folder,ProgressSlice(progress,0,8000));
@@ -120,6 +156,26 @@ void InstallPackage(const fs::path& root,const Package& package,const Original& 
         // Copy the inspected package so failures never modify it or the live mod.
         const auto copying=ProgressSlice(progress,0,3500),patching=ProgressSlice(progress,3500,9500);
         uint64_t copied=0;
+        if(package.mod.ostp) {
+            // The texture pack file is copied once, in pieces so that the progress moves, and checked as it was inspected
+            const auto& pack=*package.mod.ostp;
+            std::error_code ec;const auto space=fs::space(root,ec);
+            if(!ec&&space.available<pack.size+(64ull<<20))
+                throw std::runtime_error("Not enough free disk space to install this texture pack: "+std::to_string((pack.size+(1ull<<30)-1)>>30)+" GiB are needed");
+            const auto target=stage/"pack.ostp";
+            {
+                std::ifstream in(package.ostp_file,std::ios::binary);std::ofstream out(target,std::ios::binary);
+                if(!in||!out)throw std::runtime_error("Cannot copy the texture pack file");
+                std::vector<char> piece(8u<<20);uint64_t done=0;
+                while(in) {
+                    in.read(piece.data(),std::streamsize(piece.size()));const auto n=in.gcount();if(n<=0)break;
+                    out.write(piece.data(),n);if(!out)throw std::runtime_error("Cannot write the texture pack file; the disk may be full");
+                    done+=uint64_t(n);Report(copying,"Copying the texture pack",done,pack.size);
+                }
+            }
+            files::FlushFile(target);
+            if(fs::file_size(target)!=pack.size||Sha256File(target)!=pack.sha256)throw std::runtime_error("The texture pack file changed after inspection");
+        }
         for(const auto& f:package.mod.files) {
             Report(copying,"Copying files",copied,package.mod.files.size());const auto src=package.folder/files::FromUtf8(f.path),target=stage/files::FromUtf8(f.path);
             fs::create_directories(target.parent_path());fs::copy_file(src,target);

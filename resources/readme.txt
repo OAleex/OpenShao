@@ -56,6 +56,7 @@ Press X to delete a selected save after confirmation.
 
 Mods and language packs are in the launcher's Mods page.
 Optional Discord Rich Presence is in Files > Discord. It requires the Discord desktop app and activity sharing.
+Texture packs (.ostp) install there too, with Install from file. Packs are made with OpenShao-ModKit: https://github.com/HexAbyss/OpenShao-ModKit
 
 In Ko-op, use keyboard and mouse for player 1 and one controller for player 2, or use two controllers.
 If player 1's controller disconnects, the keyboard and mouse control player 1.
