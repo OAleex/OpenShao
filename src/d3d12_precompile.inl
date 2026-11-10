@@ -1,5 +1,4 @@
-// Pipeline precompilation for the adapted Direct3D 12 renderer. Included at the end of its anonymous
-// namespace by tools/prepare_pipeline_precompile.py, which also adds the members used here.
+// D3D12 pipeline precompilation, included by tools/prepare_pipeline_precompile.py inside the renderer namespace.
 static_assert(sizeof(PsoKey) <= openshao::pipelines::kMaxPipelineKey);
 
 D3D12Backend::~D3D12Backend() {
@@ -23,6 +22,7 @@ bool D3D12Backend::DescribeCandidate(const openshao::pipelines::PipelineCandidat
     r.vertex.program = sh.prog ? openshao::pipelines::ProgramHash(s.vs->program) : 0;
     r.vertex.decode = a.decode; r.vertex.regs = a.regs;
     r.vertex.pretransformed = a.pretransformed; r.vertex.quad = sh.quad; r.vertex.fixed = sh.fk;
+    r.vertex.sprite = sh.sprite;
     r.pixel = pk;
     r.vs_source = candidate_sources_.Vertex(r.vertex, [&] {
         auto vs = VertexHlsl(s, a, sh);
@@ -39,6 +39,7 @@ bool D3D12Backend::DescribeCandidate(const openshao::pipelines::PipelineCandidat
     pass.stencil = !c.shadow || !depth32_supported_;
     PsoKey key;
     openshao::pipelines::FillPipelineKey(s, a, r.vs_source, r.ps_source, pass, key);
+    key.sprite = sh.sprite;
     bool atlas = false, target = false;
     for (const auto& tex : c.textures) if (tex.kind) {
         target |= tex.kind != kTex2D || tex.rect || tex.shadow;
@@ -99,13 +100,13 @@ ID3DBlob* D3D12Backend::PrecompileShader(const std::string& src, const char* ent
     return pre_blobs_.try_emplace(hash, code).first->second.Get();
 }
 
-// Worker thread. Mirrors EnsureVertexShader, EnsurePixelShader, EnsurePipeline and ExpandPoints;
-// the adaptation script stops the build when the SDK changes those.
+// Worker: mirrors EnsureVertexShader/EnsurePixelShader/EnsurePipeline/ExpandPoints (checked by the adaptation script).
 bool D3D12Backend::BuildPipeline(const openshao::pipelines::Recipe& r, std::span<const uint32_t> program) {
     if (r.key_size != sizeof(PsoKey)) return false;
     const auto& v = r.vertex;
     std::string vsrc = v.program ? VertexProgramHlsl(std::vector<uint32_t>(program.begin(), program.end()), v.regs, v.decode)
                                  : FixedVertexHlsl(v.regs, v.pretransformed, v.decode, v.fixed);
+    if (v.sprite) vsrc = SpriteSizeHlsl(std::move(vsrc));
     if (v.quad) vsrc = QuadHlsl(std::move(vsrc));
     uint64_t vh = 0, ph = 0, gh = 0;
     ID3DBlob* vs = PrecompileShader(vsrc, "main", "vs_5_0", vh);
@@ -119,7 +120,7 @@ bool D3D12Backend::BuildPipeline(const openshao::pipelines::Recipe& r, std::span
     k.vs = vh;
     k.ps = ph;
     // Geometry shaders compile before the pipeline key is held: a thread never holds two keys.
-    ID3DBlob* points = k.topo == uint32_t(Topology::Points) ? PrecompileShader(PointHlsl(), "main", "gs_5_0", gh) : nullptr;
+    ID3DBlob* points = k.topo == uint32_t(Topology::Points) ? PrecompileShader(k.sprite ? SpriteHlsl() : PointHlsl(), "main", "gs_5_0", gh) : nullptr;
     ID3DBlob* atlas = k.atlas_guard ? PrecompileShader(openshao::AtlasBoundsHlsl(), "main", "gs_5_0", gh) : nullptr;
     if (k.atlas_guard && !atlas) return false;
     D3D12_INPUT_ELEMENT_DESC el[16];
@@ -158,6 +159,7 @@ void D3D12Backend::RecordPipeline(const State& s, const Assembled& a, const Draw
     r.vertex.regs = a.regs;
     r.vertex.pretransformed = a.pretransformed;
     r.vertex.quad = sh.quad;
+    r.vertex.sprite = sh.sprite;
     r.vertex.fixed = sh.fk;
     r.pixel = pk;
     r.key_size = sizeof(k);

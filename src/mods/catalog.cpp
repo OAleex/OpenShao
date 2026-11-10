@@ -19,8 +19,7 @@ void Id(const std::string& id) {
     if(id.empty()||id.size()>80||id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=id.npos)
         throw std::runtime_error("Invalid mod id");
 }
-// A release asset of one of the maintainer's repositories. The catalog repository is matched by owner, not name,
-// so catalogs written before a repository rename keep working through GitHub's redirect.
+// Release asset of the maintainer's repositories, matched by owner so renamed repos still work.
 bool OfficialRelease(std::string_view url) {
     constexpr std::string_view owner = "https://github.com/OAleex/";
     if (!url.starts_with(owner)) return false;

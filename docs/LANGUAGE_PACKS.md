@@ -1,7 +1,12 @@
 # Language packs
 
-This guide is for authors of LanguagePack PT-BR. Players install it in the launcher's **Mods** page.
+This guide is for authors of LanguagePack PT-BR, the unofficial Brazilian Portuguese fan translation mod.
+Players install it in the launcher's **Mods** page. To offer another language, see [Offer a fan translation mod](TRANSLATIONS.md).
 See [Mods](MODS.md) for other languages and the general package format.
+
+Keep the original game, translation sources and prepared replacement files local.
+Follow the [contribution rules](../CONTRIBUTING.md#game-files-and-private-data) and
+[AI usage policy](../AI_POLICY.md) when submitting code or text changes.
 
 Installed files are in `mods/languages/LanguagePack_PT-BR/` under the data folder.
 
@@ -51,6 +56,7 @@ The pack uses the original English language slot.
 Text resources and fonts follow Text Language. Dialogue recordings and movie audio follow Voice Language.
 Choosing Portuguese voices with another text language loads only the audio from the pack.
 Choosing Portuguese text with original voices loads the translated resources and fonts without Portuguese audio.
+
 Campaign ending credits finish naturally and cannot be skipped.
 Extras credits still allow manual exit.
 

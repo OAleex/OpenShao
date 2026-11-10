@@ -6,6 +6,7 @@
 #include <cmath>
 #include <fstream>
 #include "launcher_settings.h"
+#include "frame_rate.h"
 #include "mods/languages.h"
 
 namespace openshao::launcher {
@@ -25,7 +26,7 @@ Settings Read(const toml::table& table) {
     s.width = table["width"].value_or(s.width); s.height = table["height"].value_or(s.height);
     s.render_percent = table["render_percent"].value_or(s.render_percent);
     const auto frame_rate = table["fps_cap"].value_or(FrameRate);
-    s.fps_cap = frame_rate == 120 ? 120 : FrameRate;
+    s.fps_cap = frames::SafeRate(frame_rate);
     s.aniso = table["anisotropic_filtering"].value_or(s.aniso);
     s.master_volume = table["master_volume"].value_or(s.master_volume);
     s.vsync = table["vsync"].value_or(s.vsync);
@@ -35,12 +36,14 @@ Settings Read(const toml::table& table) {
     s.scorpion_unfiltered = table["enhancements"]["scorpion_unfiltered"].value_or(s.scorpion_unfiltered);
     s.restore_dialogue = table["enhancements"]["restore_dialogue"].value_or(s.restore_dialogue);
     s.cinematic_bars = table["enhancements"]["cinematic_bars"].value_or(s.cinematic_bars);
+    s.improved_difficulty = table["enhancements"]["improved_difficulty"].value_or(s.improved_difficulty);
     const auto g = table["game"];
     s.original_override = g["override_original"].value_or(s.original_override);
     s.camera_reverse = g["camera_reverse"].value_or(s.camera_reverse);
     s.music_volume = g["music_volume"].value_or(s.music_volume);
     s.effects_volume = g["effects_volume"].value_or(s.effects_volume);
     s.speech_volume = g["speech_volume"].value_or(s.speech_volume);
+    s.audio_output = g["audio_output"].value_or(s.audio_output);
     s.brightness = g["brightness"].value_or(s.brightness);
     s.versus_rounds = g["versus_rounds"].value_or(s.versus_rounds);
     s.versus_time = g["versus_time"].value_or(s.versus_time);
@@ -78,6 +81,8 @@ toml::table Merge(toml::table table, const Settings& s) {
     enhancements.insert_or_assign("scorpion_unfiltered", s.scorpion_unfiltered);
     enhancements.insert_or_assign("restore_dialogue", s.restore_dialogue);
     enhancements.insert_or_assign("cinematic_bars", s.cinematic_bars);
+    enhancements.insert_or_assign("improved_difficulty", s.improved_difficulty);
+    enhancements.erase("vertical_shadows");
     table.insert_or_assign("enhancements", enhancements);
     toml::table c, b;
     for (size_t i = 0; i < s.bindings.size(); ++i) b.insert_or_assign(binding_keys[i], s.bindings[i]);
@@ -97,6 +102,7 @@ toml::table Merge(toml::table table, const Settings& s) {
     g.insert_or_assign("override_original", s.original_override); g.insert_or_assign("camera_reverse", s.camera_reverse);
     g.insert_or_assign("music_volume", s.music_volume); g.insert_or_assign("effects_volume", s.effects_volume);
     g.insert_or_assign("speech_volume", s.speech_volume); g.insert_or_assign("brightness", s.brightness);
+    g.insert_or_assign("audio_output", s.audio_output);
     g.insert_or_assign("versus_rounds", s.versus_rounds); g.insert_or_assign("versus_time", s.versus_time);
     table.insert_or_assign("game", g);
     return table;
@@ -109,7 +115,7 @@ bool Validate(const Settings& s, std::string& error) {
     else if ((s.width == 0) != (s.height == 0) || s.width < 0 || s.height < 0 || s.width > 16384 || s.height > 16384 ||
              (s.width && (s.width < 320 || s.height < 240))) error = "Set both resolution fields to zero, or select a resolution from 320 x 240 to 16384 x 16384.";
     else if (s.render_percent < 25 || s.render_percent > 400) error = "Render scale must be from 25 to 400 percent.";
-    else if (s.fps_cap != 60 && s.fps_cap != 120) error = "Select 60 or 120 FPS.";
+    else if (!frames::SupportedRate(s.fps_cap)) error = "Select 60, 120, 144, 165 or 240 FPS.";
     else if (s.aniso != 0 && s.aniso != 2 && s.aniso != 4 && s.aniso != 8 && s.aniso != 16) error = "Select an anisotropic filtering level.";
     else if (s.master_volume < 0 || s.master_volume > 100) error = "Master volume must be from 0 to 100 percent.";
     else if (s.mouse.motion!="right_stick" && s.mouse.motion!="left_stick" && s.mouse.motion!="none") error="Select a mouse movement target.";
@@ -120,6 +126,7 @@ bool Validate(const Settings& s, std::string& error) {
     })) error = "Select an action for each mouse button.";
     else if (s.music_volume < 0 || s.music_volume > 100 || s.effects_volume < 0 || s.effects_volume > 100 ||
              s.speech_volume < 0 || s.speech_volume > 100) error = "Game sound levels must be from 0 to 100 percent.";
+    else if (s.audio_output < 0 || s.audio_output > 2) error = "Audio Output must be Mono, Stereo or Surround.";
     else if (s.brightness < 0 || s.brightness > 100) error = "Brightness adjustment must be from 0 to 100 percent.";
     else if (s.versus_rounds != 1 && s.versus_rounds != 3) error = "Versus rounds must be 1 or 3.";
     else if (s.versus_time != 0 && s.versus_time != 120 && s.versus_time != 180) error = "Versus match time must be 120 seconds, 180 seconds, or unlimited.";

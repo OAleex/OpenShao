@@ -2,6 +2,8 @@
 
 [xbe]
 path = "assets/default.xbe"
+# SDK export metadata; OpenShao links the generated code into its executable.
+library = "OpenShao.dll"
 title = 0x4D570029
 entry = 0xF40CA
 xdk = 5849

@@ -207,8 +207,7 @@ bool DirectoryLock::Acquire(const fs::path& root, std::string& error, bool* in_u
 #else
 fs::path SavedGamesRoot(std::string& error, bool create) {
     PWSTR path = nullptr;
-    // A fresh profile may not have created Saved Games yet. Resolve its location
-    // without touching disk; PrepareDirectory creates the selected save root.
+    // Resolve Saved Games without creating it; PrepareDirectory creates the save root.
     const auto result = SHGetKnownFolderPath(FOLDERID_SavedGames, create ? KF_FLAG_CREATE : KF_FLAG_DONT_VERIFY, nullptr, &path);
     if (FAILED(result)) { error = "Windows Saved Games folder unavailable (" + std::to_string(result) + ")"; return {}; }
     fs::path out(path); CoTaskMemFree(path); return out / L"OpenShao";

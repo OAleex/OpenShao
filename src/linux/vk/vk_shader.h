@@ -1,9 +1,6 @@
 #pragma once
-// HLSL to SPIR-V with glslang's HLSL front end. The renderer's shaders keep
-// their D3D registers; they map to the one descriptor set every pipeline uses:
-//   b0, b1        -> bindings 0, 1   (uniform buffers)
-//   t0 .. t3      -> bindings 2 .. 5 (sampled images)
-//   s0 .. s3      -> bindings 6 .. 9 (samplers)
+// HLSL to SPIR-V via glslang; D3D registers map to one descriptor set:
+// b0-b1 -> bindings 0-1, t0-t3 -> 2-5, s0-s3 -> 6-9.
 #include <cstdint>
 #include <string>
 #include <vector>

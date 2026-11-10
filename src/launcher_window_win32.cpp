@@ -282,8 +282,7 @@ bool Window::Open(const char* title, int width, int height, const std::function<
         Close(); return false;
     }
     s.dx12 = true;
-    // The backend normally delays fonts and pipelines until NewFrame, after the
-    // window is visible. Validate them now so the native-selector fallback works.
+    // Create fonts and pipelines now (not at NewFrame) so the native-selector fallback works.
     if (!ImGui_ImplDX12_CreateDeviceObjects()) {
         LOGE("Launcher: renderer resources could not be initialized (device HRESULT %08lX)", s.device->GetDeviceRemovedReason());
         Close(); return false;

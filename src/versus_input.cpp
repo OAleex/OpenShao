@@ -26,8 +26,7 @@ bool SuppressStartPause() {
     if(state!=1)return false;
     const auto events=kernel::R16(Input+0x12);
     if(!(events&Start) || (events&Back))return false;
-    // Pause can run before the next Versus simulation update. Leave Start
-    // available to the intro while preserving the original Back pause.
+    // Pause may run before the Versus update: leave Start to the intro, keep Back pause.
     return true;
 }
 }
@@ -36,8 +35,7 @@ X86_EXTERN_FUNC(__imp__sub_000140B6);
 X86_FUNC(sub_000140B6) {
     const bool intro=VersusState()==1;
     __imp__sub_000140B6(ctx,base);
-    // The Versus update precedes pause dispatch and can already be on Display
-    // Round when pause reads input. Consume the skip without changing held state.
+    // Versus may already be on Display Round when pause reads input: consume the skip.
     if(intro && (ctx.eax&255))ConsumeStart();
 }
 X86_EXTERN_FUNC(__imp__sub_00011104);

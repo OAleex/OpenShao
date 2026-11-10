@@ -1,0 +1,93 @@
+name: Audio, voice or dialogue problem
+description: Missing, cut, repeated, wrong-language or distorted music, effects, voices or subtitles.
+title: "[Audio] "
+labels: ["audio", "needs triage"]
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version, system, renderer and settings. **Report a bug** on the launcher's Support page copies this information. Paste it here.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Problem type
+      multiple: true
+      options:
+        - Missing voice line or dialogue
+        - Voice line cut off or repeated
+        - Wrong voice language
+        - Subtitle or on-screen text does not match the voice
+        - Music missing, stops or restarts
+        - Sound effect missing or too loud
+        - Crackling, distortion or wrong speaker channels
+        - Audio out of sync with a cutscene
+    validations:
+      required: true
+  - type: dropdown
+    id: output
+    attributes:
+      label: Audio output
+      description: Konfigure Recompilation > Audio.
+      options:
+        - Mono
+        - Stereo
+        - Surround
+    validations:
+      required: true
+  - type: dropdown
+    id: restored_dialogue
+    attributes:
+      label: Restore Lost Dialogue
+      description: The setting in Enhancements.
+      options:
+        - "On"
+        - "Off"
+        - Same problem with both settings
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location in the game
+      description: Chapter, area, cutscene or Survival level, and the characters you were using.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What you hear, and what the original game plays at the same moment.
+    validations:
+      required: true
+  - type: textarea
+    id: device
+    attributes:
+      label: Audio device
+      description: Speakers or headphones, and how they are connected.
+  - type: textarea
+    id: mods
+    attributes:
+      label: Enabled mods and language packs
+      description: Write "None" if you play without mods. Dubbing and voice mods can replace original lines.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Recording and diagnostic report
+      description: Drag a short video or audio recording and the diagnostic ZIP from the launcher's Support page here.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use the latest OpenShao release.
+          required: true
+        - label: I searched the existing issues for this problem.
+          required: true

@@ -23,11 +23,13 @@ def main():
         write_game_folder(game, files)
 
         def run(source, expected=0, message='', register=False):
-            result = subprocess.run([str(exe), '--data-dir', str(data),
+            result = subprocess.run([str(exe), '--background', '--data-dir', str(data),
                                      '--register-disc' if register else '--validate-disc', str(source)],
                                     capture_output=True, text=True, encoding='utf-8', timeout=20,
                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
             assert result.returncode == expected, (source, expected, result.returncode, result.stderr)
+            assert not list((data / 'cache/support').glob('worker-*')), (
+                'File-validation fixtures must not start an interactive crash-report worker')
             if expected:
                 assert message.lower() in result.stderr.lower(), result.stderr
                 assert (data / 'game-source.toml').read_bytes() == saved, 'Rejected input changed the remembered game'

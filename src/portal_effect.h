@@ -29,8 +29,7 @@ inline bool Unit(Vec& a) {
 }
 }
 
-// Rotate the whole ribbon about its end-center line. Retain its original taper,
-// corner distances, packed texture coordinates and color.
+// Rotate the whole ribbon about its end-center line, keeping taper, UVs and color.
 inline bool FacePortalQuad(std::span<uint8_t> bytes,std::array<float,3> camera) {
     using namespace portal_detail;
     if(bytes.size()!=80) return false;
@@ -79,8 +78,7 @@ inline bool FacePortalQuad(std::span<uint8_t> bytes,std::array<float,3> camera) 
     return true;
 }
 
-// The stretched helper uses world-space velocity. The ordinary sprite producer
-// applies another camera rotation afterward; remove it about the particle origin.
+// Undo the sprite producer's extra camera rotation about the particle origin.
 inline bool RestorePortalWorldAxes(std::span<uint8_t> bytes,const std::array<float,16>& matrix) {
     if(bytes.size()!=80) return false;
     for(float value:matrix) if(!std::isfinite(value)) return false;

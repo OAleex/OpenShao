@@ -60,15 +60,18 @@ int main() {
     unsigned failures=0;
     auto check=[&](bool ok,const char* reason){if(!ok){++failures;std::cerr<<reason<<'\n';}};
     X86Context ctx{};ctx.esp=0x3000;ctx.eax=123;ctx.ecx=456;
+    for(unsigned clip=0;clip<=6;++clip)check(MainBackdropClip(clip),"Main's intro and focus clips keep the lake backdrop");
+    for(unsigned clip:{8u,10u,12u,14u,16u,18u})check(MainBackdropClip(clip),"Main's return clips restore the lake backdrop at once");
+    for(unsigned clip:{7u,9u,11u,13u,15u,17u,19u})check(!MainBackdropClip(clip),"Main's leave clips keep the native backdrop shutdown");
     for(const auto* locale:{"en","fr","de","es","it","pt-BR"})for(const float aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2}) {
         settings.language=locale;ratio=aspect;draws.clear();
         BeginScene();Quad(0,90,176,256,60,76);
         check(ReplaceGraphic(ctx,0xD760EEC1,0,2),"A known main-menu label must be replaced");
         check(kernel::R32(0x63F5E0)==0,"Replacement must remove only its own queued artwork");
+        EndScene(ctx);
         check(draws.size()==14 && draws.back().font==0x66C0E8,"Menu text must use the native decorative font");
         check((draws.back().args[2]>>24)==76,"Inactive menu opacity must follow the original animation");
         check(ctx.esp==0x3000 && ctx.eax==123 && ctx.ecx==456,"Font calls must preserve guest register state");
-        EndScene(ctx);
         for(const uint32_t heading:{0xC7AE190Cu,0x64E46E7Eu,0xDA6ACBC4u,0xA7BE574Au,0x36C56E9Du,0x86ABCE30u,0x0D41E9C5u,0u}) {
         BeginScene();draws.clear();Quad(0,52,36,256,60);
         if(heading)check(ReplaceGraphic(ctx,heading,0,2),"Known submenu headings must be replaced");
@@ -162,6 +165,14 @@ int main() {
         "The adjustment hint must draw the exact native gallery direction glyph through the icon font instead of keyboard direction words");
     check(MainHighlight(6,6)==5 && MainHighlight(15,6)==4 && MainHighlight(17,5)==5 && MainHighlight(8,0)==0 && MainHighlight(19,6)==5,
         "Main-menu clip states must identify the authored highlight during selection, exit, return and attract transitions");
+    for(const auto* locale:openshao::launcher::languages) {
+        settings.language=locale;draws.clear();Quad(0,90,232,256,60,254);
+        MainExtraLabel(ctx,0,2,true,true,9);
+        check(!draws.empty(),"Game Mode must draw a localized entry from the Versus animation anchor");
+        if(!draws.empty())check(std::abs(std::bit_cast<float>(draws.back().args[1])-225)<.01f &&
+            std::string(static_cast<const char*>(kernel::HostPtr(draws.back().args[3]))).size()>0,
+            "Game Mode must occupy the raised fourth row without clipping its native text");
+    }
     for(const auto* locale:{"en","fr","de","es","it","pt-BR"})for(const float aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2}) {
         settings.language=locale;ratio=aspect;
         for(const auto [source,selected,anchor,expected]:{std::tuple{38u,false,false,38u},std::tuple{127u,false,true,38u},std::tuple{38u,true,false,127u},std::tuple{127u,true,true,127u}}) {
@@ -169,7 +180,7 @@ int main() {
             check(!draws.empty(),"The extra menu row must draw from the current native Kontent frame");
             if(!draws.empty()) {
                 const auto& draw=draws.back();
-                check(std::abs(std::bit_cast<float>(draw.args[0])+107)<.01f && std::abs(std::bit_cast<float>(draw.args[1])-121)<.01f,
+                check(std::abs(std::bit_cast<float>(draw.args[0])+107)<.01f && std::abs(std::bit_cast<float>(draw.args[1])-85)<.01f,
                     "The extra row must inherit timeline movement and remain one row below Kontent");
                 check((draw.args[2]>>24)==expected,"The extra row must inherit transition opacity while retaining its own highlight");
             }
@@ -188,14 +199,14 @@ int main() {
     check(draws.empty(),"Missing or invalid native frames must not produce a floating extra label");
     BeginScene();Quad(0,110,72,256,20,76);MainRowAnchor(0,2);
     draws.clear();Quad(0,110,80,256,20,76);MainExtraLabel(ctx,0,2,false,false);EndScene(ctx);
-    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-93)<.01f,
+    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-37)<.01f,
         "The extra row must follow compressed native line spacing during the transition");
     BeginScene();draws.clear();Quad(0,110,80,256,20,76);MainExtraLabel(ctx,0,2,false,false);
     Quad(0,110,72,256,20,76);MainRowAnchor(0,2);EndScene(ctx);
-    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-93)<.01f,
+    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-37)<.01f,
         "Animated row spacing must work when Kontent is drawn before its neighboring caption");
     BeginScene();draws.clear();Quad(0,90,316,256,60,76);MainExtraLabel(ctx,0,2,false,false);EndScene(ctx);
-    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-349)<.01f,
+    check(!draws.empty() && std::abs(std::bit_cast<float>(draws.back().args[1])-313)<.01f,
         "Animation anchors must not leak into the next scene or steady menu layout");
     for(const auto* locale:openshao::launcher::languages)for(const float aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2})for(const float step:{8.f,28.f}) {
         settings.language=locale;ratio=aspect;
@@ -206,10 +217,10 @@ int main() {
               "Recompilation settings, Enhancements and Exit must keep independent highlights at every aspect ratio");
         if(!draws.empty()) {
             const auto& exit=draws.back();
-            check(std::abs(std::bit_cast<float>(draws[27].args[1])-(321+2*step))<.01f &&
+            check(std::abs(std::bit_cast<float>(draws[27].args[1])-(251+3*step))<.01f &&
                   std::string(static_cast<const char*>(kernel::HostPtr(draws[27].args[3])))==EncodeNative(Catalog::Builtin().Get(locale,"recomp.enhancements"),std::string_view(locale)=="pt-BR"),
                   "Enhancements must follow the native spacing and localized text");
-            check(std::abs(std::bit_cast<float>(exit.args[1])-(321+3*step))<.01f &&
+            check(std::abs(std::bit_cast<float>(exit.args[1])-(245+4*step))<.01f &&
                   std::string(static_cast<const char*>(kernel::HostPtr(exit.args[3])))==EncodeNative(Catalog::Builtin().Get(locale,"main.exit_desktop"),std::string_view(locale)=="pt-BR"),
                   "Exit must follow the native spacing and localized text, including compressed entrance and return frames");
         }

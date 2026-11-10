@@ -1,12 +1,16 @@
 #include "pipeline_assets.h"
 #include "pipeline_screen_state.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include "core/log.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
@@ -17,8 +21,7 @@ namespace {
 std::mutex describer_mutex;
 CandidateDescriber describer;
 float pipeline_render_scale = 1;
-std::unordered_map<std::string, Recipe> descriptions;
-std::deque<std::string> description_order;
+uint64_t description_generation = 0;
 std::unordered_set<uint64_t> predicted_keys, observed_keys;
 uint32_t first_ready = 0, first_late = 0, first_missing = 0;
 bool trace_recipes = false;
@@ -31,21 +34,84 @@ thread_local Batch load_batch = 0;
 thread_local uint32_t load_objects = 0, load_variants = 0, load_unknown = 0;
 thread_local std::chrono::steady_clock::time_point load_start;
 
-std::string DescriptionKey(const PipelineCandidate& c) {
-    std::string key;
-    auto add = [&](const auto& value) { key.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+template <typename... Fields>
+auto PackKey(const Fields&... fields) {
+    std::array<char, (sizeof(Fields) + ...)> key;
+    char* next = key.data();
+    auto append = [&](const auto& value) {
+        std::memcpy(next, &value, sizeof(value));
+        next += sizeof(value);
+    };
+    (append(fields), ...);
+    return key;
+}
+
+auto BufferStrides(const gpu::Assembled& layout) {
+    std::array<uint32_t, std::tuple_size_v<decltype(layout.buffers)>> strides;
+    for (size_t i = 0; i < strides.size(); ++i) strides[i] = layout.buffers[i].stride;
+    return strides;
+}
+
+auto DescriptionKey(const PipelineCandidate& c) {
     const auto& s = c.state;
     const auto& a = c.layout;
-    add(s.simple); add(s.rs); add(s.tss); add(s.vs_handle); add(s.zscale);
     const uint64_t program = s.vs ? ProgramHash(s.vs->program) : 0;
     const uint64_t pixel = s.ps ? gpu::Hash(s.ps->def, sizeof(s.ps->def)) : 0;
-    add(program); add(pixel); add(s.light_enable); add(s.lights);
-    add(a.regs); add(a.decode); add(a.topology); add(a.strip); add(a.pretransformed);
-    add(a.elements); add(a.buffer_count);
-    for (const auto& buffer : a.buffers) add(buffer.stride);
-    add(c.textures); add(c.shadow); add(c.shadow_color); add(c.depth); add(c.depth_width); add(c.render_scale);
-    const bool quad_count = c.count <= 6; add(quad_count);
-    return key;
+    return PackKey(s.simple, s.rs, s.tss, s.vs_handle, s.zscale, program, pixel, s.light_enable, s.lights,
+        a.regs, a.decode, a.topology, a.strip, a.pretransformed, a.elements, a.buffer_count, BufferStrides(a),
+        c.textures, c.shadow, c.shadow_color, c.depth, c.depth_width, c.render_scale, c.count <= 6);
+}
+
+using Description = decltype(DescriptionKey(std::declval<const PipelineCandidate&>()));
+struct DescriptionHash {
+    size_t operator()(const Description& key) const noexcept {
+        // Mix complete words of the render state. Equality still compares every byte.
+        uint64_t hash = 1469598103934665603ull;
+        auto mix = [&](uint64_t word) {
+            hash = (hash ^ word) * 1099511628211ull;
+            hash ^= hash >> 32;
+        };
+        size_t offset = 0;
+        for (; offset + sizeof(uint64_t) <= key.size(); offset += sizeof(uint64_t)) {
+            uint64_t word;
+            std::memcpy(&word, key.data() + offset, sizeof(word));
+            mix(word);
+        }
+        uint64_t tail = 0;
+        std::memcpy(&tail, key.data() + offset, key.size() - offset);
+        mix(tail);
+        return static_cast<size_t>(hash);
+    }
+};
+std::unordered_map<Description, Recipe, DescriptionHash> descriptions;
+std::deque<Description> description_order;
+
+// Unit prototypes only differ by texture modes: key on material flags, skip the zero arrays.
+auto MaterialPassKey(const PipelineCandidate& c, const MaterialVariant& material, uint32_t kind) {
+    const auto& s = c.state;
+    const auto& a = c.layout;
+    const uint64_t program = s.vs ? (s.vs->hash ? s.vs->hash : ProgramHash(s.vs->program)) : 0;
+    const uint64_t pixel = s.ps ? gpu::Hash(s.ps->def, sizeof(s.ps->def)) : 0;
+    return PackKey(s.vs_handle, s.zscale, program, pixel,
+        a.regs, a.decode, a.topology, a.strip, a.pretransformed, a.elements, a.buffer_count, BufferStrides(a),
+        c.textures, c.shadow, c.shadow_color, c.depth, c.depth_width, c.render_scale, c.count <= 6,
+        kind, material.object_flags, material.object_flags2, material.transparent);
+}
+
+using PassKey = decltype(MaterialPassKey(std::declval<const PipelineCandidate&>(), MaterialVariant{}, 0));
+struct PassKeyHash {
+    size_t operator()(const PassKey& key) const noexcept {
+        return std::hash<std::string_view>{}({key.data(), key.size()});
+    }
+};
+std::unordered_map<PassKey, std::vector<Recipe>, PassKeyHash> prepared_passes;
+std::deque<PassKey> prepared_order;
+size_t prepared_bytes = 0;
+thread_local std::unordered_set<PassKey, PassKeyHash> load_prepared;
+thread_local uint64_t load_generation = 0;
+void ForgetPreparedLoad() { load_prepared.clear(); }
+void RememberPreparedLoad(const PassKey& key) {
+    if (load_prepared.size() < 1024) load_prepared.insert(key);
 }
 
 // Optional, bounded descriptor evidence for comparing metadata prediction with actual draws.
@@ -63,15 +129,84 @@ void Trace(const Recipe& r, const char* source) {
          Hex(&r.vertex, sizeof(r.vertex)).c_str());
     LOGR("asset recipe %s: pixel=%s", source, Hex(&r.pixel, sizeof(r.pixel)).c_str());
 }
-bool Predict(Batch batch, const PipelineCandidate& candidate, const gpu::State& state) {
+bool Predict(Batch batch, const PipelineCandidate& candidate, const gpu::State& state,
+             std::vector<Recipe>* prepared = nullptr) {
     Recipe recipe{};
     const auto program = state.vs ? std::span<const uint32_t>(state.vs->program) : std::span<const uint32_t>{};
     if (!DescribeCandidate(candidate, recipe) || !Submit(batch, recipe, program)) return false;
+    if (prepared) prepared->push_back(recipe);
     std::lock_guard lock(describer_mutex);
     if (predicted_keys.insert(KeyHash({recipe.key, recipe.key_size})).second && trace_recipes && trace_predicted++ < 1024)
         Trace(recipe, "predicted");
     return true;
 }
+
+// Keep pass recipes, not guest addresses, so copies of a model need not re-enumerate.
+class PreparedPass {
+public:
+    PreparedPass(Batch batch, const PipelineCandidate& prototype, const MaterialVariant& material, uint32_t kind)
+        : batch_(batch), unknown_before_(load_unknown) {
+        {
+            std::lock_guard lock(describer_mutex);
+            auto scaled = prototype;
+            scaled.render_scale = pipeline_render_scale;
+            key_ = MaterialPassKey(scaled, material, kind);
+            generation_ = description_generation;
+            if (load_generation != generation_) { ForgetPreparedLoad(); load_generation = generation_; }
+            // Copies are already attached to this batch; resubmitting repeats hashing in gameplay.
+            if (batch == load_batch && load_prepared.contains(key_)) { reused_ = true; return; }
+            if (auto it = prepared_passes.find(key_); it != prepared_passes.end()) {
+                recipes = it->second;
+                reused_ = true;
+            }
+        }
+        if (!reused_) return;
+        const auto program = prototype.state.vs ? std::span<const uint32_t>(prototype.state.vs->program)
+                                                : std::span<const uint32_t>{};
+        for (const auto& recipe : recipes) {
+            if (Submit(batch, recipe, program)) ++load_variants;
+            else ++load_unknown;
+        }
+        std::lock_guard lock(describer_mutex);
+        if (batch == load_batch && generation_ == description_generation && load_unknown == unknown_before_)
+            RememberPreparedLoad(key_);
+    }
+    ~PreparedPass() {
+        if (reused_ || recipes.empty() || load_unknown != unknown_before_) return;
+        auto less = [](const Recipe& a, const Recipe& b) {
+            return a.key_size != b.key_size ? a.key_size < b.key_size
+                : std::memcmp(a.key, b.key, a.key_size) < 0;
+        };
+        std::sort(recipes.begin(), recipes.end(), less);
+        recipes.erase(std::unique(recipes.begin(), recipes.end(), [](const Recipe& a, const Recipe& b) {
+            return a.key_size == b.key_size && std::memcmp(a.key, b.key, a.key_size) == 0;
+        }), recipes.end());
+        recipes.shrink_to_fit();
+        std::lock_guard lock(describer_mutex);
+        if (generation_ != description_generation) return;
+        if (batch_ == load_batch) RememberPreparedLoad(key_);
+        if (prepared_passes.count(key_)) return;
+        prepared_order.push_back(key_);
+        auto [it, inserted] = prepared_passes.emplace(key_, std::move(recipes));
+        prepared_bytes += 2 * sizeof(PassKey) + it->second.capacity() * sizeof(Recipe);
+        // Keep both forms' passes resident across an in-combat model swap.
+        while (prepared_order.size() > 512 || prepared_bytes > 4 * 1024 * 1024) {
+            auto oldest = prepared_passes.find(prepared_order.front());
+            prepared_bytes -= 2 * sizeof(PassKey) +
+                oldest->second.capacity() * sizeof(Recipe);
+            prepared_passes.erase(oldest);
+            prepared_order.pop_front();
+        }
+    }
+    bool Reused() const { return reused_; }
+    std::vector<Recipe> recipes;
+private:
+    Batch batch_;
+    PassKey key_;
+    uint64_t generation_ = 0;
+    uint32_t unknown_before_ = 0;
+    bool reused_ = false;
+};
 
 bool ActiveDescriber() {
     std::lock_guard lock(describer_mutex);
@@ -176,12 +311,11 @@ gpu::TexInfo SceneAuxiliaryTexture() {
     return texture;
 }
 void PredictAsset(Batch batch, PipelineCandidate& candidate, const gpu::State& state,
-                  const gpu::TexInfo& auxiliary) {
-    // 0012C850/00140750 bind the scene's shadow lookup at stage 2. It can be
-    // absent in the ordinary pass; disabled shader stages share a canonical key.
+                  const gpu::TexInfo& auxiliary, std::vector<Recipe>* prepared = nullptr) {
+    // 0012C850/00140750 bind the shadow lookup at stage 2; disabled stages share a canonical key.
     for (const auto texture : {gpu::TexInfo{},auxiliary}) {
         candidate.textures[2]=texture;
-        if (Predict(batch,candidate,state)) ++load_variants;
+        if (Predict(batch,candidate,state,prepared)) ++load_variants;
         else ++load_unknown;
     }
 }
@@ -201,9 +335,7 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
     if (!Texture(Read(material + 12), base, transparent)) { ++load_unknown; return; }
     const uint32_t gloss = Read(material + 20), reflection = Read(material + 24);
     if (!Texture(gloss != ~0u ? gloss : reflection, extra, ignored)) { ++load_unknown; return; }
-    // 00137450(0, 1) binds the scene's auxiliary texture before object drawing.
-    // This is a colour texture in the validated C4 pass, and a depth texture in
-    // other passes. Material setters replace it for gloss/reflection materials.
+    // 00137450(0,1) binds the auxiliary texture (colour in C4, depth elsewhere); gloss/reflection replace it.
     const bool inherits_texture = gloss == ~0u && reflection == ~0u;
     if (inherits_texture) extra = {kTex2D, 0, 0, 0};
     MaterialVariant material_state;
@@ -211,10 +343,13 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
     material_state.object_flags = Read(object + 0x48);
     material_state.object_flags2 = Read(object + 0x4C);
     material_state.transparent = transparent || (Read(unit + 4) & 255);
+    // Variants never touch matrices or constants: keep zero state per unit.
+    State s{};
+    auto reset_state = [&] { s.simple = {}; s.rs = {}; s.tss = {}; };
+
 
     if (source_type == 11) {
-        // These objects are grouped by bone count before 0012BAA0 renders them.
-        // Their declarations/programs are unrelated to the static scene groups.
+        // Grouped by bone count before 0012BAA0; unrelated to the static scene groups.
         const uint32_t code = Read(object + 0x4C4);
         for (const auto pass : {4u, 0u, 8u, 12u, 16u, 32u, 2u}) {
           for (unsigned lights = 0; lights < (pass == 2 || pass == 32 ? 1u : 4u); ++lights) {
@@ -223,11 +358,18 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
             if (!pair.valid || !ShaderSlot(pair.vertex, vs, ps) || !ShaderSlot(pair.pixel, vs, ps)) {
                 ++load_unknown; continue;
             }
-            State s{};
+            reset_state();
             if (!d3d::SnapshotPipelineShaders(vs, ps, s)) { ++load_unknown; continue; }
             s.streams[0] = {1, stride};
             Assembled layout;
             if (!DescribePipelineLayout(s, prim, layout)) { ++load_unknown; continue; }
+            PipelineCandidate prototype{s, layout};
+            prototype.count = count;
+            prototype.textures[0] = base; prototype.textures[1] = extra; prototype.textures[2] = auxiliary;
+            const uint32_t kind = 0x10000000u | pass | uint32_t(gloss != ~0u) << 16 |
+                uint32_t(reflection != ~0u) << 17;
+            PreparedPass prepared{batch, prototype, material_state, kind};
+            if (prepared.Reused()) continue;
             const bool shadow = pass == 2;
             for (unsigned stencil = 0; stencil < (shadow ? 1u : 2u); ++stencil) {
                 for (unsigned alpha = 0; alpha < (shadow ? 1u : 2u); ++alpha) {
@@ -243,13 +385,12 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
                     PipelineCandidate c{s, layout};
                     c.count = count; c.shadow = shadow; c.shadow_color = shadow;
                     c.depth_width=shadow ? 256 : 0;
-                    // The shadow callback omits the material setter, inheriting
-                    // the outer batch's absent or still-bound base texture.
+                    // The shadow callback skips the material setter and inherits the outer base texture.
                     c.textures[0] = shadow && binding ? TexInfo{} : base;
                     if (!shadow) {
                         c.textures[1] = gloss != ~0u ? extra : TexInfo{};
                     }
-                    PredictAsset(batch,c,s,auxiliary);
+                    PredictAsset(batch,c,s,auxiliary,&prepared.recipes);
                     }
                    }
                   }
@@ -271,11 +412,18 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
             if (!ShaderSlot(slot, vs, ps) ||
                 (slot == 10 && !ShaderSlot(120 + pixel_variant, vs, ps)) ||
                 (slot == 23 && !ShaderSlot(122, vs, ps))) { ++load_unknown; continue; }
-            State s{};
+            reset_state();
             if (!d3d::SnapshotPipelineShaders(vs, ps, s)) { ++load_unknown; continue; }
             s.streams[0] = {1, stride};  // only presence and stride, never dereferenced
             Assembled layout;
             if (!DescribePipelineLayout(s, prim, layout)) { ++load_unknown; continue; }
+            PipelineCandidate prototype{s, layout};
+            prototype.count = count;
+            prototype.textures[0] = base; prototype.textures[1] = extra; prototype.textures[2] = auxiliary;
+            const uint32_t kind = slot | uint32_t(gloss != ~0u) << 16 |
+                uint32_t(reflection != ~0u) << 17 | pixel_variant << 24;
+            PreparedPass prepared{batch, prototype, material_state, kind};
+            if (prepared.Reused()) continue;
             for (unsigned fade = 0; fade < 2; ++fade) {
               const bool alternate = slot >= 157 && slot <= 159;
               const bool projected = slot == 163 || slot == 164;
@@ -302,16 +450,15 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
                         candidate.textures[1] = inherited ? TexInfo{kTex2D, 1, 1, 0} : extra;
                         if (receiver) candidate.textures[1]={kTex2D,0,0,0};
                         if (projected) {
-                            // 0013CB10 binds projected shadow maps in stage 1,
-                            // and in stage 3 for its paired-light shader.
+                            // 0013CB10 binds projected shadows in stage 1 (and 3 for the paired-light shader).
                             candidate.textures[1] = {kTex2D,1,1,0};
                             if (slot == 164) candidate.textures[3] = candidate.textures[1];
                         }
-                        PredictAsset(batch,candidate,s,auxiliary);
+                        PredictAsset(batch,candidate,s,auxiliary,&prepared.recipes);
                         if (slot >= 157 && slot <= 159 && inherited == 0) {
                             candidate.depth = false;
                             candidate.textures[1] = {};
-                            PredictAsset(batch,candidate,s,auxiliary);
+                            PredictAsset(batch,candidate,s,auxiliary,&prepared.recipes);
                         }
                     }
                 }
@@ -323,7 +470,7 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
     // Shadow-buffer shader pair selected by the enclosing pass (logical slots 19 and 136).
     uint32_t vs = 0, ps = 0;
     if (ShaderSlot(19, vs, ps) && ShaderSlot(136, vs, ps)) {
-        State s{};
+        reset_state();
         if (d3d::SnapshotPipelineShaders(vs, ps, s)) {
             s.streams[0] = {1, stride};
             Assembled layout;
@@ -333,7 +480,9 @@ void Unit(uint32_t object, uint32_t unit, Batch batch, uint32_t source_type) {
                 ApplyMaterialVariant(s, variant);
                 PipelineCandidate candidate{s, layout};
                 candidate.count = count; candidate.shadow = true; candidate.depth_width=256;
-                PredictAsset(batch,candidate,s,auxiliary);
+                candidate.textures[2] = auxiliary;
+                PreparedPass prepared{batch, candidate, material_state, 0x20000000u};
+                if (!prepared.Reused()) PredictAsset(batch,candidate,s,auxiliary,&prepared.recipes);
             }
         }
     }
@@ -345,6 +494,8 @@ void SetCandidateDescriber(CandidateDescriber callback) {
     describer = std::move(callback);
     descriptions.clear();
     description_order.clear();
+    prepared_passes.clear(); prepared_order.clear(); prepared_bytes = 0;
+    ++description_generation;
     if (describer) {
         predicted_keys.clear(); observed_keys.clear(); first_ready = first_late = first_missing = 0;
         trace_recipes = std::getenv("OPENSHAO_ASSET_PIPELINE_TRACE") != nullptr;
@@ -357,7 +508,11 @@ void SetCandidateDescriber(CandidateDescriber callback) {
 void ClearCandidateDescriber() { SetCandidateDescriber({}); }
 void SetPipelineRenderScale(float scale) {
     std::lock_guard lock(describer_mutex);
-    if (pipeline_render_scale!=scale) { descriptions.clear(); description_order.clear(); }
+    if (pipeline_render_scale!=scale) {
+        descriptions.clear(); description_order.clear();
+        prepared_passes.clear(); prepared_order.clear(); prepared_bytes = 0;
+        ++description_generation;
+    }
     pipeline_render_scale=scale;
 }
 bool DescribeCandidate(const PipelineCandidate& c, Recipe& r) {
@@ -466,8 +621,7 @@ void WarmInterfaceShader(uint32_t vertex) {
                     SetAssetAlphaKill(s,kill);
                     PredictScreen(batch,s,prim,depth,textures);
                 }
-    // Particle batches reuse the screen declaration, retain depth testing and can
-    // inherit the auxiliary stages from the preceding scene pass (00127ED0).
+    // Particle batches reuse the screen declaration and can inherit the scene's auxiliary stages (00127ED0).
     for (uint32_t prim : {6u,8u}) for (bool depth : {false,true})
         for (auto blend : {ScreenBlend::Alpha,ScreenBlend::Additive,ScreenBlend::ReverseSubtract})
             for (bool stage1 : {false,true}) for (bool stencil : {false,true})
@@ -494,8 +648,7 @@ void WarmShaderLibraryPipelines() {
         MakeFullscreenInputs(s,taps);
         for (bool wide : {false,true}) for (bool depth : {false,true}) for (bool additive : {false,true}) {
             auto textures=FullscreenTextures(taps);
-            // Upscaled targets average a console texel per downsample tap.
-            // Binding lowers this same finite variant with kTexWide.
+            // Upscaled targets average a console texel per tap (kTexWide).
             if (wide) for (auto& texture : textures) if (texture.kind) texture.flags |= gpu::kTexWide;
             ApplyFullscreenPipelineState(s,taps,additive);
             PredictScreen(batch,s,6,depth,textures.data());
@@ -505,6 +658,7 @@ void WarmShaderLibraryPipelines() {
 }
 void BeginPipelineLoad() {
     if (load_batch) return;
+    ForgetPreparedLoad();
     load_objects = load_variants = load_unknown = 0;
     load_start = std::chrono::steady_clock::now();
     load_batch = BeginBatch(CurrentRoom());
@@ -543,6 +697,6 @@ void EndPipelineLoad() {
     if (load_objects) LOGR("asset pipelines: room %02X, objects %u, candidates %u, unique %u, pending %u, failed %u, unsupported %u, coverage %s, %.0f ms",
         CurrentRoom(), load_objects, load_variants, status.total, status.pending, status.failed, load_unknown,
         load_unknown ? "partial" : "supported paths", ms);
-    ReleaseBatch(load_batch); load_batch = 0;
+    ReleaseBatch(load_batch); load_batch = 0; ForgetPreparedLoad();
 }
 }

@@ -5,8 +5,7 @@
 #include <unordered_map>
 
 namespace openshao::pipelines {
-// Used by one backend's serialized candidate describer. Pipeline state can vary
-// without changing either shader; retain exact recipe bytes, not a hash of them.
+// Keep exact recipe bytes (state can vary without shader changes).
 class SourceHashes {
 public:
     template<class Generate> uint64_t Vertex(const VertexRecipe& key, Generate generate) {

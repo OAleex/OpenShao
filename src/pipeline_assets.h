@@ -10,7 +10,7 @@ namespace gpu {
 bool DescribePipelineLayout(const State&, uint32_t primitive, Assembled&);
 }
 namespace d3d {
-// Copies shader definitions under the D3D lock without changing device state.
+// Retains immutable shader definitions under the D3D lock without changing device state.
 bool SnapshotPipelineShaders(uint32_t vertex, uint32_t pixel, gpu::State&);
 }
 
@@ -112,8 +112,7 @@ inline void ApplySkinVariant(gpu::State& s, const MaterialVariant& v, bool shado
     }
 }
 
-// 0013CB10 selects groups 163/164 for additional projected lights and overlays
-// their destination-colour multiplication on the unit's normal depth/raster state.
+// 0013CB10 picks groups 163/164 for extra projected lights (destination-colour multiply).
 inline void ApplyProjectedMaterialVariant(gpu::State& s, const MaterialVariant& v) {
     ApplyMaterialVariant(s, v);
     using namespace gpu;
@@ -125,8 +124,7 @@ inline void ApplyProjectedMaterialVariant(gpu::State& s, const MaterialVariant& 
     s.simple[kMAlphaRef/4] = 0;
     s.simple[kMAlphaFunc/4] = 0x204;
 }
-// 0012C540 sets MIN/SRC_COLOR/DEST_ALPHA before 0012BF60/0012BAA0(pass 2).
-// The transparent partition at 0012BE00 changes the factors without resetting MIN.
+// 0012C540 sets MIN/SRC_COLOR/DEST_ALPHA; 0012BE00 changes factors without resetting MIN.
 inline void ApplySkinShadowBlend(gpu::State& s, bool minimum, bool alpha = true) {
     using namespace gpu;
     s.simple[kMBlendEnable/4] = minimum;
@@ -151,8 +149,7 @@ struct PipelineCandidate {
     uint32_t depth_width = 0;
     float render_scale = 1;
 };
-// Shadow targets allocated by 00137880 are 256 wide. Other depth passes use
-// their main target width. Match each renderer's target-allocation rounding.
+// Shadow targets (00137880) are 256 wide; other depth passes use the main width.
 inline float PipelineDepthScale(const PipelineCandidate& c, uint32_t main_width) {
     const uint32_t width=c.depth_width ? c.depth_width : main_width;
     return width ? float(std::max(1l,std::lround(width*c.render_scale)))/width : 1;

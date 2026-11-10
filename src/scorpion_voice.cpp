@@ -38,8 +38,7 @@ bool Preview(X86Context& ctx, bool enabled) {
     StopPreview(ctx);
     const unsigned pair = enabled ? 1u : 0u;
     const unsigned next = preview_index[pair] % 2;
-    // AFS stores the common pair before the rare pair. Read installed game data
-    // because the combat bank may not be loaded in the main menu.
+    // Read installed data (AFS: common pair first); the combat bank may not be loaded.
     if (!audio_preview::Play(pair * 2 + next)) return false;
     preview_active = true;
     preview_index[pair] = 1 - next;

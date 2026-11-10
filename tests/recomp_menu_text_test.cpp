@@ -52,6 +52,23 @@ int main() {
                   "Every translated debug caption must fit a terminated native string slot");
     }
     for(const auto locale:{"en","fr","de","es","it","pt-BR"}) {
+        const bool portuguese=std::string_view(locale)=="pt-BR";
+        for(const auto key:{"survival.unlock_new","survival.unlock_pending","survival.unlock_saved","survival.complete"}) {
+            const auto message=embedded.Get(locale,key);
+            const auto encoded=EncodeNativeMultiline(message,portuguese,127);
+            check(!message.empty() && encoded.find('\n')!=std::string::npos && encoded.size()<128,
+                  "All Survival frames (unlock and completion) need localized, line-broken native text within 128 bytes");
+        }
+        const auto hint=embedded.Get(locale,"survival.locked_hint");
+        check(!hint.empty() && EncodeNative(hint,portuguese).size()<95,
+              "Each locale needs a compact locked footer description");
+    }
+    check(embedded.Get("pt-BR","survival.unlock_new").find("Salve o jogo")!=std::string_view::npos,
+          "The first Portuguese unlock notification must explicitly tell players to save");
+    check(embedded.Get("pt-BR","survival.unlock_pending").find("Salve o jogo")!=std::string_view::npos &&
+          embedded.Get("pt-BR","survival.unlock_saved").find("Salve o jogo")==std::string_view::npos,
+          "Pending unlock explains saving, while an already-saved unlock does not ask to save again");
+    for(const auto locale:{"en","fr","de","es","it","pt-BR"}) {
         check(embedded.Get(locale,"language.en")=="English" && embedded.Get(locale,"language.fr")=="Français" &&
               embedded.Get(locale,"language.de")=="Deutsch" && embedded.Get(locale,"language.es")=="Español" &&
               embedded.Get(locale,"language.it")=="Italiano" && embedded.Get(locale,"language.pt-BR")=="Português Brasileiro",

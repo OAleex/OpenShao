@@ -7,8 +7,7 @@
 #include <span>
 #include "render_frame_state.h"
 
-// Output-only menu frames between two 60 Hz menu updates. Menus queue screen-space
-// triangles, rectangles and text before each render; matching records are blended.
+// Output-only menu frames between 60 Hz updates: matching queued records are blended.
 namespace openshao::frames::menu {
 inline constexpr uint32_t PolygonQueue=0x63F5E0,SpriteQueue=0x639760;
 inline constexpr size_t PolygonBytes=0xD804,PolygonRecord=0x6C,PolygonLimit=512;
@@ -37,8 +36,7 @@ inline void BlendBytes(const uint8_t* from,const uint8_t* to,uint8_t* out,size_t
     for(size_t i=offset;i<offset+count;++i)out[i]=uint8_t(std::lround(from[i]+(int(to[i])-int(from[i]))*t));
 }
 
-// Triangle record: +0 used, +5 textured, vertices at +0x10/+0x20/+0x30 (x, y, z, w),
-// colours at +0x58..+0x63, UVs at +0x40, texture at +0x68.
+// Triangle record: +0 used, +5 textured, vertices +0x10/+0x20/+0x30, colours +0x58, UVs +0x40, texture +0x68.
 inline bool PolygonCount(std::span<const uint8_t> queue,uint32_t& count) {
     if(queue.size()!=PolygonBytes)return false;
     count=U32(queue.data());

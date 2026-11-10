@@ -33,6 +33,7 @@ template<class... Args> void Trace(const char* format,Args... args) {
 #define X86_FUNC(name) void name(X86Context& ctx,uint8_t* base)
 #include "capabilities_test.inl"
 void SyncRetailFrontendMode() {}
+namespace openshao::save_pages { void HoldAnswer(input::Pad&) {} }
 #include "input_state_test.inl"
 static bool Call(uint32_t handle,uint32_t destination,uint32_t expected) {
     X86Context c; W32(c.esp,0x87654321);W32(c.esp+4,handle);W32(c.esp+8,destination);

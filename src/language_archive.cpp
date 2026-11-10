@@ -225,8 +225,7 @@ void Encode(Bytes& table, const Record& record) {
         Require(record.output_offset % kAlignment == 0 && record.output_offset/kAlignment <= 0x1fffff &&
                 record.output_size == record.original_size && record.output_size <= kPackedMaximum,
                 "Translated EWDF cannot be represented in the PWF table");
-        // Bits 22..31 of a and 0..11 of b encode the exact stored byte count.
-        // Bits 12..30 of b encode decoded allocation capacity in eight-byte units.
+        // a bits 22..31 + b bits 0..11: stored size; b bits 12..30: decoded capacity in 8-byte units.
         a = (record.original_a & 0xffe00000) | static_cast<uint32_t>(record.output_offset/kAlignment);
         b = record.original_b;
     } else {

@@ -1,6 +1,7 @@
-"""Exercise the generated native crash handler before any guest thread exists."""
+"""Exercise fallback and monitored native/guest crash diagnostics."""
 import argparse
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 
@@ -29,16 +30,24 @@ namespace fs = std::filesystem;
 namespace kernel {
 struct Thread { unsigned id; int* ctx; };
 inline unsigned char* g_base = nullptr;
-Thread* Current() { return nullptr; }
-void LogGuestStack(int, int) {}
+inline int context=0;
+inline Thread thread{0x14,&context};
+inline bool guest=false;
+Thread* Current() { return guest ? &thread : nullptr; }
+void LogGuestStack(int, int) { LOGR("guest-context-marker ECX=0186B800"); }
 }
 namespace openshao { struct { bool background = true; } options; }
 namespace openshao::support {
 bool exception_forwarded=false;
+bool monitor_available=false, diagnostics_before_handoff=false;
 bool NotifyCrash(uint32_t code,uint64_t address,void* pointer) noexcept {
     auto* e=static_cast<EXCEPTION_POINTERS*>(pointer);
     exception_forwarded=e && e->ContextRecord && e->ExceptionRecord && code==EXCEPTION_ACCESS_VIOLATION && address==0x1234000;
-    return false;
+    std::ifstream input(logx::Path());
+    const std::string text{std::istreambuf_iterator<char>(input), {}};
+    diagnostics_before_handoff=text.find("C0000005")!=std::string::npos &&
+        (!kernel::guest || text.find("guest-context-marker ECX=0186B800")!=std::string::npos);
+    return monitor_available;
 }
 void StopMonitor() noexcept {}
 Report Generate(const Source&) noexcept { return {}; }
@@ -89,6 +98,13 @@ int wmain(int argc, wchar_t** argv) {
     for (const auto& entry:fs::directory_iterator(openshao::paths::root))
         if(entry.path().extension()==".dmp" && entry.file_size()>0)dump=true;
     if(!dump) { std::cerr << "FAIL: native startup failures must still produce a dump\n"; ok=false; }
+    kernel::guest=true;
+    openshao::support::monitor_available=true;
+    const auto handled=app::WriteCrashDump(&exception);
+    if(handled!=EXCEPTION_EXECUTE_HANDLER || !openshao::support::diagnostics_before_handoff) {
+        std::cerr << "FAIL: monitored guest failures must flush their registers and stack before the report worker snapshots the log\n";
+        ok=false;
+    }
     return ok ? 0 : 1;
 }
 '''.replace('REPORT', report).replace('CRASH', crash)
@@ -97,11 +113,15 @@ with tempfile.TemporaryDirectory(prefix='openshao-startup-diagnostic-') as folde
     cpp=work/'test.cpp';cpp.write_text(harness,encoding='utf-8')
     exe=work/'test.exe'
     subprocess.run([str(args.compiler),'-std=c++20','-DNDEBUG','-D_CRT_SECURE_NO_WARNINGS','-DOPENSHAO_RECOMP_VERSION="test"',
-                    '-fuse-ld=lld','-I'+str(root/'src'),'-I'+str(args.sdk/'runtime'),str(cpp),
+                    '-fuse-ld=lld','-I'+str(root/'src/sdk_compat'),'-I'+str(root/'src'),'-I'+str(args.sdk/'runtime'),str(cpp),
                     str(args.sdk/'runtime/core/log.cpp'),'-ldbghelp','-lshell32','-luser32',
                     '-o',str(exe)],check=True,capture_output=True,text=True)
     run=subprocess.run([str(exe),str(work/'data')],capture_output=True,text=True,timeout=20,
                        creationflags=subprocess.CREATE_NO_WINDOW)
     print(run.stdout,end='');print(run.stderr,end='')
     if run.returncode:raise SystemExit(run.returncode)
-print('PASS: pre-game exceptions and suppressed error reasons remain diagnosable')
+    dump=next((work/'data').glob('*.dmp')).read_bytes()
+    stream_count,table=struct.unpack_from('<II',dump,8)
+    stream_types={struct.unpack_from('<I',dump,table+i*12)[0] for i in range(stream_count)}
+    assert 16 in stream_types,'Fallback crash dumps must also preserve memory protection and allocation state'
+print('PASS: fallback and monitored native/guest failures preserve crash diagnostics')

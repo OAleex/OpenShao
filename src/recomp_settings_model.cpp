@@ -1,4 +1,5 @@
 #include "recomp_settings_model.h"
+#include "frame_rate.h"
 #include <algorithm>
 #include <cmath>
 namespace openshao::recomp {
@@ -60,13 +61,15 @@ std::vector<Row> Model::Rows()const {
         for(unsigned i=0;i<mouse::button_keys.size();++i)add("mouse."+std::string(mouse::button_keys[i]),"binding."+s.mouse.bindings[i]);
         add("settings.defaults",{},true);break;
     case Page::Audio:
-        add("settings.master",std::to_string(s.master_volume)+"%");break;
+        add("settings.master",std::to_string(s.master_volume)+"%");
+        add("audio.output",s.audio_output==0 ? "audio.mono" : s.audio_output==2 ? "audio.surround" : "audio.stereo");break;
     case Page::Language:
         add("settings.text_language","language."+s.language);add("settings.voice_language","language."+s.voice_language);break;
     case Page::Enhancements:
         add("settings.scorpion_unfiltered",Toggle(s.scorpion_unfiltered));
         add("settings.restore_dialogue",Toggle(s.restore_dialogue));
         add("settings.cinematic_bars",Toggle(s.cinematic_bars));
+        add("settings.improved_difficulty",Toggle(s.improved_difficulty));
         add("settings.save",{},true);add("settings.discard",{},true);break;
     }
     return rows;
@@ -125,7 +128,7 @@ void Model::Change(size_t row,int direction) {
     case Page::Graphics:
         if(row==0)number(s.render_percent,5,25,400);if(row==1)Cycle(s.aniso,std::array{0,2,4,8,16},delta);
         if(row==2)s.vsync=!s.vsync;if(row==3)s.bloom_effect=!s.bloom_effect;if(row==4)s.show_fps=!s.show_fps;
-        if(row==5 && !s.vsync)Cycle(s.fps_cap,std::array{60,120},delta);break;
+        if(row==5 && !s.vsync)Cycle(s.fps_cap,frames::RateOptions,delta);break;
     case Page::Controls:
         if(row==3)s.deadzone=std::clamp(std::round(s.deadzone*100+delta)/100,0.,.5);if(row==4)s.rumble=!s.rumble;break;
     case Page::Controller:
@@ -145,7 +148,8 @@ void Model::Change(size_t row,int direction) {
         if(row==3){const std::array<std::string,3> modes{"right_stick","left_stick","none"};Cycle(s.mouse.motion,modes,delta);}
         if(row>=4 && row<11){std::array<std::string,mouse::actions.size()> actions;std::copy(mouse::actions.begin(),mouse::actions.end(),actions.begin());Cycle(s.mouse.bindings[row-4],actions,delta);}break;
     case Page::Audio:
-        if(row==0)number(s.master_volume,5,0,100);break;
+        if(row==0)number(s.master_volume,5,0,100);
+        if(row==1)Cycle(s.audio_output,std::array{0,1,2},delta);break;
     case Page::Language:
         if(row==0){std::array<std::string,6> languages;std::copy(launcher::languages.begin(),launcher::languages.end(),languages.begin());Cycle(s.language,languages,delta);}
         else if(row==1)Cycle(s.voice_language,launcher::voice_languages,delta);
@@ -153,7 +157,9 @@ void Model::Change(size_t row,int direction) {
     case Page::Enhancements:
         if(row==0)s.scorpion_unfiltered=!s.scorpion_unfiltered;
         if(row==1)s.restore_dialogue=!s.restore_dialogue;
-        if(row==2)s.cinematic_bars=!s.cinematic_bars;break;
+        if(row==2)s.cinematic_bars=!s.cinematic_bars;
+        if(row==3)s.improved_difficulty=!s.improved_difficulty;
+        break;
     default:break;
     }
 }

@@ -24,6 +24,7 @@
 
 #include "controller.h"
 #include "host.h"
+#include "discord_presence.h"
 #include "keyboard.h"
 #include "language_pack.h"
 #include "launcher.h"
@@ -302,6 +303,7 @@ int main(int argc, char** argv) {
         LOGE("Automatic crash report worker is unavailable; using the local error handler.");
     app::Load();
     {std::string error;if(!openshao::restart::ContinueStartup(error)){LOGE("Language restart: %s",error.c_str());return 8;}}
+    openshao::discord::SetState(openshao::discord::State::Launcher, openshao::options, openshao::launcher::DiscordPresenceEnabled());
     if (openshao::options.background) {
         app::Get().display_mode = app::DisplayMode::Windowed;
         app::Get().width = 640;
@@ -312,6 +314,7 @@ int main(int argc, char** argv) {
          !openshao::options.validate_language_pack && !openshao::options.no_launcher)) {
         if (!openshao::launcher::Show()) return 0;
     }
+    openshao::discord::SetState(openshao::discord::State::Playing, openshao::options, openshao::launcher::DiscordPresenceEnabled());
     openshao::StartWatchdog();
     if (app::kGame.init) app::kGame.init();
 

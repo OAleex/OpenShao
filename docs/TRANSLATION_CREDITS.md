@@ -1,4 +1,4 @@
-# Brazilian Portuguese credits
+# Brazilian Portuguese fan translation credits
 
 ## Translation and production
 

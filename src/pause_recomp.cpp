@@ -3,6 +3,7 @@
 #include "host.h"
 #include "recomp_input.h"
 #include "menu_text.h"
+#include "frame_rate.h"
 #include "core/log.h"
 #include <algorithm>
 #include <array>
@@ -21,13 +22,11 @@ int last_display_seconds=0;
 std::string status;
 std::string Local(std::string_view id) {
     const auto& locale=launcher::Current().language;
-    // Same JSON catalog, native Latin-1 codes and PT-BR glyph remapping used by
-    // every other translated game menu (including ã/õ on the translated font).
+    // Same catalog and Latin-1/PT-BR glyph encoding as the other menus.
     return menu::EncodeNative(menu::Catalog::Builtin().Get(locale,id),locale=="pt-BR");
 }
 std::string Clip(std::string text) {
-    // The native encoded text has exactly one byte per glyph. Clip only after
-    // encoding UTF-8, never through the middle of an accented UTF-8 sequence.
+    // Clip after encoding (one byte per glyph), never inside a UTF-8 sequence.
     if (text.size()>24) text.resize(24);
     return text;
 }
@@ -159,8 +158,7 @@ std::string RowText(unsigned row) {
         switch(row) {
         case 0:return pair(Local("settings.mode"),
             Local(s.display_mode=="windowed"?"value.windowed":s.display_mode=="fullscreen"?"value.fullscreen":"value.borderless"));
-        // Zero size follows the desktop automatically. Its full localized
-        // caption may be clipped in the narrower retail SELECT frame.
+        // Zero size follows the desktop; long captions may clip in the SELECT frame.
         case 1:return pair(Local("pause.resolution"),s.width&&s.height?std::to_string(s.width)+"x"+std::to_string(s.height):Local("value.auto"));
         case 2:return pair(Local("pause.aspect"),s.aspect_ratio=="original"?"4:3":s.aspect_ratio);
         default:return back;
@@ -217,8 +215,7 @@ bool Choose(unsigned row) {
     }
     if(page==Page::DisplayConfirm) {
         if(row==1){UndoDisplay();return false;}
-        // The preview already matches Current(), but it has NOT been saved.
-        // Commit explicitly and roll back if disk persistence fails.
+        // The preview is not saved yet: commit, and roll back if writing fails.
         std::string error;
         if(!launcher::ApplyInGame(proposed_display,true,error)) {
             LOGE("Pause display confirmation could not save: %s",error.c_str());
@@ -238,7 +235,7 @@ bool Choose(unsigned row) {
         if(row==2)next.vsync=!next.vsync;
         if(row==3)next.bloom_effect=!next.bloom_effect;
         if(row==4)next.show_fps=!next.show_fps;
-        if(row==5 && !next.vsync)Cycle(next.fps_cap,std::array{60,120});
+        if(row==5 && !next.vsync)Cycle(next.fps_cap,frames::RateOptions);
     } else if(page==Page::Display) {
         if(row==0)Cycle(next.display_mode,std::array<std::string,3>{"fullscreen","borderless","windowed"});
         if(row==1) {

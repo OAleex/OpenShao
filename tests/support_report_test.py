@@ -30,12 +30,22 @@ with tempfile.TemporaryDirectory(prefix='openshao-support-') as folder:
     (data/'logs').mkdir()
     log=data/'logs/openshao_001.log'
     log.write_text('OpenShao version: 0.4.0\nOS: Windows 10\nCPU: AMD Ryzen\nGPU 1: AMD Radeon\n'
+                   'gpu: selected Vulkan\nVulkan device: failed candidate (driver 00000000)\n'
+                   'gpu: Vulkan initialization failed; trying Direct3D 12 for this session\n'
+                   'D3D12 adapter: AMD Radeon\nd3d12: 640x480 guest, 1920x1080 window, render scale 1.000\n'
                    'Native exception C0000005 at 0000000012340000\n'
                    'File C:\\Users\\PrivateAccount\\Downloads\\private-game.iso\n'
                    'Computer PRIVATE-PC; account PrivateAccount\n',encoding='utf-8')
     (data/'settings.toml').write_text('renderer="vulkan"\nfps_cap=120\nvoice_language="pt-BR"\nsecret="PRIVATE-SECRET"\n'
                                       'join_ip="192.168.1.2"\n[enhancements]\nrestore_dialogue=true\n',encoding='utf-8')
     (data/'mods').mkdir()
+    previous=data/'logs/openshao_000.log'
+    previous.write_text('gpu: selected Direct3D 12\nVulkan device: AMD Radeon (driver 12345678)\n'
+                        'vulkan: 640x480 guest, 1920x1080 window, render scale 1.000\n')
+    os.utime(previous,ns=(2000000000,2000000000))
+    launcher=data/'logs/openshao_launcher.log'
+    launcher.write_text('launcher: renderer preference Vulkan\n')
+    os.utime(launcher,ns=(1000000000,1000000000))
     (data/'mods/installed.toml').write_text('[[mods]]\nid="LanguagePack_PT-BR"\nversion="2.0.0"\nenabled=true\nmanifest="PRIVATE-MANIFEST"\n')
     for sub in ['crashes','saves','game','cache']:(data/sub).mkdir()
     dump_bytes=struct.pack('<IIIIIIQ',0x504d444d,0xa793,1,32,0,0,0)+struct.pack('<III',3,4,44)+b'PRIVATE-MEMORY-DUMP'
@@ -84,6 +94,11 @@ with tempfile.TemporaryDirectory(prefix='openshao-support-') as folder:
         assert settings['renderer']=='vulkan' and settings['fps_cap']==120
         metadata=json.loads(archive.read('report.json'))
         assert metadata['kind']==('crash' if args.worker else 'manual')
+        graphics={entry['log']:entry for entry in metadata['graphics_sessions']}
+        assert graphics['session.log']['api']=='d3d12', 'The effective API must follow successful initialization, not the saved preference or failed candidate'
+        assert graphics['session.log']['device']=='AMD Radeon'
+        assert graphics['previous-1.log']['api']=='vulkan', 'Each retained session must carry its own effective API'
+        assert graphics['previous-2.log']['api']=='unknown' and 'device' not in graphics['previous-2.log'], 'A launcher-only session must not claim to have initialized a game renderer'
         if not args.worker:
             assert 'crash.dmp' in names,'Manual reports must include the latest completed crash dump'
             assert archive.read('crash.dmp')==dump_bytes,'Dumps must be preserved byte for byte'

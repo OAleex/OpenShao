@@ -1,5 +1,8 @@
 # Building
 
+Read [Contributing](../CONTRIBUTING.md) and the [AI usage policy](../AI_POLICY.md)
+before preparing a PR. Keep original game files and generated output out of commits.
+
 ## Requirements
 
 All systems:
@@ -31,7 +34,7 @@ sudo apt install clang lld cmake ninja-build git python3 pkg-config libx11-dev l
 git clone https://github.com/OAleex/OpenShao.git
 cd OpenShao
 git clone https://github.com/TGP482/XboxXBERecomp.git third_party/XboxXBERecomp
-git -C third_party/XboxXBERecomp checkout 40e9c35451305f09ca9d86f677e4b9c2c37ff26b
+git -C third_party/XboxXBERecomp checkout f7b13fdbf9560a3b3928aea24e37c789b24408f0
 ```
 
 ## Build
@@ -49,7 +52,7 @@ python3 tools/build_recomp.py --xbe ~/Games/ShaolinMonks/default.xbe --sdk third
 ```
 
 The script downloads the pinned dependencies, compiles, runs the tests and writes the package and `checksums.txt` to `dist/`.
-Vulkan headers and glslang are downloaded automatically. A separate Vulkan SDK is not required.
+The script also downloads Vulkan headers and glslang. You do not need a separate Vulkan SDK.
 Logs are in `build/`.
 
 | Target | Executable | Package |
@@ -70,28 +73,30 @@ The Linux build prints the minimum glibc version of the executable. Check it bef
 | `--disc <path>` | Add startup tests with a real game image (Windows) |
 | `--linux` | Also build the Linux package in WSL (Windows) |
 | `--wsl-distro <name>` | WSL distribution for `--linux` |
+| `--quiet` | Write each step's output only to its log, not to the console |
 
 ### Linux package from Windows
 
-1. Run `wsl --install -d Ubuntu-24.04` and restart if asked.
-2. Open Ubuntu, create the user and install the Linux packages above.
-3. Add `--linux` to the Windows build command.
+1. Run `wsl --install -d Ubuntu-24.04`.
+2. Restart if asked.
+3. Open Ubuntu.
+4. Create the user.
+5. Install the Linux packages above.
+6. Add `--linux` to the Windows build command.
 
 The WSL build output goes to `~/.cache/openshao/linux-release`. The package still goes to `dist/`.
 
 ## Release
 
-### Repository names
+### Repositories
 
-Publish the application in `OAleex/OpenShao` and the mod catalog in `OAleex/OpenShao-Mods`.
+Publish the application in `OAleex/OpenShao`. Publish the mod catalog in `OAleex/OpenShao-Mods`.
 The updater accepts application downloads from `OAleex/OpenShao/releases/download/`.
 The mod browser reads `OpenShao-Mods/master/mods.json`. Keep that branch available unless the catalog URL changes in a later build.
 
-After renaming a repository on GitHub, update its local `origin` URL.
-
 ### Version and packages
 
-Use `major.minor.patch` for the application version and `v<version>` for its release tag.
+Use `major.minor.patch` for the application version. Use `v<version>` for its release tag.
 Keep these version fields synchronized before building:
 
 | File | Version fields |
@@ -103,31 +108,24 @@ Keep these version fields synchronized before building:
 
 The build script uses the packager's default version. Changing only the CMake version does not update the package names or mod compatibility version.
 
-For 0.4.1, use:
-
-| Release field | Value |
-| --- | --- |
-| Repository | `OAleex/OpenShao` |
-| Tag | `v0.4.1` |
-| Title | `OpenShao 0.4.1` |
-| Attached files | `OpenShao-0.4.1-Windows-x64.zip`, `OpenShao-0.4.1-Linux-x64.tar.gz`, `checksums.txt` |
-
 1. Set all version fields.
 2. Build with `--test` and include both platforms.
-3. Review and commit the exact source used for the builds.
-4. Push that source to the application repository.
-5. Create a draft release with the version tag pointing to that commit.
-6. Attach both packages and the generated `checksums.txt`.
-7. Publish the stable release with **Set as latest release** selected and **This is a pre-release** cleared.
+3. Review the exact source used for the builds.
+4. Commit that source.
+5. Push that source to the application repository.
+6. Create a draft release with the version tag pointing to that commit.
+7. Attach both packages and the generated `checksums.txt`.
+8. Select **Set as latest release**.
+9. Clear **This is a pre-release**.
+10. Publish the stable release.
 
-The launcher updates from the latest release and only installs packages whose SHA-256 matches.
-Automatic release checks run at most once every two hours, and manual checks at most once every fifteen minutes.
-The last result and retry deadline persist across restarts. HTTP 403/429 responses honor the GitHub retry headers.
-Network errors do not prevent starting the game.
-Do not rename the packages.
-Use a higher version for every published update. Replacing assets under the same version does not offer an update to an installation already at that version.
-Use a patch increment for fixes, such as `0.3.1`, and a minor increment for a feature release, such as `0.4.0`.
-Mark preview builds as prereleases. Drafts and prereleases are not offered through the stable latest-release endpoint.
+Write the version's changes in its GitHub release notes. Keep the README focused on
+the project and current usage.
+
+The launcher offers stable latest releases and verifies package SHA-256 hashes.
+Keep the generated package names. Publish a higher version for every update.
+Use a patch increment for fixes and a minor increment for new features.
+Mark preview builds as prereleases.
 
 Each package holds the executable, `readme.txt` and `licenses/`. The ZIP puts them at the archive root. The `.tar.gz` puts them in one `OpenShao` folder. Game files, mods, logs, saves and settings are never included.
 Publish the source and the dependency notices with every binary release.

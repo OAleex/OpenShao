@@ -34,9 +34,9 @@ struct Options {
     std::filesystem::path launcher_test; // hidden: runs the launcher without a window for automated checks
 };
 extern Options options;
-// Returns 0 to start, 1 after --info, and 2 for invalid arguments.
 // Exit code of a start that found another OpenShao using the same data folder.
 inline constexpr int kAlreadyOpen = 9;
+// Returns 0 to start, 1 after a completed diagnostic, or an error code.
 int Configure();
 void StartWatchdog();
 bool RequestExit();

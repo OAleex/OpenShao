@@ -6,7 +6,7 @@ For installation and launcher settings, use the [player guide](README.md).
 ## XboxXBERecomp
 
 The port uses [XboxXBERecomp](https://github.com/TGP482/XboxXBERecomp), copyright 2026 TGP482, under the MIT license.
-The supported SDK revision is `40e9c35451305f09ca9d86f677e4b9c2c37ff26b`.
+The supported SDK revision is `f7b13fdbf9560a3b3928aea24e37c789b24408f0`.
 
 The build script writes adapted SDK files in the build directory.
 It preserves the SDK checkout.
@@ -15,7 +15,8 @@ The controller report mapping derives from this SDK.
 
 The executable includes SDL, Dear ImGui, toml++, miniz, XZ Embedded and Lua.
 The launcher uses Dear ImGui, rendered with Direct3D 12 on Windows and Vulkan on Linux.
-The Windows game renderer can use Direct3D 12 or Vulkan; Linux uses Vulkan.
+The Windows game renderer can use Direct3D 12 or Vulkan. Linux uses Vulkan.
+
 SDL supplies controller input and platform services.
 File selection uses the Windows file dialog, SDL dialogs, `zenity` or `kdialog`.
 Release updates use the GitHub releases API and the SHA-256 digests published with each release.
@@ -34,6 +35,28 @@ Ghidra supplied analysis of the original XBE.
 Release packages exclude these development tools.
 
 See the [SDK license](licenses/XboxXBERecomp-MIT.txt) and [dependency notices](licenses/THIRD_PARTY.txt).
+
+## Audio effects
+
+The game's audio effects use project C++ implementations for channel routing,
+reverberation, capture buffers and speaker crosstalk cancellation. Original effect
+images remain in the player's game files. Recognized algorithms select the matching
+filters. The executable does not run DSP firmware or use a DSP emulator.
+
+XAudio2 and SDL provide PCM output in mono, stereo or discrete 5.1, with a stereo
+fallback for devices without six-channel output. AC3/DTS encoding is not implemented.
+Automated checks cover mixing and device negotiation.
+Physical surround output requires listening tests on the target hardware.
+
+## Discord Rich Presence
+
+The executable uses [discord-rpc](https://github.com/discord/discord-rpc) revision
+`963aa9f3e5ce81a4682c6ca3d136cddda614db33` and the header-only
+[RapidJSON](https://github.com/Tencent/rapidjson) revision
+`24b5e7a8b27f42fa16b96fc70aade9106cf7102f` under MIT licenses.
+The build verifies both source archives with SHA-256 and links the IPC client statically.
+The build uses only RapidJSON headers. It excludes RapidJSON examples, tests and bundled third-party tools.
+See the [discord-rpc license](licenses/discord-rpc-MIT.txt) and [RapidJSON notices](licenses/RapidJSON.txt).
 
 ## miniz
 
@@ -56,7 +79,7 @@ glslang compiles HLSL shaders to SPIR-V for Vulkan, including during pipeline pr
 | glslang | `15.4.0` | `8a85691a0740d390761a1008b4696f57facd02c4` |
 
 Both desktop builds include these dependencies.
-Windows opens the system Vulkan loader when Vulkan is selected. Linux opens it through SDL.
+Windows opens the system Vulkan loader when the player selects Vulkan. Linux opens it through SDL.
 The Vulkan renderer follows the SDK's targets, texture cache, pipeline keys and constants.
 Its BC texture decoder follows the Khronos Data Format Specification.
 

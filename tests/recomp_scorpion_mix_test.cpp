@@ -14,5 +14,11 @@ int main() {
         std::cerr << "Scorpion preview must reserve headroom instead of clipping or boosting menu ambience\n";
         return 1;
     }
+    std::array<float,14> surround; surround.fill(1);
+    MixMenuVoice(surround.data(),voice.data(),2,6);
+    for (unsigned i=0;i<2;++i) {
+        if (std::abs(surround[6*i]-(.3f+voice[2*i]*.65f))>1e-6f || surround[6*i+2]!=.3f || surround[6*i+5]!=.3f) return 2;
+    }
+    if (surround[12]!=1 || surround[13]!=1) return 3;
     std::cout << "PASS: preview voice mixes without menu amplification or saturation\n";
 }

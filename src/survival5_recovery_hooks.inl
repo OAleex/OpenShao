@@ -23,9 +23,7 @@ void Survival5ArenaCamera(uint32_t camera) {
         scalar(offset, x); scalar(offset + 4, y); scalar(offset + 8, z);
         scalar(offset + 12, 0);
     };
-    // The native 2NDCAMERA constructor has no A4 profile. Configure its existing
-    // Pit eye/focus offsets and combat bounds after construction, keeping the
-    // live room ID and the original camera's tracking/update implementation.
+    // 2NDCAMERA has no A4 profile: apply the Pit eye/focus offsets and bounds after construction.
     scalar(0x8AC, 69);
     vector(0x8B0, 999, -807, 634);
     vector(0x8C0, 115, -1375, -100);
@@ -44,8 +42,7 @@ X86_FUNC(sub_0011DC60) {
         __imp__sub_0011DC60(ctx, base);
         return;
     }
-    // The Xbox A4 scene export is incomplete. Load the existing Xbox Pit arena
-    // and matching textures from the user's archive; retain A4 gameplay data.
+    // The Xbox A4 scene export is incomplete: load the Pit arena and textures, keep A4 gameplay.
     const uint32_t replacement = resource == 4213 ? 4373 : 4374;
     Survival5ResourceArgument restored(argument, resource, replacement);
     LOG_FIRST(4, "openshao graphics: Survival 5 arena resource %u -> %u", resource, replacement);
@@ -79,8 +76,7 @@ X86_FUNC(sub_00012F72) {
 
 X86_EXTERN_FUNC(__imp__sub_001B7470);
 X86_FUNC(sub_001B7470) {
-    // Wait for the arena's player to exist before the first camera-target query.
-    // The original teleport routine updates collision and previous-position state.
+    // Wait for the player before the first camera query; teleport updates collision state.
     if (survival5_start_pending && OriginalSurvival5Room() &&
         kernel::R32(ctx.esp + 4) == 1) {
         // ObjectManager::Find(1): table 0x64D218, entry stride 12, pointer at +12.

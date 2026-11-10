@@ -7,8 +7,7 @@ X86_FUNC(sub_00133A60) {
     if (ctx.eax) openshao::pipelines::CapturePipelineObject(ctx.eax, source_type);
 }
 
-// The shader library supplies the post-process pixel programs. Their original
-// FVF layouts and render states are known before the first scene is rendered.
+// Post-process programs and their states are known before the first scene renders.
 X86_EXTERN_FUNC(__imp__sub_00139E30);
 X86_FUNC(sub_00139E30) {
     __imp__sub_00139E30(ctx, base);

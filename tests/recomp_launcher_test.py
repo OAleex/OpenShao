@@ -275,6 +275,29 @@ def main():
             assert config['mouse']['invert_x'] and config['mouse']['motion'] == 'left_stick'
             assert config['keyboard']['bindings']['a'] == [ord('Z'), ord('V')]
             assert config['launcher']['check_updates'] is False, 'The update preference must be saved'
+
+            # The Discord switch applies and persists even when the launcher is closed without Play.
+            launcher = Launcher(exe, ['--configure', '--data-dir', data], root, 'discord-off', desktop)
+            state = launcher.wait(lambda s: s['page'] == 'play', 'The launcher must reopen')
+            assert state.get('discord_presence') is True, 'Discord presence must be enabled by default'
+            launcher.send('page files', 'discord-presence off')
+            launcher.wait(lambda s: s.get('discord_presence') is False, 'Disabling Discord must update the launcher')
+            assert tomllib.loads(settings.read_text())['launcher']['discord_presence'] is False
+            launcher.send('close')
+            assert launcher.exit_code() == 0
+            launcher = Launcher(exe, ['--configure', '--data-dir', data], root, 'discord-reopen', desktop)
+            state = launcher.wait(lambda s: s['page'] == 'play', 'The launcher must restore the saved preference')
+            assert state.get('discord_presence') is False, 'Discord must stay disabled after restarting'
+            launcher.send('page files', 'discord-presence on')
+            launcher.wait(lambda s: s.get('discord_presence') is True, 'Discord can be enabled again')
+            assert tomllib.loads(settings.read_text())['launcher']['discord_presence'] is True
+            launcher.send('discord-presence off')
+            launcher.wait(lambda s: s.get('discord_presence') is False, 'Discord can be disabled again')
+            launcher.send('close')
+            assert launcher.exit_code() == 0
+            config = tomllib.loads(settings.read_text())
+            assert config['launcher']['check_updates'] is False and config['custom_key'] == 'preserve', \
+                'The Discord switch must preserve other preferences'
             saved = settings.read_bytes()
 
             # A local package installs directly from its file and asks before removal.

@@ -1,5 +1,4 @@
-// Same-layout Reset keeps allocation ownership but discards contents and restores the viewport.
-// Layout changes require resource recreation.
+// Same-layout Reset keeps allocations, discards contents, restores the viewport; layout changes recreate.
 HLE_STDCALL(D3DDevice_Reset, 1) {
     constexpr uint32_t invalid = 0x8876086C;
     std::lock_guard<std::recursive_mutex> lock(g_lock);

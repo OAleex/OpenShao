@@ -173,8 +173,7 @@ public:
             Append(kRecordRecipe, &recipe, sizeof(recipe));
             recorded_++;
         }
-        // A successful ordinary draw can overtake queued prediction or recover a failed build.
-        // A running worker still owns its completion, and observes this flag in Finish.
+        // An ordinary draw can overtake prediction or recover a failed build; a running worker still finishes.
         if (entry.state == State::Queued) RemovePendingRooms(entry);
         if (entry.state != State::Building) entry.state = State::Done;
         AddRoom(index, room, true);
@@ -631,7 +630,7 @@ Precompiler& Instance() {
     return p;
 }
 
-}  // namespace
+}
 
 uint64_t KeyHash(std::span<const uint8_t> key) { return gpu::Hash(key.data(), key.size()); }
 uint64_t ProgramHash(std::span<const uint32_t> words) { return gpu::Hash(words.data(), words.size_bytes()) | 1; }
@@ -658,4 +657,4 @@ void RegisterProgram(std::span<const uint32_t> words) {
 void RoomLoading(uint32_t room) { Instance().RoomLoading(room); }
 void WaitForRoom(uint32_t room) { Instance().WaitForRoom(room); }
 
-}  // namespace openshao::pipelines
+}

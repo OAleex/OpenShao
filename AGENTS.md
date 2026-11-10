@@ -2,15 +2,20 @@
 
 This file defines instructions for coding agents in this repository.
 Read `README.md` for user features and `docs/BUILDING.md` for build instructions.
+Follow `CONTRIBUTING.md` and `AI_POLICY.md` for contribution scope and AI use.
 
 ## Project scope
 
 - Use **OpenShao** as the project name.
+- Fix, improve and restore Shaolin Monks while preserving its identity, atmosphere and gameplay.
+- Support cut-content restorations with game or development evidence. Identify interpretation and uncertainty.
+- Keep creative additions and speculative reconstructions in optional mods. This includes AI-created content absent from the original game.
+- Label these mods accurately. Respect the limits of the current mod system.
 - Use `OpenShao` as the executable base name. Add `.exe` when the file format requires it.
 - The target is the supported USA/Europe Xbox release of **Mortal Kombat: Shaolin Monks**.
 - The project uses XboxXBERecomp, C++20, SDL and Dear ImGui.
 - Both targets share one Dear ImGui launcher in `src/launcher.cpp`, drawn with `src/launcher_art.cpp`.
-- Windows uses XAudio2 and Win32 windows. Its launcher uses Direct3D 12; the game offers Direct3D 12 and Vulkan.
+- Windows uses XAudio2 and Win32 windows. Its launcher uses Direct3D 12. The game offers Direct3D 12 and Vulkan.
 - Linux uses SDL platform services and Vulkan for the launcher and game.
 - Keep the launcher's own visual identity. Do not use the game's logos, artwork, characters, typefaces or trade dress in the launcher, icon or documentation image.
 - Without a usable game, the launcher opens on its game page. `--setup` and runs without a launcher window use the system dialogs.
@@ -22,12 +27,14 @@ Read `README.md` for user features and `docs/BUILDING.md` for build instructions
 - Use neutral descriptions in user documentation.
 - Name an operating system only when a requirement, procedure, path or license needs the distinction.
 - Use short, direct instructions. Keep one action in each procedural sentence.
+- Keep the README focused on the project's purpose, current capabilities and player instructions.
+- Put version-by-version changes in release notes. Keep implementation details in the relevant developer guide.
 - Avoid illustrative field values and descriptions of information already visible in the launcher.
 - Keep package formats, update instructions and project links in `resources/readme.txt`.
 - Preserve intentional localization and character-encoding tests.
 - Write comments that explain constraints or non-obvious behavior. Avoid comments that repeat the code.
 - Document implemented features. Do not describe full campaign compatibility as verified without gameplay evidence.
-- The maintainer reports a completed campaign playthrough. Most graphical issues are fixed; some can still appear.
+- The maintainer reports a completed campaign playthrough. Most graphical issues are fixed. Some can still appear.
 - Mention tools and dependencies in project documentation. Avoid comparisons or credits to other game recompilation projects.
 
 ## Git and collaboration
@@ -60,6 +67,27 @@ Read `README.md` for user features and `docs/BUILDING.md` for build instructions
 - Treat `build/`, `work/`, `dist/`, and downloaded dependencies as local output.
 - Keep machine-specific paths in ignored local wrappers. Quote paths in scripts.
 - The ignored `build.bat` is a local convenience. Public build instructions use `tools/build_recomp.py`.
+
+## Local study notes
+
+`work/` is disposable scratch space. Test runs, captures, copied executables and tool output go there and may be deleted at any time.
+Nothing a build or test needs may live in `work/`. Local build inputs live in `.private/build-inputs/`: the LLVM toolchain (`toolchains/`), the original `default.xbe` and the test `shader-cache/`.
+Keep anything that must survive in `.private/notes/`. Git ignores this directory:
+
+| Path | Content |
+| --- | --- |
+| `README.md` | Index of the notes and these rules |
+| `STATUS.md` | Current state: delivered, owner-approved and pending work, with dates |
+| `features/<feature>.md` | One file per feature: behavior, decisions, key addresses, limitations, owner approval |
+| `research/<topic>.md` | Reverse-engineering findings by subject: addresses, structures, routines and their roles |
+
+- Store text conclusions only. Do not store captures, logs, executables, dumps or tool databases.
+- Record a Ghidra or disassembly result as its conclusion, such as an address and what it does.
+- Keep entries short and factual. Update the notes when a task ends, not during it.
+- Read `STATUS.md` and the relevant notes before starting related work.
+- The Ghidra project, its scripts and the decompiled output (`.private/ghidra/decompile/`) live in `.private/ghidra/`.
+- Run `decompile.bat` again to regenerate the output.
+- Cleanup scripts must never touch `.private/`, which also holds the owner's dub and translation sources. Before deleting anything, list the exact files and get the owner's confirmation.
 
 ## Game files, user data, and licenses
 
@@ -117,15 +145,18 @@ Use the commands and target paths in [Building](docs/BUILDING.md).
 Successful builds create a release package and `checksums.txt` automatically.
 Configuration-only runs skip packaging.
 GitHub supplies source archives for release tags.
+
 Each package contains the executable, `readme.txt` and `licenses/`, including the project license text.
 The `.tar.gz` puts those files in one `OpenShao` folder.
+
 Keep `README.md`, `UPSTREAM.md`, `AGENTS.md`, and `docs/` in the source repository, outside the packages.
 Maintain the packaged player instructions in `resources/readme.txt`. Preserve the explicit package file list.
 Do not publish packages as part of local validation.
 
 ## AI-assisted changes
 
-AI assistance does not replace maintainer review or testing.
-Check proposed changes against the source, supported game behavior, and relevant documentation.
-Do not invent test results, hardware coverage, compatibility claims, or upstream attribution.
-Keep the README's AI disclosure accurate as the workflow changes.
+Follow [AI usage policy](AI_POLICY.md). AI assists a contributor who understands,
+reviews and tests the work. Disclose the tools used and the extent of their assistance.
+Check suggestions against source, game behavior and relevant documentation.
+Never invent test results, hardware coverage, compatibility claims or attribution.
+Keep documentation concise and the project's AI disclosure accurate.

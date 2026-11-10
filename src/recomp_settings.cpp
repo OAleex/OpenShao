@@ -1,4 +1,5 @@
 #include "recomp_settings.h"
+#include "audio_options.h"
 #include "restart.h"
 #include "recomp_settings_model.h"
 #include "recomp_input.h"
@@ -9,6 +10,7 @@
 #include "performance_overlay.h"
 #include "host.h"
 #include "scorpion_voice.h"
+#include "survival_mode.h"
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
 #include <bit>
@@ -32,6 +34,13 @@ bool capture_pending=false;
 std::chrono::steady_clock::time_point trial_until;
 using Clock=std::chrono::steady_clock;
 struct View {Page page;std::string title;std::vector<Row> rows;unsigned selected;};
+float ClipProgress(uint32_t scene) {
+    const uint32_t clip=kernel::R32(scene+0x2A0);
+    if(clip>=64)return 1;
+    const float first=float(kernel::R32(scene+0x24+clip*16)),last=float(kernel::R32(scene+0x28+clip*16));
+    return first==last?1:std::clamp((float(kernel::R32(scene+0x33C))-first)/(last-first),0.f,1.f);
+}
+float EaseExpansion(float phase){return phase*phase*(3-2*phase);}
 View Snapshot(){
     if(exit_prompt)return {Page::Home,"main.exit_confirm",{{"system.no",{},true},{"system.yes",{},true}},selection};
     return {model.CurrentPage(),model.Title(),model.Rows(),selection};
@@ -45,8 +54,7 @@ struct Animation {
         if(!Busy())return 1;
         const auto clip=kernel::R32(scene+0x2A0);
         if(clip!=24 && clip!=34)return 1;
-        const float first=float(kernel::R32(scene+0x24+clip*16)),last=float(kernel::R32(scene+0x28+clip*16));
-        return first==last?1:std::clamp((float(kernel::R32(scene+0x33C))-first)/(last-first),0.f,1.f);
+        return ClipProgress(scene);
     }
     void Start(X86Context& ctx,View view,bool returning) {
         previous=std::move(view);back=returning;scene=kernel::R32(0x5985F4);running=scene!=0;
@@ -73,9 +81,19 @@ unsigned FirstRow(const View& view){return view.selected/RowsPerPage(view)*RowsP
 unsigned VisibleRows(const View& view){const auto first=FirstRow(view);return first<view.rows.size()?std::min(RowsPerPage(view),unsigned(view.rows.size())-first):0;}
 float OrnamentExtension(){
     float rows=float(VisibleRows(Snapshot()));
-    if(animation.Busy()){const float old=float(VisibleRows(animation.previous));rows=old+(rows-old)*animation.Progress();}
+    if(animation.Busy()){const float old=float(VisibleRows(animation.previous));rows=old+(rows-old)*EaseExpansion(animation.Progress());}
     // The retail Options ornament encloses four rows at the custom menu's spacing.
     return (rows-4)*24;
+}
+float OrnamentEnvelope(uint32_t scene,bool main) {
+    const uint32_t clip=kernel::R32(scene+0x2A0);
+    if(clip==0)return EaseExpansion(ClipProgress(scene));
+    if(main && clip>=7 && clip<=19) {
+        const float phase=EaseExpansion(ClipProgress(scene));
+        return kernel::R32(scene+0x2C+clip*16)&2 ? phase : 1-phase;
+    }
+    if(!main && clip==23)return 1-EaseExpansion(ClipProgress(scene));
+    return 1;
 }
 void Sound(X86Context& ctx,uint32_t slot) {
     const auto function=kernel::R32(slot);if(!function)return;
@@ -112,9 +130,7 @@ void Close(X86Context& ctx) {
     if(trial){std::string error;launcher::ApplyInGame(trial_previous,false,error);trial=false;}
     closing=true;raw::Active(false);
     const auto saved=ctx;
-    // The retail Options Back handler stops its active music, commits the
-    // native frontend state, and clears its selection before restarting the
-    // main-menu track. Calling only 0x11EAB orphaned the Options music loop.
+    // Retail Options Back: stop its music, commit state, clear selection, restart the main track (0x11EAB alone orphaned the loop).
     kernel::CallGuest(ctx,0x14CFA,{});ctx=saved;
     kernel::CallGuest(ctx,0x166DB,{});ctx=saved;
     kernel::W32(0x5985E8+0x38,0);
@@ -128,6 +144,7 @@ void RevertTrial() {
 }
 bool Save(X86Context& ctx) {
     std::string error;const auto& desired=model.Draft();
+    const bool audio_changed=desired.audio_output!=launcher::Current().audio_output;
     const bool restart=desired.language!=launcher::Current().language || desired.voice_language!=launcher::Current().voice_language;
     if(restart && !restart::Prepare(desired,error)) {
         LOGE("Language restart preparation: %s",error.c_str());notice="settings.error";return false;
@@ -136,9 +153,8 @@ bool Save(X86Context& ctx) {
         if(restart)restart::Cancel();
         LOGE("Recomp settings: %s",error.c_str());notice="settings.error";return false;
     }
-    // This panel cannot edit retail music, effects or game rules. Their values
-    // were read from the active guest when the panel opened; reapplying them on
-    // an unrelated enhancement save restarts native audio-category state.
+    if(audio_changed)audio::options::Apply(ctx,desired.audio_output);
+    // Reapplying retail music/effects/rules on an unrelated save restarts native audio state.
     model.Open(desired);
     if(restart) {
         if(!restart::Commit(error)) {
@@ -153,8 +169,7 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
     if(trial && std::chrono::steady_clock::now()>=trial_until)RevertTrial();
     if(raw::Expired()){notice="settings.capture_timeout";capture_pending=false;}
     const auto fixed=raw::Navigation(),held=raw::ControllerButtons();
-    // Raw controller edges can precede the guest's matching edge by several frames.
-    // Consume that one duplicate while retaining the guest's later held-direction repeats.
+    // Raw controller edges can precede the guest's by frames: consume that one duplicate.
     pending_directions&=held;
     const auto duplicates=directions&pending_directions;
     directions&=~duplicates;pending_directions&=~duplicates;
@@ -264,14 +279,46 @@ bool CustomScene(uint32_t scene){return active && scene && scene==kernel::R32(0x
 unsigned Selection(){return selection;}
 unsigned SelectorY(){const auto view=Snapshot();return 188+24*(view.selected-FirstRow(view));}
 std::string Title(){return Snapshot().title;}
+void RestoreMainSelector(){
+    if(Top()!=0x598430 || active || survival::Transitioning() || survival::SetupPopup())return;
+    const auto scene=kernel::R32(0x59843C);
+    const auto clip=scene?kernel::R32(scene+0x2A0):0;
+    if(clip>=1 && clip<=6)kernel::W32(0x592D20+0xC,1);
+}
 bool MainInput(X86Context& ctx,uint8_t* base) {
     if(ctx.ecx!=0x598430)return false;
-    if(closing && Top()==0x598430){active=closing=exit_prompt=false;extra_selected=true;State(ctx,return_row);}
+    const unsigned highlighted=kernel::R32(0x598468);
+    const bool game_mode=Top()==0x598430 &&
+        (survival::MedallionMenu() || highlighted==menu::MainGameModeRow);
+    raw::NativeEnterAccept(game_mode);
+    // Consume Enter on this update so it cannot activate another page later.
+    const bool enter_pressed=raw::TakeEnter() && game_mode;
+    if(closing && Top()==0x598430){
+        active=closing=exit_prompt=false;extra_selected=true;
+        State(ctx,return_row);
+        RestoreMainSelector();
+    }
     const auto directions=kernel::R32(kernel::R32(ctx.esp+4)),pressed=kernel::R32(kernel::R32(ctx.esp+8));
     const auto panel=kernel::R32(0x59843C),status=panel?kernel::R32(panel+0x2E4):UINT32_MAX;
+    // Consume input during Main's row-focus animation, before Main accepts another mode.
+    if(survival::MenuInput(ctx,base,enter_pressed))return true;
     if(status!=0 && status!=2)return false;
+    if(survival::MainMenu(ctx)){kernel::Return(ctx,0,2);return true;}
+    const bool accept=!!(pressed&0x40) || enter_pressed;
     const auto selected=kernel::R32(0x598468);
     extra_selected=selected>=MainRecompRow;
+    const bool up=(directions&0x1000)!=0,down=!up && (directions&0x4000)!=0;
+    if(selected==menu::MainGameModeRow) {
+        if(up || down) {
+            Sound(ctx,0x6CA3C0);extra_selected=false;State(ctx,up?2:3);
+        } else if(accept) {
+            Sound(ctx,0x6CA3B8);survival::Open(ctx,base);
+        }
+        kernel::Return(ctx,0,2);return true;
+    }
+    if((selected==2 && down) || (selected==3 && up)) {
+        Sound(ctx,0x6CA3C0);extra_selected=true;State(ctx,menu::MainGameModeRow);kernel::Return(ctx,0,2);return true;
+    }
     if(extra_selected) {
         if(directions&0x1000){Sound(ctx,0x6CA3C0);extra_selected=selected>MainRecompRow;State(ctx,selected-1);}
         else if(directions&0x4000){Sound(ctx,0x6CA3C0);const auto next=(selected+1)%MainRows;extra_selected=next>=MainRecompRow;State(ctx,next);}
@@ -306,7 +353,9 @@ void Draw(X86Context& ctx) {
         const auto opacity=[&](unsigned value){return (value*alpha+127)/254;};
         for(unsigned index=first;index<rows.size() && index<first+limit;++index) {
             const auto& row=rows[index];const float row_y=y+(index-first)*step;
-            menu::NativeLabel(ctx,x,row_y,Translate(row.key),1.05f,opacity(index==view.selected?254:100),false,index!=view.selected,row.value.empty()?500:267);
+            // Same caption style as Main: the halo label for every row, dimmed when not focused.
+            menu::NativeLabel(ctx,x,row_y,Translate(row.key),1.05f,
+                opacity(index==view.selected?menu::MainSelectedAlpha:menu::MainIdleAlpha),false,false,row.value.empty()?500:267);
             if(!row.value.empty())menu::NativeLabel(ctx,375+x-93,row_y,Translate(row.value),.85f,opacity(index==view.selected?254:130),false,true,225);
         }
         if(rows.size()>limit)menu::NativeLabel(ctx,556+f.x,183+f.y,std::to_string(view.selected+1)+" / "+std::to_string(rows.size()),.7f,opacity(180),false,true,70);
@@ -331,19 +380,38 @@ void Draw(X86Context& ctx) {
     menu::NativeLabel(ctx,472,float(footer_y),Translate(trial?"settings.keep":"settings.edit_hint"),.9f,254,false,true,136);
     auto message=notice;
     if(trial)message=Translate("settings.keep_display")+" "+std::to_string(std::max(0,int(std::chrono::duration_cast<std::chrono::seconds>(trial_until-std::chrono::steady_clock::now()).count())));
-    else if(!exit_prompt && page==Page::Language)message="settings.restart";
+    else if(!exit_prompt && page==Page::Language && message.empty())message="settings.restart";
     else if(!exit_prompt && page==Page::Enhancements && message.empty()) {
         if(selection==0)message="settings.scorpion_hint";
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
+        else if(selection==3)message="settings.improved_difficulty_hint";
     }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }
 bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t end) {
     if(first>=end || end>512)return false;
     const bool main=scene && scene==kernel::R32(0x59843C),custom=CustomScene(scene);
-    if(!main && !custom)return false;
+    const bool compact_survival=main && survival::OverlayShown() && Top()==0x598430;
     const auto id=menu::Catalog::Builtin().Graphic(key);
+    if(main && survival::HideMainCaption(id)){kernel::W32(0x63F5E0,first);return true;}
+    if(main && id=="main.single_player" && survival::OverlayShown() && Top()==0x598430) {
+        // The locked hint follows Main's page fade (clips 1..6 only dim by focus).
+        unsigned alpha=0;
+        for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v)
+            alpha=std::max(alpha,kernel::R32(0x63F5E4+i*0x6C+0x58+v*4)>>24);
+        const auto clip=kernel::R32(scene+0x2A0);
+        survival::DrawMenu(ctx,clip>=1 && clip<=6?255:alpha);
+    }
+    if(!main && !custom)return false;
+    if(main && survival::SetupPopup() && (id.starts_with("main.") || key==0x59FB5186 ||
+       key==0x4599E8C7 || key==0x49B7A657 || key==0x71960991)) {
+        kernel::W32(0x63F5E0,first);return true;
+    }
+    if(compact_survival && key==0x59FB5186) {
+        // Same joined medallion as Konfigure Recompilation; drop its extra bronze marker.
+        kernel::W32(0x63F5E0,first);return true;
+    }
     if(custom && (id.starts_with("options.") || id.starts_with("audio.") || id.starts_with("gameplay."))) {
         const bool child=id.starts_with("audio.");auto& f=frame[child?1:0];
         float left=INFINITY,top=INFINITY;unsigned alpha=0;
@@ -371,21 +439,26 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
         }
         kernel::W32(0x63F5E0,first);return true;
     }
-    if((key==0x54811410 || key==0x17E4A) && (custom || extra_selected)) {
+    if((key==0x54811410 || key==0x17E4A) && (custom || main)) {
         kernel::W32(0x63F5E0,first);return true;
     }
     if(main && id.starts_with("main.")) {
         constexpr std::string_view labels[]={"main.single_player","main.koop","main.versus","main.load_game","main.options","main.kontent"};
         const auto highlight=menu::MainHighlight(kernel::R32(scene+0x2A0),kernel::R32(0x598468));
         const auto clip=kernel::R32(scene+0x2A0);
-        // Selection clips animate their authored bitmap highlights. Text has its own logical highlight;
-        // inherit native opacity only from entrance/exit clips, where it represents a page fade.
-        if(clip>=1 && clip<=6)for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v){const auto a=0x63F5E4+i*0x6C+0x58+v*4;kernel::W32(a,(kernel::R32(a)&0xFFFFFF)|((id==labels[highlight]?254u:76u)<<24));}
+        // Inherit native opacity only from entrance/exit clips (page fades).
+        if(clip>=1 && clip<=6)for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v){const auto a=0x63F5E4+i*0x6C+0x58+v*4;kernel::W32(a,(kernel::R32(a)&0xFFFFFF)|((id==labels[highlight]?menu::MainSelectedAlpha:menu::MainIdleAlpha)<<24));}
         if(id=="main.options")menu::MainRowAnchor(first,end);
+        if(id=="main.versus")menu::MainExtraLabel(ctx,first,end,kernel::R32(0x598468)==menu::MainGameModeRow,highlight==2,menu::MainGameModeRow);
         if(id=="main.kontent")for(unsigned row=MainRecompRow;row<MainRows;++row)menu::MainExtraLabel(ctx,first,end,extra_selected && kernel::R32(0x598468)==row,highlight==5,row);
-        if(extra_selected)menu::DimMenuLabel(first,end,id==labels[highlight]);
+        if(extra_selected && !compact_survival)menu::DimMenuLabel(first,end,id==labels[highlight]);
     }
-    if(key==0x59FB5186 && (custom || extra_selected)) {
+    if(key==0x59FB5186 && (custom || main)) {
+        // Gold marker beside the sparkle: keep its authored alpha during Main's clips 0..18.
+        if(main && (Top()!=0x598430 || (survival::Transitioning() && !survival::MedallionMenu()) || survival::SetupPopup() ||
+            kernel::R32(scene+0x2A0)>18)) {
+            kernel::W32(0x63F5E0,first);return true;
+        }
         const auto status=kernel::R32(scene+0x2E4);
         if(custom && (animation.Busy() || closing || (status!=3 && status!=6))) {
             kernel::W32(0x63F5E0,first);return true;
@@ -393,32 +466,53 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
         float top=INFINITY;
         for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v)
             top=std::min(top,std::bit_cast<float>(kernel::R32(0x63F5E4+i*0x6C+0x14+v*16)));
-        // Retail return clips leave the pointer on their authored Audio row. The
-        // custom list and its independent sparkle use the same absolute origin.
-        const float offset=custom?float(SelectorY())-top:28.f*float(kernel::R32(0x598468)-5);
+        // Return clips leave the pointer on their authored Audio row.
+        const auto selected=kernel::R32(0x598468);
+        const auto visual=menu::MainVisualRow(selected);
+        const float pitch=float(kernel::R32(0x4DF4DC)+(kernel::R32(0x5CE864)==1?2:0));
+        const float offset=custom?float(SelectorY())-top:
+            (extra_selected?pitch*(float(visual)-5):selected>=3?pitch:0)-
+            menu::MainMenuRise+menu::MainListAdjustment(visual);
         for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
             const auto address=0x63F5E4+i*0x6C+0x14+v*16;
             const float y=std::bit_cast<float>(kernel::R32(address));
+            // Keep the authored x: marker on the emblem shaft, sparkle on its tip.
             kernel::W32(address,std::bit_cast<uint32_t>(y+offset));
         }
     }
     // Extend the existing ornament shaft; translate its carved bottom pieces without stretching them.
-    float left=INFINITY,top=INFINITY,right=-INFINITY,bottom=-INFINITY;
+    float top=INFINITY,bottom=-INFINITY;
     for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
         const auto a=0x63F5E4+i*0x6C+0x10+v*16;
-        const float x=std::bit_cast<float>(kernel::R32(a)),y=std::bit_cast<float>(kernel::R32(a+4));
-        left=std::min(left,x);right=std::max(right,x);top=std::min(top,y);bottom=std::max(bottom,y);
+        const float y=std::bit_cast<float>(kernel::R32(a+4));
+        top=std::min(top,y);bottom=std::max(bottom,y);
     }
-    const float extension=main?88.f:OrnamentExtension(),shaft_start=main?305.6f:249.3f;
-    const bool cap=left>=18 && left<=23 && right-left>=127 && right-left<=129 && bottom-top>=119 && bottom-top<=121 && top>(main?295:240);
-    const bool joint=left>=31 && left<=35 && right-left>=63 && right-left<=65 && bottom-top>=59 && bottom-top<=61 && top>(main?315:260);
-    const bool shaft=left>=30 && left<=33 && right-left>=63 && right-left<=65 && bottom-top>=55 && bottom-top<=57 && top>=shaft_start && top<shaft_start+1;
+    const float extension=(compact_survival?survival::OrnamentExtension():
+        main?menu::MainOrnamentExtension:OrnamentExtension())*OrnamentEnvelope(scene,main);
+    const float shaft_start=main?305.6f:249.3f;
+    if(compact_survival && key==0x71960991 && std::abs(top-shaft_start)>=1.f) {
+        // Main's long shaft sections would hang below the short medallion's lower cap.
+        kernel::W32(0x63F5E0,first);return true;
+    }
+    // Identify pieces by artwork (positions change while opening); the flipped lower cap shares the upper texture.
+    const uint32_t record=0x63F5E4+first*0x6C;
+    const bool cap=key==0x4599E8C7 && std::bit_cast<float>(kernel::R32(record+0x4C))>std::bit_cast<float>(kernel::R32(record+0x50));
+    const bool joint=key==0x49B7A657;
+    const bool shaft=key==0x71960991 && std::abs(top-shaft_start)<1;
     if(cap || joint || shaft)for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
         const auto a=0x63F5E4+i*0x6C+0x14+v*16;
         const float y=std::bit_cast<float>(kernel::R32(a)),shaft_top=std::min(top,bottom+extension-8);
-        const float offset=shaft?shaft_top-top+(bottom+extension-shaft_top-(bottom-top))*std::clamp((y-top)/(bottom-top),0.f,1.f):extension;
+        const float factor=std::clamp((y-top)/std::max(1.f,bottom-top),0.f,1.f);
+        const float offset=shaft?shaft_top-top+(bottom+extension-shaft_top-(bottom-top))*factor:extension;
         kernel::W32(a,std::bit_cast<uint32_t>(y+offset));
     }
+    if(main && (key==0x79D0AA6F || key==0x4599E8C7 || key==0x49B7A657 || key==0x71960991))
+        for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
+            const auto a=0x63F5E4+i*0x6C+0x14+v*16;
+            // Upper carving and shaft segments move together to avoid a gap.
+            const float shift=key==0x79D0AA6F?-20.f:menu::MainOrnamentOffset;
+            kernel::W32(a,std::bit_cast<uint32_t>(std::bit_cast<float>(kernel::R32(a))+shift));
+        }
     return false;
 }
 }
@@ -457,12 +551,24 @@ X86_FUNC(sub_000131CF){
         }
     }
     openshao::recomp::frame={};
+    // Main's attract countdown keeps running under Survival's submenus: refresh it there only.
+    if(openshao::survival::MedallionMenu() && openshao::recomp::Top()==0x598430)
+        kernel::W32(0x4DF4D8,0xA8C);
+    // Keep Main's lake backdrop (0x43D00, thunk 0x13A08) active every frontend frame.
+    if(openshao::recomp::Top()==0x598430) {
+        const auto scene=kernel::R32(0x59843C);
+        if(scene && openshao::menu::MainBackdropClip(kernel::R32(scene+0x2A0))) {
+            const auto saved=ctx;kernel::CallGuest(ctx,0x13A08,{});ctx=saved;
+        }
+    }
     __imp__sub_000131CF(ctx,base);openshao::recomp::Draw(ctx);
 }
 X86_EXTERN_FUNC(__imp__sub_001B2200);
 X86_FUNC(sub_001B2200) {
     const auto pointer=kernel::R32(ctx.esp+4),value=pointer?kernel::R32(pointer):0;
-    const bool bounded=openshao::recomp::ExtraSelected() && ctx.ecx==kernel::R32(0x59843C) && value>=7 && value<=9;
+    // Survival keeps Game Mode selected; its roster still returns through Main's clips 8 and 10.
+    const bool bounded=openshao::recomp::ExtraSelected() && !openshao::survival::OverlayShown() &&
+        ctx.ecx==kernel::R32(0x59843C) && value>=7 && value<=10;
     if(bounded)kernel::W32(pointer,6);
     __imp__sub_001B2200(ctx,base);
     if(bounded)kernel::W32(pointer,value);

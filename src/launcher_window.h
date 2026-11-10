@@ -2,8 +2,7 @@
 #include <functional>
 
 namespace openshao::launcher {
-// A native window that owns a Dear ImGui context for the launcher.
-// Windows renders it with Direct3D 12; Linux uses SDL and Vulkan.
+// Native launcher window with Dear ImGui (D3D12 on Windows, SDL/Vulkan on Linux).
 class Window {
 public:
     Window();
@@ -11,11 +10,9 @@ public:
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
-    // `prepare` adds fonts and styles after the context exists and before the renderer uploads them.
-    // It receives the display scale of the window.
+    // `prepare` adds fonts and styles before upload; it receives the display scale.
     bool Open(const char* title, int width, int height, const std::function<void(float scale)>& prepare);
-    // Processes events and starts an ImGui frame. Returns false after the window's close button.
-    // With `animate`, the window redraws at display rate; otherwise it waits for input.
+    // False after the close button; `animate` redraws at display rate, otherwise waits for input.
     bool BeginFrame(bool animate);
     void EndFrame();
     void Close();

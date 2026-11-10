@@ -19,5 +19,16 @@ int main() {
     check(Unlock(Restore(saved, all, changed), all) == Unlock(changed, all),
           "Saving inside a view and returning to it must not lose new progress");
     check(ProgressBytes == 13 * 4, "The block matches the 13 DWORDs the save routines copy");
+    constexpr uint32_t Characters = 0x598DF0, Popup = 0x596810, Main = 0x598430;
+    check(FreezeSurvivalCharacterCallbacks(true, false, Characters, Main),
+          "Pending Survival difficulty must freeze the parent before the popup reaches the stack");
+    check(FreezeSurvivalCharacterCallbacks(true, false, Popup, Characters) &&
+          FreezeSurvivalCharacterCallbacks(false, true, Popup, Characters),
+          "The underlying Versus callbacks remain frozen through the modal and Back transition");
+    check(!FreezeSurvivalCharacterCallbacks(false, true, Characters, Main) &&
+          !FreezeSurvivalCharacterCallbacks(true, false, Popup, Main) &&
+          !FreezeSurvivalCharacterCallbacks(false, false, Popup, Characters) &&
+          !FreezeSurvivalCharacterCallbacks(true, false, Main, 0),
+          "Normal selection, unrelated popups and the root menu keep their native callbacks");
     return failures ? 1 : 0;
 }

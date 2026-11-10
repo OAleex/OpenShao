@@ -15,7 +15,8 @@ const app::GameInfo app::kGame = {
     .missing = L"Select your Xbox game files.",
     .images = {{"default.xbe", "OpenShao"}},
     .options = {},
-    .load = openshao::launcher::Load, .save = openshao::launcher::Save, .init = nullptr, .loaded = openshao::brightness::Initialize,
+    .load = openshao::launcher::Load, .save = openshao::launcher::Save, .init = nullptr,
+    .loaded = [] { openshao::brightness::Initialize(openshao::launcher::Current().brightness); },
     .window = openshao::controller::Window, .message = openshao::controller::Message, .ui = openshao::performance::Draw,
     .pad = openshao::keyboard::Poll, .rumble = nullptr,
 };

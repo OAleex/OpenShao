@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 #include "launcher.h"
+#include "discord_presence.h"
 #include "launcher_art.h"
 #include "launcher_footer_layout.h"
 #include "launcher_settings.h"
@@ -36,6 +37,7 @@
 #include "file_ops.h"
 #include "frame_rate.h"
 #include "game_setup.h"
+#include "issue_link.h"
 #include "host.h"
 #include "keyboard.h"
 #include "language_pack.h"
@@ -173,7 +175,7 @@ const char* PageName(Page page) {
     }
 }
 
-// Checks or imports a chosen game away from the interface thread, so ZIP imports show progress and can be cancelled.
+// Prepare the game off the interface thread so ZIP imports remain responsive and cancellable.
 class GamePreparation {
 public:
     explicit GamePreparation(fs::path input) : input_(std::move(input)) {
@@ -191,7 +193,7 @@ public:
     ~GamePreparation() { cancel_ = true; if (worker_.joinable()) worker_.join(); }
     void Cancel() { cancel_ = true; }
     bool Finished() { std::lock_guard lock(mutex_); return finished_; }
-    // Valid after Finished().
+    // Read results only when Finished() returns true.
     bool Ok() { std::lock_guard lock(mutex_); return ok_; }
     std::string Error() { std::lock_guard lock(mutex_); return error_; }
     fs::path Path() { std::lock_guard lock(mutex_); return path_; }
@@ -224,7 +226,7 @@ struct Session {
     std::unique_ptr<update::Updater> updater;
     std::optional<Popup> popup;
     int result = -1;  // 0 closes, 1 plays
-    bool relaunch = false, check_updates = true;
+    bool relaunch = false, check_updates = true, discord_presence = true;
     bool game_required = false;  // no usable game yet: the selection page cannot be left
     Page game_return = Page::Play;
     std::unique_ptr<GamePreparation> preparing;
@@ -405,6 +407,18 @@ struct Session {
             if (enabled && updater) updater->Tick();
         } catch (const std::exception& e) { Message("Cannot save the update preference", e.what()); }
     }
+    void SetDiscordPresence(bool enabled) {
+        try {
+            auto table = Disk();
+            auto launcher = table["launcher"].as_table() ? *table["launcher"].as_table() : toml::table{};
+            launcher.insert_or_assign("discord_presence", enabled);
+            table.insert_or_assign("launcher", launcher);
+            std::string error;
+            if (!Write(paths::Config(), table, error)) throw std::runtime_error(error);
+            discord_presence = enabled;
+            discord::SetState(discord::State::Launcher, options, enabled);
+        } catch (const std::exception& e) { Message("Cannot save the Discord preference", e.what()); }
+    }
     void StartUpdate() {
         if (!updater) return;
         if (Busy()) { page = Page::Mods; Message("Mod operation in progress", "Wait for the mod operation to finish before updating."); return; }
@@ -548,6 +562,9 @@ void PlayPage(Session& s, const Canvas& c, float W, float H) {
     if (!ready && Link("Choose game##footer", c, detail_x, y, "Choose game")) s.ChangeGame();
 
     const float right = W - 40;
+    const auto notes_label = "Release notes (" + std::string(mods::RecompVersion) + ")";
+    if (Link("Release notes##installed", c, 40, rows.secondary, notes_label.c_str()))
+        OpenLocation(update::ReleaseNotesUrl(mods::RecompVersion));
     const bool can_check = s.updater && view.state != update::State::Checking &&
                            view.state != update::State::Downloading && view.state != update::State::Ready;
     if (can_check) {
@@ -687,13 +704,17 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
     ImGui::EndChild();
 }
 
-void FilesPage(Session& s, const Canvas& c, float W, float) {
-    Header(c, "Files", "Where OpenShao finds your game and keeps your saves.");
+void FilesPage(Session& s, const Canvas& parent, float W, float H) {
+    Header(parent, "Files", "Where OpenShao finds your game and keeps your saves.");
+    ImGui::SetCursorScreenPos(parent.P(0, 200));
+    ImGui::BeginChild("##files-list", ImVec2(parent.S(W), parent.S(std::max(40.f, H - 224))),
+                      ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+    const Canvas c{ImGui::GetWindowDrawList(), parent.scale, ImGui::GetCursorScreenPos()};
     const float right = W - 48, label_x = 48, value_x = 170;
     const bool busy = s.mods->View().busy;
     const bool locked = paths::DataFolderOverridden() || busy;
     const bool saves_locked = locked || !options.save_dir.empty() || options.portable_saves;
-    float y = 200;
+    float y = 0;
     auto row = [&](const char* label, const std::string& value, int buttons) {
         c.Rule(48, right, y);
         c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), label);
@@ -702,27 +723,37 @@ void FilesPage(Session& s, const Canvas& c, float W, float) {
     };
     row("Game", s.source.empty() ? std::string("No game selected") : files::Utf8(s.source), 1);
     if (Button("Change##game", c, right - 84, y + 16, right, y + 50, "Change", false, !busy)) s.ChangeGame();
-    y += 66;
+    y += 60;
     row("Saves", files::Utf8(s.save_folder), 2);
     if (Button("Move##saves", c, right - 84, y + 16, right, y + 50, "Move", false, !saves_locked)) s.MoveFolder(false);
     if (Button("Open##saves", c, right - 180, y + 16, right - 96, y + 50, "Open", false)) s.OpenSaves();
-    y += 66;
+    y += 60;
     row("Data", files::Utf8(s.data_folder), 2);
     if (Button("Move##data", c, right - 84, y + 16, right, y + 50, "Move", false, !locked)) s.MoveFolder(true);
     if (Button("Open##data", c, right - 180, y + 16, right - 96, y + 50, "Open", false)) OpenLocation(files::Utf8(paths::Root()));
-    y += 66;
+    y += 60;
     row("Reports", "Generate a diagnostic ZIP in Support.", 1);
     if (Button("Support##files", c, right - 84, y + 16, right, y + 50, "Support", false)) s.page = Page::Support;
-    y += 66;
+    y += 60;
     row("Video", "Restore the display settings if the game does not start correctly.", 1);
     if (Button("Restore##video", c, right - 84, y + 16, right, y + 50, "Restore", false)) s.RestoreVideo();
-    y += 66;
+    y += 60;
     c.Rule(48, right, y);
     c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), "Updates");
     c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), "Check for a new version when the launcher opens");
     const auto toggle = Item("##check-updates", c, right - 38, y + 22, right, y + 44);
     art::Toggle(c, right - 38, y + 22, s.check_updates, toggle.hovered);
     if (toggle.clicked) s.SetCheckUpdates(!s.check_updates);
+    y += 60;
+    c.Rule(48, right, y);
+    c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), "Discord");
+    c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), "Show OpenShao in your Discord activity");
+    const auto discord_toggle = Item("##discord-presence", c, right - 38, y + 22, right, y + 44);
+    art::Toggle(c, right - 38, y + 22, s.discord_presence, discord_toggle.hovered);
+    if (discord_toggle.clicked) s.SetDiscordPresence(!s.discord_presence);
+    ImGui::SetCursorScreenPos(c.P(0, y + 54));
+    ImGui::Dummy(ImVec2(1, 1));
+    ImGui::EndChild();
 }
 
 void SupportPage(Session& s, const Canvas& c, float W, float) {
@@ -747,7 +778,18 @@ void SupportPage(Session& s, const Canvas& c, float W, float) {
         if(Link("Show##support",c,right,470,"Show ZIP",true)) support::OpenReport(s.report.zip);
     } else c.Text(Weight::Regular,19,48,470,Rgb(color::Mist),"No diagnostic ZIP has been generated yet.");
     c.Text(Weight::Regular,19,48,518,Rgb(color::Mist),"Describe what happened and how to reproduce it.",right-250);
-    if(Button("Report##support",c,right-166,512,right,554,"Report a bug",false)) OpenLocation("https://github.com/OAleex/OpenShao/issues/new");
+    if(Button("Report##support",c,right-166,512,right,554,"Report a bug",false)) {
+#ifdef _WIN32
+        constexpr std::string_view platform="Windows";
+#else
+        constexpr std::string_view platform="Linux";
+#endif
+        // Crash form when a dump is included; the clipboard copy covers the graphics/audio forms.
+        const auto kind=s.report.dump_included?support::IssueKind::Crash:support::IssueKind::Bug;
+        const auto environment=support::IssueEnvironment(s.settings,mods::RecompVersion,platform);
+        ImGui::SetClipboardText(environment.c_str());
+        OpenLocation(support::IssueLink(kind,environment));
+    }
 }
 
 void AboutPage(Session&, const Canvas& c, float W, float) {
@@ -777,7 +819,7 @@ void AboutPage(Session&, const Canvas& c, float W, float) {
         {"XboxXBERecomp", "MIT"}, {"SDL 3", "zlib"}, {"Dear ImGui", "MIT"}, {"toml++", "MIT"},
         {"Lua 5.4", "MIT"}, {"miniz", "MIT"}, {"XZ Embedded", "0BSD"}, {"Vulkan-Headers", "Apache-2.0 or MIT"},
         {"glslang", "BSD-3-Clause and others"}, {"Hanken Grotesk", "SIL Open Font License 1.1"},
-        {"Keyboard input integration", "GPL-2.0-or-later"},
+        {"discord-rpc and RapidJSON", "MIT"}, {"Keyboard input integration", "GPL-2.0-or-later"},
     };
     constexpr int count = int(sizeof(components) / sizeof(components[0]));
     const int rows = (count + 1) / 2;
@@ -827,7 +869,6 @@ void GamePage(Session& s, const Canvas& c, float W, float H) {
         y = 208;
     }
     if (s.preparing) {
-        // Disc images and folders are checked in moments; ZIP imports report their progress.
         const bool importing = s.preparing->Importing();
         c.Rule(48, right, y);
         const char* status = s.preparing->Cancelling() ? "Cancelling..." : importing ? "Importing your game files..." : "Checking your game...";
@@ -972,8 +1013,7 @@ private:
     bool previous_[4] = {};
 };
 
-// --launcher-test runs the launcher without a window. Tests append commands to commands.txt
-// and read state.json, which reflects every frame.
+// --launcher-test: windowless; tests append to commands.txt and read state.json.
 class Automation {
 public:
     explicit Automation(fs::path folder) : folder_(std::move(folder)) { fs::create_directories(folder_); }
@@ -1012,6 +1052,7 @@ public:
             first = false;
         }
         out << "],\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
+            << ",\"discord_presence\":" << (s.discord_presence ? "true" : "false")
             << ",\"game_error\":\"" << Escape(s.game_error) << "\",\"report_busy\":" << (s.report_job.valid()?"true":"false")
             << ",\"report_path\":\"" << Escape(files::Utf8(s.report.zip)) << "\",\"report_error\":\"" << Escape(s.report.error) << "\"}";
         const auto text = out.str();
@@ -1051,6 +1092,7 @@ private:
         else if (command == "restore-video") s.RestoreVideo();
         else if (command == "renderer") s.SetRenderer(argument);
         else if (command == "check-updates") s.SetCheckUpdates(argument == "on");
+        else if (command == "discord-presence") s.SetDiscordPresence(argument == "on");
         else if (command == "mods-refresh") s.mods->Refresh();
         else if (command == "mod-install") s.InstallMod(argument);
         else if (command == "mod-install-file") s.InstallModFile(files::FromUtf8(argument));
@@ -1108,7 +1150,6 @@ bool Show() {
     std::error_code unavailable;
     const bool incomplete_folder = !s.source.empty() && fs::is_directory(s.source, unavailable) &&
         !fs::is_regular_file(s.source / "default.xbe", unavailable);
-    // The first start, or a game that moved, opens the launcher on game selection.
     if (!options.configure_only && options.disc.empty() && options.game.empty() &&
         (options.setup || s.source.empty() || incomplete_folder || !fs::exists(s.source, unavailable))) {
         if (!s.source.empty() && !options.setup)
@@ -1122,11 +1163,11 @@ bool Show() {
     catch (const std::exception& e) { paths::ReportError(L"Cannot read settings.toml.\n" + Wide(e.what())); return false; }
     s.data_folder = paths::Root(); s.save_folder = paths::SaveRoot();
     s.check_updates = CheckUpdatesEnabled();
+    s.discord_presence = DiscordPresenceEnabled();
     if (!options.launcher_test.empty()) return RunAutomated(s);
 
     Window window;
     if (!window.Open("OpenShao", 1040, 640, art::Prepare)) {
-        // Without a launcher window, the system dialogs select the game.
         if (s.game_required) {
             fs::path selected;
             if (!setup::ChooseDisc(selected)) return false;
@@ -1164,6 +1205,9 @@ bool Show() {
         return false;
     }
     return s.result == 1;
+}
+bool DiscordPresenceEnabled() {
+    try { return Disk()["launcher"]["discord_presence"].value_or(true); } catch (...) { return true; }
 }
 bool ShouldPersist() { return persist.load(); }
 void Load(const void* raw) {

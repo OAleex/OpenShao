@@ -132,15 +132,15 @@ bool Play(unsigned index) {
     return true;
 }
 
-void Mix(float* stereo, uint32_t frames) {
+void Mix(float* pcm, uint32_t frames,unsigned channels) {
     const auto clip = playing.load(std::memory_order_acquire);
-    if (!clip || !stereo) return;
+    if (!clip || !pcm) return;
     const size_t start = clip->next_frame.fetch_add(frames, std::memory_order_relaxed);
     const size_t remaining = clip->stereo.size() / 2;
     if (start >= remaining) return;
     const size_t limit = std::min<size_t>(frames, remaining - start);
     // Both streams share the system output; reserve headroom for the preview.
-    MixMenuVoice(stereo, clip->stereo.data() + start * 2, limit);
+    MixMenuVoice(pcm, clip->stereo.data() + start * 2, limit,channels);
     if (start + limit == remaining) LOGR("Scorpion preview: ADX playback completed (%zu frames)", remaining);
 }
 }

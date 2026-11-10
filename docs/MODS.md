@@ -1,7 +1,17 @@
 # Mods
 
 This guide is for mod authors. Players install, update and enable mods in the launcher's **Mods** page.
-Downloads, files and patch results are checked with SHA-256, and a failed installation keeps the previous version.
+The launcher checks downloads, files and patch results with SHA-256.
+A failed installation preserves the previous version.
+
+Keep original game resources and private authoring files out of public commits and
+attachments. Read the [contribution rules](../CONTRIBUTING.md#game-files-and-private-data)
+and [AI usage policy](../AI_POLICY.md) before submitting work.
+
+Mods can offer creative additions or speculative reconstructions, including
+AI-generated content absent from the original game. Label them as new creations or
+interpretations. Disclose AI use. Keep them separate from restorations in the base game.
+Current support covers resource replacements and routine scripts, with the limits below.
 
 ## Compatibility
 
@@ -55,6 +65,10 @@ Put finished files in `mods/<id>/pack/`:
 | `scripts/*.lua` | Supply routine callbacks listed in `routines` |
 | `README.txt`, `CREDITS.md` | Instructions and attribution |
 
+The `pack/` directory is local authoring input. Keep it untracked.
+Review the generated package before publication. The project code license does not cover game
+assets or third-party mod content.
+
 The archive planner combines compatible resources from active mods.
 It preserves original disc files. Direct replacements apply only to game-disc reads.
 They do not replace saves, settings or host files.
@@ -102,6 +116,7 @@ They do not intercept arbitrary instructions or internal jumps within a function
 Callbacks receive the registers `eax`, `ecx`, `edx`, `ebx`, `esp`, `ebp`, `esi` and `edi`.
 They also receive the flags `cf`, `zf`, `sf`, `of`, `pf` and `df`.
 Register values are unsigned 32-bit integers. Flags contain zero or one.
+
 A replacement can declare `stack_pop`, in bytes, for callee-cleaned arguments.
 The runtime also removes the four-byte return address after a successful replacement.
 Do not remove it again in the script.
@@ -116,7 +131,7 @@ Script reads see earlier staged writes from the same callback.
 Writes commit only after the callback and register checks succeed.
 A failed callback preserves its registers and staged memory changes.
 The runtime logs the error and disables that script for the session.
-A failed replacement falls back to the original routine.
+A failed replacement uses the original routine.
 
 Each script has an 8 MiB allocation limit and a budget of 100,000 Lua instructions per callback.
 Active scripts share a 64 MiB allocation limit.
@@ -129,7 +144,7 @@ Host files, processes, networking, native modules and dynamic script loading are
 Protected calls, coroutines, metatable changes and native string-pattern searches are unavailable.
 Guest memory access requires valid, committed addresses.
 Changing guest code bytes does not change compiled instructions. Use routine hooks instead.
-DLL, shared-library and raw Xbox executable mods are unsupported.
+The runtime does not support DLL, shared-library or raw Xbox executable mods.
 
 ## Publish and update
 

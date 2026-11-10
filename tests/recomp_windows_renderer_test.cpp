@@ -32,6 +32,10 @@ struct Probe final : gpu::Backend {
     void SetGamma(const uint8_t*)override{}
     uint32_t Fence()override{return vulkan?17:23;}
     bool Busy(uint32_t)override{return true;}
+    void WaitGpuFrame(uint64_t frame)override{
+        Require(frame==17,"GPU pacing must preserve the requested frame number");
+        events.push_back(vulkan?"v-gpu-wait":"d-gpu-wait");
+    }
 };
 }
 namespace openshao::launcher { const Settings& Current(){return settings;} }
@@ -61,6 +65,9 @@ int main(int argc,char** argv){
                     events.back()==(expected_vulkan?"v-present":"d-present") &&
                     backend->Fence()==(expected_vulkan?17u:23u) && backend->Busy(1),
                     "draws, presentation and resource fences must reach the active renderer");
+            backend->WaitGpuFrame(17);
+            Require(events.back()==(expected_vulkan?"v-gpu-wait":"d-gpu-wait"),
+                    "GPU frame pacing must reach the active renderer through fallback selection");
         }
         backend.reset();events.clear();
         settings.renderer=expected_vulkan?"d3d12":"vulkan";

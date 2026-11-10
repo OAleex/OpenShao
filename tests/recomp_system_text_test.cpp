@@ -27,6 +27,11 @@ bool IsCommitted(uint32_t address){return address<memory.size();}
 uint32_t AllocSystem(uint32_t size,uint32_t){const auto address=next_address;next_address+=(size+15)&~15u;return next_address<memory.size()?address:0;}
 }
 namespace logx {void Write(Level,const char*,...) {}}
+#include "difficulty.h"
+static unsigned slot_difficulties=0;
+namespace openshao::difficulty {bool SaveListText(X86Context& ctx,uint8_t* base,TextCall,void(*original)(X86Context&,uint8_t*)){
+    if(kernel::R32(ctx.esp)!=0x9F685)return false;
+    original(ctx,base);++slot_difficulties;return true;}}
 X86_FUNC(__imp__sub_00015C4F) {
     const auto resource=kernel::R32(ctx.esp+4);auto cursor=kernel::R32(resource+8);
     loaded_count=kernel::R32(cursor);cursor+=4;loaded.clear();
@@ -69,6 +74,9 @@ int main() {
     check(loaded_count==13,"Unknown system-table layouts must retain their original loader path");
     std::memcpy(memory.data()+0x4000,"Unrelated text",15);ctx.esp=0x1000;kernel::W32(0x1014,0x4000);sub_00152A30(ctx,memory.data());
     check(drawn=="Unrelated text","Other native text draws must remain untouched");
+    drawn.clear();ctx.esp=0x1000;kernel::W32(0x1000,0x9F685);kernel::W32(0x1014,0x4000);sub_00152A30(ctx,memory.data());
+    check(drawn=="Unrelated text" && slot_difficulties==1 && ctx.esp==0x1004,"Save slot rows must be routed through the slot list layout");
+    kernel::W32(0x1000,0);
     ctx.esp=0x1000;kernel::W32(0x1004,0);sub_00015C45(ctx,memory.data());
     check(storage_mode==1 && kernel::R32(0x1004)==0 && ctx.esp==0x1004 && ctx.eax==1,
           "The PC storage warning must offer its folder action directly without a destructive Xbox dashboard confirmation");

@@ -1,9 +1,7 @@
-# Linux build: the same recompiled game and runtime as Windows, with SDL3 for
-# the window, input and audio, and Vulkan for rendering. Included from the
-# top-level CMakeLists.txt after code generation and runtime adaptation.
+# Included after code generation and runtime adaptation in CMakeLists.txt.
 find_package(Threads REQUIRED)
 
-set(OPENSHAO_LINUX_EXCLUDE "/kernel/files\\.cpp$|/app/[a-z_]+\\.cpp$|/core/input\\.cpp$|/audio/xaudio2\\.cpp$|/gpu/(d3d12|vertex|shaders|render_thread)\\.cpp$|/xdk/(d3d8|xapi|dsound|xnet)\\.cpp$")
+set(OPENSHAO_LINUX_EXCLUDE "/kernel/files\\.cpp$|/app/[a-z_]+\\.cpp$|/core/input\\.cpp$|/audio/xaudio2\\.cpp$|/gpu/(d3d12|vertex|shaders|render_thread|texturedumper)\\.cpp$|/xdk/(d3d8|xapi|dsound|xnet)\\.cpp$")
 list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "${OPENSHAO_LINUX_EXCLUDE}")
 
 set(OPENSHAO_IMGUI_CORE
@@ -15,13 +13,14 @@ set(OPENSHAO_SHARED_SOURCES
     src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp
     src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
+    src/model_instances.cpp src/audio_load_wait.cpp
     src/recomp_settings_model.cpp src/recomp_settings.cpp src/native_frames.cpp src/frame_rate.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
-    src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp
+    src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp src/difficulty.cpp src/difficulty_progress.cpp src/save_pages.cpp src/save_pages_book.cpp src/audio_flags.cpp src/audio_options.cpp
+    src/survival_mode.cpp src/survival_session.cpp src/survival_levels.cpp src/survival_unlock.cpp
     src/language_pack.cpp src/language_archive.cpp src/language_credits.cpp src/virtual_file.cpp src/mods/runtime.cpp)
 
-# Vulkan: the Khronos headers and glslang's HLSL front end, both pinned. The
-# Vulkan loader itself is opened at run time through SDL, so the executable
-# does not link against libvulkan.
+# Vulkan: pinned Khronos headers and glslang's HLSL front end; the loader is opened
+# through SDL at run time (no libvulkan link).
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Vulkan.cmake")
 
 set(OPENSHAO_LINUX_SOURCES
@@ -36,6 +35,7 @@ add_executable(OpenShao ${XBE_RUNTIME_SOURCES} ${OPENSHAO_IMGUI_CORE} ${GEN_SOUR
     "${HOST_ADAPTED}/render_thread.cpp"
     ${OPENSHAO_SHARED_SOURCES} ${OPENSHAO_LINUX_SOURCES} "${CMAKE_CURRENT_BINARY_DIR}/openshao_xbe.cpp")
 add_dependencies(OpenShao openshao_codegen)
+target_link_libraries(OpenShao PRIVATE openshao_audio_effects)
 set_target_properties(OpenShao PROPERTIES OUTPUT_NAME OpenShao
     BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
 target_include_directories(OpenShao PRIVATE src src/linux/compat resources "${OPENSHAO_RECOMP_SDK}/runtime" "${GEN}"
@@ -46,10 +46,9 @@ set_source_files_properties(src/linux/linux_main.cpp PROPERTIES COMPILE_DEFINITI
 target_compile_options(OpenShao PRIVATE -fno-strict-aliasing -march=x86-64-v2)
 # libstdc++ and libgcc go into the executable: the player's distribution only has to supply glibc
 target_link_options(OpenShao PRIVATE -fuse-ld=lld -static-libstdc++ -static-libgcc)
-target_link_libraries(OpenShao PRIVATE openshao_support openshao_mods miniz tomlplusplus::tomlplusplus SDL3::SDL3-static Threads::Threads
+target_link_libraries(OpenShao PRIVATE openshao_discord openshao_support openshao_mods miniz tomlplusplus::tomlplusplus SDL3::SDL3-static Threads::Threads
     Vulkan::Headers glslang::glslang glslang::glslang-default-resource-limits ${CMAKE_DL_LIBS})
 
-# Regression tests that do not depend on Windows.
 enable_testing()
 function(openshao_linux_test name)
     cmake_parse_arguments(T "" "" "SOURCES;LIBS" ${ARGN})
@@ -62,6 +61,8 @@ function(openshao_linux_test name)
     endif()
     add_test(NAME ${name} COMMAND ${name}_test)
 endfunction()
+add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_model_instances_test.py"
+    --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
 openshao_linux_test(recomp_virtual_file SOURCES tests/recomp_virtual_file_test.cpp src/virtual_file.cpp)
 openshao_linux_test(recomp_language_archive SOURCES tests/recomp_language_archive_test.cpp src/language_archive.cpp src/virtual_file.cpp LIBS miniz)
 openshao_linux_test(recomp_language_credits SOURCES tests/recomp_language_credits_test.cpp src/language_credits.cpp)

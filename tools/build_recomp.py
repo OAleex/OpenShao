@@ -1,8 +1,7 @@
-"""Configure/build the separate AMD64 host with an explicit local toolchain.
+"""Build the native executable and release package, with optional tests.
 
-On Windows this builds the Direct3D 12 executable with LLVM and Visual Studio's CMake. On Linux (or inside WSL)
-it builds the Vulkan executable with the system's Clang, CMake and Ninja. On Windows, --linux also runs the Linux
-build inside WSL after the Windows one, so one command produces both release packages in dist/.
+Windows uses the selected LLVM toolchain and Visual Studio's CMake.
+Linux uses Clang, CMake and Ninja. --linux also builds the Linux package in WSL.
 """
 import argparse
 import os
@@ -11,7 +10,7 @@ import shutil
 import subprocess
 import sys
 
-SDK_REVISION = '40e9c35451305f09ca9d86f677e4b9c2c37ff26b'
+SDK_REVISION = 'f7b13fdbf9560a3b3928aea24e37c789b24408f0'
 
 # Ubuntu and Debian package names. SDL is built from source: without these headers its X11, Wayland and audio
 # back ends are left out and the game cannot open a window or play sound.
@@ -30,14 +29,25 @@ def check_sdk(parser, sdk):
         parser.error('The SDK revision differs from the reviewed integration')
 
 
+QUIET = False
+
+
 def run_steps(commands, root, logs, env=None, **popen):
     for command, name in commands:
         logfile = logs / name
         print(f'{name}: {logfile}', flush=True)
         with logfile.open('w', encoding='utf-8') as log:
-            result = subprocess.run(command, cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, **popen)
-        if result.returncode:
-            raise SystemExit(result.returncode)
+            if QUIET:
+                returncode = subprocess.run(command, cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, **popen).returncode
+            else:
+                process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                           text=True, encoding='utf-8', errors='replace', bufsize=1, **popen)
+                for line in process.stdout:
+                    log.write(line)
+                    print(line, end='', flush=True)
+                returncode = process.wait()
+        if returncode:
+            raise SystemExit(returncode)
 
 
 def windows_build(parser, args, root):
@@ -108,6 +118,8 @@ def linux_build_through_wsl(parser, args, root):
         parser.error(f'WSL could not be started: {error}')
     if args.test:
         command.append('--test')
+    if args.quiet:
+        command.append('--quiet')
     print('Linux build in WSL...', flush=True)
     result = subprocess.run(command, cwd=root)
     if result.returncode:
@@ -153,7 +165,7 @@ def linux_build(parser, args, root):
     if args.build_dir:
         build = args.build_dir.resolve()
     elif str(root).startswith('/mnt/'):
-        # a Windows drive under WSL is slow for the thousands of build files: they stay in the Linux home
+        # Keep build output on the Linux filesystem to avoid slow Windows mount I/O.
         build = Path.home() / '.cache/openshao/linux-release'
     else:
         build = root / 'build/linux-release'
@@ -195,7 +207,10 @@ def main():
     parser.add_argument('--disc', type=Path, help='Enable the local real-disc Reset regression (Windows)')
     parser.add_argument('--linux', action='store_true', help='Windows: also build the Linux package inside WSL')
     parser.add_argument('--wsl-distro', help='WSL distribution for --linux (default: the WSL default)')
+    parser.add_argument('--quiet', action='store_true', help='Write each step\'s output only to its log')
     args = parser.parse_args()
+    global QUIET
+    QUIET = args.quiet
     root = Path(__file__).resolve().parents[1]
     if sys.platform.startswith('linux'):
         linux_build(parser, args, root)

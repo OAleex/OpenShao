@@ -13,19 +13,14 @@
 
 OpenShao is a native PC port of **Mortal Kombat: Shaolin Monks**, made by statically recompiling the original Xbox game.
 
+The goal is to fix bugs, improve the experience and restore cut content while preserving
+the game's identity, atmosphere and gameplay. Restorations use evidence from the original
+game and its development.
+
+[Contributing](CONTRIBUTING.md) · [AI usage policy](AI_POLICY.md) · [Release notes](https://github.com/OAleex/OpenShao/releases)
+
 > [!IMPORTANT]
 > OpenShao does not include the game. You need your own **USA/Europe Xbox copy**.
-
-## Contents
-
-- [Requirements](#requirements)
-- [Install](#install)
-- [Update](#update)
-- [Features](#features)
-- [Known issues](#known-issues)
-- [FAQ](#faq)
-- [Building](#building)
-- [Credits](#credits)
 
 ## Requirements
 
@@ -47,33 +42,42 @@ Keep the game image or folder where it is. OpenShao reads it in place.
 
 ## Update
 
-The launcher checks for a new version when it opens. Select **Update** and it installs the new version and restarts.
-Saves, settings and mods are kept.
+The launcher checks for a new version when it opens. Select **Update**.
+The launcher installs the new version and restarts OpenShao.
+The update preserves saves, settings and mods.
+Select **Release notes** on the Play page to see what changed in the installed version.
 
 To update manually, extract the new release to a new folder.
-The first start of 0.3.0 moves the data and saves of earlier releases to the new folders.
+OpenShao migrates recognized data and saves from earlier releases to the current folders.
 
 ## Features
 
-- **Launcher** with game selection, mods, folders and automatic updates.
-- **Graphics API** selection on the launcher's Play page: Direct3D 12 by default or Vulkan on Windows. Linux uses Vulkan.
-- **Konfigure Recompilation**, an in-game settings menu for display, graphics, controls, audio and language.
-- **Pause menu** with Continue, Options, Konfigure Recompilation, Exit Game and Exit to Desktop. Exit Game returns to the main menu.
-- **Widescreen** at 16:9, 16:10, 21:9, 32:9 or the window's own shape, with the original 4:3 as default.
-- **Render scale** from 25% to 400%, anisotropic filtering and V-Sync.
-- **Cinematic Bars** in the main menu's Enhancements adds animated black bands to in-game cutscenes. It is off by default.
-- **Frame rate** follows the current monitor with V-Sync enabled. With V-Sync disabled, select 60 or 120 FPS. Simulation runs at 60 Hz.
-- **Remappable controls** for controllers, keyboard and mouse, with mouse camera support.
-- **Local Ko-op** with keyboard and mouse plus one controller, or two controllers.
-- **Restore Lost Dialogue** in the main menu's Enhancements, on by default. It recovers overlapping story lines, Johnny Cage's ledge instruction and wheel reactions, missing Goro's Lair dialogue and tutorial cues, solo/Ko-op escape warnings, the Living Forest acid hints, Kitana's laugh variations and captive threat, and Shang Tsung's unused combat taunts. It also adds unused takes to matching boss encounters and voices selected tutorial captions. It uses the selected voice language and the original recordings available for each cue.
-- **Separate text and voice languages**, including Brazilian Portuguese through a language pack.
-- **Mods** from the [OpenShao-Mods catalog](https://github.com/OAleex/OpenShao-Mods), installed and updated in the launcher.
+- Widescreen and ultrawide support, with the original 4:3 as default.
+- Adjustable render scale, anisotropic filtering and V-Sync, with Direct3D 12 or Vulkan on Windows and Vulkan on Linux.
+- Gameplay output up to 240 FPS, with simulation at 60 Hz and menus at 60 FPS.
+- Remappable controller, keyboard and mouse controls, including mouse camera support.
+- Local Ko-op with two controllers or keyboard and mouse plus one controller.
+- Nine-level Survival Mode for single player or Ko-op, with the shared difficulty options.
+- In-game display, graphics, controls and audio settings through **Konfigure Recompilation**.
+- Mono, stereo and discrete PCM 5.1 audio on compatible devices.
+- Restored missing and unused dialogue using only the original recordings. Lines whose original
+  trigger is lost are placed by their map, scene and script context; this is optional.
+- Optional enhancements, including Easy and Monk difficulties and cinematic bars, plus ten pages of save slots.
+- Separate text and voice languages, with an optional Brazilian Portuguese fan translation and dub as a language pack mod.
+- A launcher with [mods](https://github.com/OAleex/OpenShao-Mods), automatic updates and optional Discord Rich Presence.
+
+Dialogue restoration, difficulty options and cinematic bars are in **Enhancements** in the main menu.
+Select **Game Mode > Survival Mode** to choose single player or Ko-op, select from your unlocked Versus fighters, and then choose the difficulty. Confirm the framed rules inside Level 1 with **A**.
+
+Survival Mode starts locked. Find its secret in Story Mode, then save your game. The unlock then applies to every save.
+
+Version-specific changes are in the [release notes](https://github.com/OAleex/OpenShao/releases).
 
 ## Known issues
 
-- Most graphical issues have been fixed, but some can still appear. Any problem is worth reporting: [open an issue](https://github.com/OAleex/OpenShao/issues) with a screenshot.
+- Some graphical issues remain. [Report a problem](#how-do-i-report-a-problem) with steps to reproduce it and a screenshot.
 - Mortal Kombat II and The Suffering demo do not run.
-- Shaders and pipelines for supported assets are prepared while an area loads, including on the first run. Common menu, particle and screen-effect pipelines are prepared when their shaders load. Other effects can still pause briefly on first use. Observed pipelines are also prepared in the background in later sessions.
+- Some effects can cause a brief pause on first use while shaders compile.
 
 ## FAQ
 
@@ -93,7 +97,7 @@ Open **Files** in the launcher. Each folder has an **Open** button, and **Move**
 
 ### The game does not start after I changed the display settings
 
-Open the launcher and select **Files > Video > Restore**.
+Open the launcher. Select **Files > Video > Restore**.
 
 ### What are the keyboard and mouse controls?
 
@@ -116,20 +120,27 @@ Change them in **Konfigure Recompilation > Controls**. Each action has a primary
 
 Xbox, PlayStation and other SDL-compatible controllers work. The game shows Xbox buttons.
 In single player, the keyboard, mouse and first controller all control player 1.
-In Ko-op, the keyboard and mouse are player 1 and a controller is player 2. With two controllers, each controller is one player.
-If player 1's controller disconnects during Ko-op, the keyboard and mouse take over player 1. Connected controllers keep their player slots, and a replacement fills an empty slot.
+In Ko-op, the keyboard and mouse control player 1. One controller controls player 2.
+With two controllers, each controller controls one player.
+
+If player 1's controller disconnects during Ko-op, the keyboard and mouse control player 1.
+Connected controllers keep their player slots. A replacement fills an empty slot.
 Any connected controller can navigate Konfigure Recompilation and remap controls.
 
 For a controller without a mapping, put an SDL `gamecontrollerdb.txt` in the data folder.
 
-### How do I install mods or the Portuguese language pack?
+### How do I install mods or the Brazilian Portuguese fan translation?
 
-Open **Mods** in the launcher and select **Install**. A downloaded `.tar.xz` installs through **Install from file**.
-Then choose the language in **Konfigure Recompilation > Language**. Mod authors can read the [mod guide](docs/MODS.md).
+Open **Mods** in the launcher. Select **Install**.
+For a downloaded `.tar.xz`, use **Install from file**.
+Choose the language in **Konfigure Recompilation > Language**.
+Mod authors can read the [mod guide](docs/MODS.md).
 
 ### How can I improve performance?
 
-Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate. V-Sync uses the monitor's refresh rate as its target; output can fall below it when rendering is slow or an extra frame cannot be safely produced.
+Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate.
+V-Sync targets the monitor's refresh rate. When V-Sync is disabled, choose a cap from 60 to 240 FPS.
+The achieved frame rate depends on your hardware and the scene.
 
 ### Why does OpenShao bring the open window forward instead of starting?
 
@@ -151,35 +162,47 @@ Only one copy can run at a time with the same data folder.
 
 ### How do I report a problem?
 
-Open **Support** in the launcher. Select **Generate report** to create a diagnostic ZIP, then **Report a bug** to open GitHub.
-Attach the ZIP and describe the steps that cause the problem. Reports are saved in the data folder under `reports`.
+1. Open **Support** in the launcher.
+2. Select **Generate report** to create a diagnostic ZIP.
+3. Review the report before sharing it.
+4. Select **Report a bug** to open the GitHub issue form.
+   The form receives your OpenShao version and settings. A report with a crash dump opens the crash form.
+5. Describe the steps that cause the problem.
+6. Attach the reviewed report.
 
-Reports contain up to three session logs, selected settings and installed mod versions. Manual reports include the latest completed crash dump when available. Automatic crash reports include the dump captured for that crash when one can be created. New session logs and exported text logs filter account and computer names, personal paths, network addresses and credentials. ZIP reports exclude saves, game files and screenshots. Add a screenshot separately for graphical problems.
+For graphics or audio problems, choose that form on GitHub. **Report a bug** also copies your version and settings to the clipboard.
 
-An unexpected launcher or game exit creates a ZIP automatically. The error message shows its location and reporting instructions. Select **OK** to open the reports folder. You do not need to reopen the launcher to create the crash report.
+OpenShao saves reports in the data folder under `reports`.
+
+Reports include recent logs, selected settings, mod versions and a crash dump when available.
+Exported text logs filter personal paths, account names and credentials.
+Reports exclude saves, game files and screenshots. Remove crash dumps and any private data before posting the archive.
+Add a screenshot separately for graphical problems. Keep raw rendering captures local.
+
+After a crash, the error message shows the report's location. Select **OK** to open its folder.
+OpenShao does not upload reports automatically.
+
+## Contributing
+
+Read the [contribution guide](CONTRIBUTING.md) for project scope, PR expectations and rules
+on game files and private data. Fixes, testing and restorations supported by evidence are welcome.
 
 ## Building
 
-You need the original `default.xbe`, Python 3.11, Git and a C++ toolchain: Visual Studio 2022 with LLVM 21 on Windows, or Clang 18 on Linux.
-
-```sh
-git clone https://github.com/OAleex/OpenShao.git
-cd OpenShao
-git clone https://github.com/TGP482/XboxXBERecomp.git third_party/XboxXBERecomp
-git -C third_party/XboxXBERecomp checkout 40e9c35451305f09ca9d86f677e4b9c2c37ff26b
-python tools/build_recomp.py --xbe path/to/default.xbe --sdk third_party/XboxXBERecomp --test
-```
-
-On Windows, add `--llvm "C:/Program Files/LLVM"`. See [Building](docs/BUILDING.md) for packages, options and the Linux setup.
+See [Building](docs/BUILDING.md) for requirements, commands and packaging.
+Dependency versions and notices are in [Tools and dependencies](UPSTREAM.md).
 
 ## AI usage
 
-Development uses AI assistance for executable analysis, code, debugging, tests, build scripts and documentation.
-The maintainer reviews every change. Validation includes automated tests and gameplay.
+Development uses AI assistance for analysis, code, debugging, tests and documentation.
+The maintainer follows the same rules as contributors: every change is reviewed, understood
+and tested in game before release, and design decisions are made by people, not by AI.
+Contributors must understand, review and test their work. They must disclose how they used AI.
+Read the [AI usage policy](AI_POLICY.md).
 
 ## Credits
 
-Built with [XboxXBERecomp](https://github.com/TGP482/XboxXBERecomp). See [tools and dependencies](UPSTREAM.md), [third-party notices](licenses/THIRD_PARTY.txt) and the [Brazilian Portuguese credits](docs/TRANSLATION_CREDITS.md).
+Built with [XboxXBERecomp](https://github.com/TGP482/XboxXBERecomp). See [tools and dependencies](UPSTREAM.md), [third-party notices](licenses/THIRD_PARTY.txt) and the [Brazilian Portuguese fan translation credits](docs/TRANSLATION_CREDITS.md).
 
 The code is licensed under [GPL-2.0-or-later](LICENSE). The license does not cover the original game or its assets.
 OpenShao is not affiliated with or endorsed by the owners of Mortal Kombat or Xbox.

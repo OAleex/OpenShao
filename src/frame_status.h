@@ -5,7 +5,7 @@
 
 namespace openshao::frames {
 // Why a gameplay interval was shown without an interpolated output frame.
-enum class Block : uint8_t {None, Buffer, Sprites, Polygons, Fonts, Queue, Scene, State, Late, Fault, Count};
+enum class Block : uint8_t {None, Buffer, Sprites, Polygons, Fonts, Queue, Scene, State, Material, Late, Fault, Count};
 
 inline const char* BlockName(Block block) {
     switch(block) {
@@ -16,6 +16,7 @@ inline const char* BlockName(Block block) {
     case Block::Queue: return "render queue moved";
     case Block::Scene: return "scene change";
     case Block::State: return "non-gameplay frame";
+    case Block::Material: return "material pass changed";
     case Block::Late: return "frame time";
     case Block::Fault: return "state check";
     default: return "none";

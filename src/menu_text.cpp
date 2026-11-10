@@ -20,7 +20,9 @@ Catalog Catalog::Parse(std::string_view text) {
     Catalog catalog;
     for(const auto& [locale,labels]:std::get<mods::Json::Object>(root.At("languages").value))
         for(const auto& [id,label]:std::get<mods::Json::Object>(labels.value)) {
-            EncodeNative(label.Text(),false,id.starts_with("system.")?255:95);
+            // Survival frames (unlock and completion) use the framed multiline format.
+            if(id.starts_with("survival.unlock_") || id=="survival.complete")EncodeNativeMultiline(label.Text(),false,127);
+            else EncodeNative(label.Text(),false,id.starts_with("system.")?255:95);
             catalog.languages_[Lower(locale)].emplace(id,label.Text());
         }
     if(!catalog.languages_.contains("en"))throw std::runtime_error("Menu text catalog requires English fallback");
@@ -72,6 +74,20 @@ std::string EncodeNative(std::string_view text,bool translated,size_t limit) {
         }
         result.push_back(char(code));
         if(result.size()>limit)throw std::runtime_error("Text exceeds native string storage");
+    }
+    return result;
+}
+std::string EncodeNativeMultiline(std::string_view text,bool translated,size_t limit) {
+    std::string result;
+    for(size_t start=0;start<=text.size();) {
+        const auto end=text.find('\n',start);
+        const auto line=text.substr(start,end==std::string_view::npos?end:end-start);
+        result+=EncodeNative(line,translated,limit);
+        if(result.size()>limit)throw std::runtime_error("Multiline menu text exceeds native storage");
+        if(end==std::string_view::npos)break;
+        result.push_back('\n');
+        if(result.size()>limit)throw std::runtime_error("Multiline menu text exceeds native storage");
+        start=end+1;
     }
     return result;
 }

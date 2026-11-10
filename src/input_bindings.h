@@ -32,8 +32,7 @@ inline std::string CanonicalSource(std::string source) {
     if(source=="east" || source=="circle") return "b";
     if(source=="west" || source=="square") return "x";
     if(source=="north" || source=="triangle") return "y";
-    // SDL 3.4 returns paddle1..4 from SDL_GetGamepadStringForButton(). Older
-    // user mappings may still contain the legacy directional paddle names.
+    // SDL 3.4 names paddles paddle1..4; older mappings use the directional names.
     if(source=="rightpaddle1")return "paddle1";
     if(source=="leftpaddle1")return "paddle2";
     if(source=="rightpaddle2")return "paddle3";

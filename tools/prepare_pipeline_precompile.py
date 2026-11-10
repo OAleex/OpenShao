@@ -92,7 +92,7 @@ def adapt_backend(backend, replace_once):
         '    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};\n'
         '    d.InputLayout = {el, n};\n'
         '    FillPipelineDesc(k, vs, ps, d);\n'
-        '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d);\n'
+        '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d, k.sprite);\n'
         '    if (k.atlas_guard) {\n'
         '        uint64_t hash;\n'
         '        ID3DBlob* gs = Compile(openshao::AtlasBoundsHlsl(), "main", "gs_5_0", hash);\n'
@@ -106,9 +106,9 @@ def adapt_backend(backend, replace_once):
         '    return pso.Get();\n'
         '}\n')
     expand = (
-        'void D3D12Backend::ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d) {\n'
+        'void D3D12Backend::ExpandPoints(D3D12_GRAPHICS_PIPELINE_STATE_DESC& d, bool sprite) {\n'
         '    uint64_t hash;\n'
-        '    ID3DBlob* gs = Compile(PointHlsl(), "main", "gs_5_0", hash);\n'
+        '    ID3DBlob* gs = Compile(sprite ? SpriteHlsl() : PointHlsl(), "main", "gs_5_0", hash);\n'
         '    if (!gs) return;\n'
         '    d.GS = {gs->GetBufferPointer(), gs->GetBufferSize()};\n'
         '    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;\n'
@@ -120,7 +120,10 @@ def adapt_backend(backend, replace_once):
         '    std::string src = VertexHlsl(s, a, sh);\n'
         '    sh.vs_code = Compile(sh.quad ? QuadHlsl(std::move(src)) : src, "main", "vs_5_0", sh.vh);\n',
         '    sh.ps_code = Compile(PixelHlsl(pk), "main", "ps_5_0", sh.ph);\n',
-        '    if (sh.prog) return VertexProgramHlsl(s.vs->program, a.regs, a.decode);\n'
+        '    if (sh.prog) {\n'
+        '        std::string src = VertexProgramHlsl(s.vs->program, a.regs, a.decode);\n'
+        '        return sh.sprite ? SpriteSizeHlsl(std::move(src)) : src;\n'
+        '    }\n'
         '    return FixedVertexHlsl(a.regs, a.pretransformed, a.decode, sh.fk);\n',
     ):
         if backend.count(mirrored) != 1:
@@ -172,5 +175,6 @@ def adapt_d3d8(d3d, replace_once):
     return replace_once(d3d,
         '    gpu::ParseDeclaration(*vs);\n    uint32_t rec = mem::AllocSystem(16, 16);\n',
         '    gpu::ParseDeclaration(*vs);\n'
+        '    vs->hash = openshao::pipelines::ProgramHash(vs->program);\n'
         '    openshao::pipelines::RegisterProgram(vs->program);\n'
         '    uint32_t rec = mem::AllocSystem(16, 16);\n')

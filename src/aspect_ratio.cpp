@@ -44,8 +44,7 @@ bool ExpandViewportTint(void* vertices,uint32_t count,uint32_t stride) {
             std::memcpy(xy[i],bytes+i*stride,8);
             if(!std::isfinite(xy[i][0]) || !std::isfinite(xy[i][1]))return false;
         }
-        // The retail masks own their fade and slide animation. Undo only the
-        // fitted UI projection so their black bands span the output viewport.
+        // The retail masks own their fade/slide: undo only the fitted projection so bands span the output.
         for(unsigned i=0;i<4;++i) {
             xy[i][0]=(xy[i][0]+.5f)/scale.x-.5f;
             xy[i][1]=(xy[i][1]+.5f)/scale.y-.5f;
@@ -83,10 +82,10 @@ bool ExpandViewportTint(void* vertices,uint32_t count,uint32_t stride) {
         // Art and parchment share one bitmap; fit its authored bounds, not padded texture dimensions.
         const float width=xy[2][0]-xy[0][0],height=xy[1][1]-xy[0][1];
         if(width<=0 || height<=0)return false;
-        const auto rect=Fit(640/scale.x,480/scale.y-ArtworkFooter,width/height);
+        const auto rect=FitArtwork(width,height,scale);
         for(unsigned i=0;i<4;++i) {
-            xy[i][0]=rect.x+(i<2?0:rect.w)-320/scale.x;
-            xy[i][1]=rect.y+(i%2?rect.h:0)-240/scale.y;
+            xy[i][0]=rect.x+(i<2?0:rect.w);
+            xy[i][1]=rect.y+(i%2?rect.h:0);
             std::memcpy(bytes+i*stride,xy[i],8);
         }
         return true;

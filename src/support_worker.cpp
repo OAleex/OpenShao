@@ -88,7 +88,7 @@ CapturedDump CaptureDump(HANDLE process,DWORD pid,const State& state,const fs::p
         EXCEPTION_POINTERS pointers{&native.record,&native.context};
         MINIDUMP_EXCEPTION_INFORMATION info{state.thread_id,&pointers,FALSE};
         const auto type=MINIDUMP_TYPE(MiniDumpWithDataSegs|MiniDumpWithHandleData|MiniDumpWithThreadInfo|
-            MiniDumpWithUnloadedModules|MiniDumpWithIndirectlyReferencedMemory|MiniDumpFilterModulePaths);
+            MiniDumpWithUnloadedModules|MiniDumpWithIndirectlyReferencedMemory|MiniDumpWithFullMemoryInfo|MiniDumpFilterModulePaths);
         const bool written=MiniDumpWriteDump(process,pid,file,type,state.context_valid?&info:nullptr,nullptr,nullptr)!=FALSE;
         const auto error=written?ERROR_SUCCESS:GetLastError();
         CloseHandle(file);
@@ -136,8 +136,7 @@ bool NotifyCrash(uint32_t code,uint64_t address,void* native_exception) noexcept
 #endif
     Store(monitor->status,2);
 #ifdef _WIN32
-    // Keep the faulting process alive until the worker has copied its threads and memory.
-    // The deadline also lets startup failures terminate if the worker cannot write a dump.
+    // Keep the faulting process alive until the worker copied it (bounded by a deadline).
     const auto deadline=GetTickCount64()+10000;
     while(!Load(monitor->dump_ready) && GetTickCount64()<deadline) Sleep(10);
 #endif

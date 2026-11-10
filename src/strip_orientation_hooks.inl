@@ -4,8 +4,7 @@
 #include <mutex>
 
 namespace {
-// The original scene constructs one render group per source identity. Replace
-// each binding on reconstruction, and erase reused owners for unknown content.
+// One render group per source identity; rebind on reconstruction, clear reused owners.
 std::array<uint32_t, openshao::BackgroundStripSourceCount> background_owners{};
 std::mutex background_owners_mutex;
 
@@ -59,8 +58,7 @@ X86_FUNC(sub_00133110) {
 X86_EXTERN_FUNC(__imp__sub_0017AA40);
 X86_EXTERN_FUNC(sub_0017A6B0);
 X86_FUNC(sub_0017AA40) {
-    // Load phase 3 invokes the parser callback after decompression. Render-group
-    // construction is too late: the parser has already translated material state.
+    // Parser callback in load phase 3, before material state is translated.
     const uint32_t room = kernel::R32(0x505970);
     bool parsing = kernel::R32(0x695304) == 3;
     static thread_local bool pipeline_wait = false;
@@ -111,8 +109,7 @@ X86_FUNC(sub_0017AA40) {
 
 X86_EXTERN_FUNC(__imp__sub_00120790);
 X86_FUNC(sub_00120790) {
-    // The original alpha-list Add takes (cPxAlphaUnit*, float distance).
-    // Types1/2 contain plain/transformed draw units with a group owner at+158.
+    // Alpha-list Add(cPxAlphaUnit*, float distance); types 1/2 have a group owner at +158.
     bool background = false;
     if (kernel::R32(0x505970) == 0xA7) {
         const uint32_t alpha = kernel::R32(ctx.esp + 4);
@@ -132,8 +129,7 @@ X86_FUNC(sub_00120790) {
         __imp__sub_00120790(ctx, base);
         return;
     }
-    // A finite priority band above the supported scene's squared distances
-    // retains its relative sky order without changing alpha, depth or geometry.
+    // Priority band above the scene's squared distances keeps the sky order.
     const float priority = 1.0e12f + distance * 1.0e4f;
     kernel::W32(argument, std::bit_cast<uint32_t>(priority));
     LOG_FIRST(8, "openshao graphics: background source sort distance %.7g -> %.7g", distance, priority);

@@ -81,7 +81,7 @@ toml::table Settings(const fs::path& path) {
     const auto source = Parse(path); toml::table result;
     for (const auto* key : {"renderer", "fps_cap", "voice_language", "language", "display_mode", "aspect_ratio",
             "width", "height", "render_percent", "anisotropic_filtering", "vsync", "bloom_effect", "show_fps", "rumble",
-            "restore_dialogue", "cinematic_bars", "scorpion_unfiltered", "master_volume", "music_volume",
+            "restore_dialogue", "cinematic_bars", "scorpion_unfiltered", "improved_difficulty", "master_volume", "music_volume",
             "effects_volume", "speech_volume", "brightness", "deadzone"}) {
         if (auto* node = source.get(key)) {
             if (auto value = node->value<std::string>()) result.insert(key, privacy::Redact(value->substr(0,256)));
@@ -89,7 +89,7 @@ toml::table Settings(const fs::path& path) {
         }
     }
     const std::pair<const char*,std::vector<const char*>> groups[] = {
-        {"enhancements", {"restore_dialogue","cinematic_bars","scorpion_unfiltered"}},
+        {"enhancements", {"restore_dialogue","cinematic_bars","scorpion_unfiltered","improved_difficulty"}},
         {"game", {"music_volume","effects_volume","speech_volume","brightness","versus_rounds","versus_time","camera_reverse"}},
         {"controller", {"deadzone","rumble"}}, {"mouse", {"sensitivity","invert_x","invert_y","motion"}}
     };
@@ -112,6 +112,29 @@ toml::table Mods(const fs::path& path) {
         value.insert("enabled", (*item)["enabled"].value_or(false)); entries.push_back(std::move(value));
     }
     return toml::table{{"mods", std::move(entries)}};
+}
+toml::table GraphicsSession(const std::string& name,const std::string& text) {
+    std::string api="unknown",device,vulkan_device,d3d12_device;
+    std::istringstream lines(text);std::string line;
+    const auto after=[](const std::string& line,const char* marker) {
+        const auto at=line.find(marker);
+        if(at==std::string::npos)return std::string{};
+        auto value=line.substr(at+std::strlen(marker),256);
+        if(!value.empty() && value.back()=='\r')value.pop_back();
+        return value;
+    };
+    while(std::getline(lines,line)) {
+        if(auto value=after(line,"Vulkan device: ");!value.empty())vulkan_device=value.substr(0,value.find(" (driver "));
+        if(auto value=after(line,"D3D12 adapter: ");!value.empty())d3d12_device=std::move(value);
+        // Device selection alone can precede a failed initialization and fallback.
+        if(line.find(" guest, ")!=std::string::npos && line.find(" window, render scale ")!=std::string::npos) {
+            if(line.find("vulkan: ")!=std::string::npos){api="vulkan";device=vulkan_device;}
+            else if(line.find("d3d12: ")!=std::string::npos){api="d3d12";device=d3d12_device;}
+        }
+    }
+    toml::table result{{"log",name},{"api",api}};
+    if(!device.empty())result.insert("device",device);
+    return result;
 }
 }
 Report Generate(const Source& source) noexcept {
@@ -162,8 +185,15 @@ Report Generate(const Source& source) noexcept {
         if (!source.session_log.empty()) { std::erase(logs, source.session_log); logs.insert(logs.begin(), source.session_log); }
         if (logs.size() > 3) logs.resize(3);
         if (logs.empty()) files.emplace_back("session.log", "No session log is available.\n");
-        for (size_t i=0; i<logs.size(); ++i)
-            files.emplace_back(i==0 ? "session.log" : "previous-"+std::to_string(i)+".log", Read(logs[i], 1024*1024));
+        toml::array graphics_sessions;
+        for (size_t i=0; i<logs.size(); ++i) {
+            const auto name=i==0 ? "session.log" : "previous-"+std::to_string(i)+".log";
+            auto contents=Read(logs[i],1024*1024);
+            graphics_sessions.push_back(GraphicsSession(name,contents));
+            files.emplace_back(name,std::move(contents));
+        }
+        metadata.insert("graphics_sessions",std::move(graphics_sessions));
+        files.front().second=Json(metadata);
         mz_zip_archive archive{};
         // Stream the binary dump without loading it into memory. Wide paths support Unicode data folders.
         auto output=OpenFile(temporary,true);

@@ -5,5 +5,5 @@ namespace openshao::scorpion::audio_preview {
 bool Play(unsigned index);
 void Stop();
 // Called after the original guest-audio render, on the existing output device.
-void Mix(float* interleaved_stereo, unsigned frames);
+void Mix(float* interleaved, unsigned frames,unsigned channels=2);
 }

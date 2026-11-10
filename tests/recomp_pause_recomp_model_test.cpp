@@ -89,9 +89,17 @@ int main(){
     Open();Choose(1);
     assert(RowText(5).find("60 FPS")!=std::string::npos);
     const auto vsync=settings.vsync;
-    Choose(5);assert(settings.fps_cap==120 && RowText(5).find("120 FPS")!=std::string::npos && saves==16);
-    assert(settings.vsync==vsync);
-    Choose(5);assert(settings.fps_cap==60 && saves==17);
+    unsigned expected_saves=saves;
+    for(const int fps:{120,144,165,240,60}) {
+        Choose(5);
+        assert(settings.fps_cap==fps && RowText(5).find(std::to_string(fps)+" FPS")!=std::string::npos);
+        assert(settings.vsync==vsync && saves==++expected_saves);
+    }
+    Choose(5);assert(settings.fps_cap==120 && RowText(5).find("120 FPS")!=std::string::npos);
+    Choose(5);assert(settings.fps_cap==144 && RowText(5).find("144 FPS")!=std::string::npos);
+    Choose(5);assert(settings.fps_cap==165 && RowText(5).find("165 FPS")!=std::string::npos);
+    Choose(5);assert(settings.fps_cap==240 && RowText(5).find("240 FPS")!=std::string::npos);
+    Choose(5);assert(settings.fps_cap==60 && RowText(5).find("60 FPS")!=std::string::npos);
     Choose(6);assert(CurrentPage()==Page::Categories);
     settings.vsync=true;Choose(1);
     assert(RowText(5).find("Monitor")!=std::string::npos);

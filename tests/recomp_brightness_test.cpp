@@ -22,6 +22,11 @@ int main() {
     const auto half = std::bit_cast<uint32_t>(.5f);
     openshao::brightness::Initialize();
     check(kernel::R32(0x4DF5C0) == half, "A clean mapped image must start at 50 percent brightness");
+    for (const int percent : {0, 23, 50, 100}) {
+        openshao::brightness::Initialize(percent);
+        check(kernel::R32(0x4DF5C0) == std::bit_cast<uint32_t>(percent / 100.f),
+              "Startup must retain the configured brightness before the native profile loads, including zero");
+    }
     const auto saved = std::bit_cast<uint32_t>(.23f);
     kernel::W32(0x4DF5C0, saved);
     X86Context ctx{};
@@ -32,10 +37,28 @@ int main() {
         sub_00123A50(ctx, memory.data());
         check(ctx.esp == 0x1004 && ctx.eax == 123, "Brightness overrides must preserve native return and cdecl cleanup");
     };
+    // The title and calibration share a handler. Only the title must ignore its stale draft.
+    kernel::W32(0x5982D4, 0x700000);
+    for (const auto value : {0.f, .23f, .5f, 1.f}) {
+        const auto bits = std::bit_cast<uint32_t>(value);
+        kernel::W32(0x4DF5C0, bits);
+        kernel::W32(0x7002E4, 0x12);
+        kernel::W32(0x598308, std::bit_cast<uint32_t>(.87f));
+        apply(0x4C18A, std::bit_cast<uint32_t>(.87f));
+        check(preview == bits, "Press START must render with saved brightness instead of the calibration draft");
+        check(kernel::R32(0x4DF5C0) == bits, "Drawing the title must not change saved brightness");
+        for (const auto scene : {0x11u, 0x13u}) {
+            kernel::W32(0x7002E4, scene);
+            apply(0x4C18A, std::bit_cast<uint32_t>(.87f));
+            check(preview == std::bit_cast<uint32_t>(.87f),
+                  "Initial calibration and the options preview must use their own draft");
+        }
+    }
+    kernel::W32(0x4DF5C0, saved);
     for (const auto value : {0.f, .23f, .5f, 1.f}) {
         const auto bits = std::bit_cast<uint32_t>(value);
         kernel::W32(0x598308, bits);
-        apply(0x4C17F, bits);
+        apply(0x4C18A, bits);
         check(preview == bits && kernel::R32(0x598308) == bits,
               "Ordinary brightness previews must retain the player's complete adjustment range, including zero");
     }

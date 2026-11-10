@@ -38,8 +38,7 @@ std::string Utf8(const fs::path& value) {
     return {bytes.begin(), bytes.end()};
 }
 constexpr const char* kDataFolder = "OpenShao";
-// Moves the default data and saves folders of an earlier release, found by their contents, to the current names.
-// Read-only queries and explicit data folders keep using the earlier folders without moving them.
+// Moves an earlier release's default folders (found by content) to the current names, unless read-only or explicit.
 std::string AdoptPreviousName(const fs::path& parent, bool keep) {
     std::vector<LegacyFolder> folders{{FindPreviousFolder(parent, root, IsDataFolder), root}};
 #ifdef _WIN32

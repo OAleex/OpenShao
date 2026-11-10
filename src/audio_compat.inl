@@ -1,4 +1,5 @@
 // SetEG uses the supported executable's RET8 ABI; the scanner profile omits this wrapper.
+#undef SYM_IDirectSoundBuffer_SetEG
 #define SYM_IDirectSoundBuffer_SetEG 003FCDAE
 BUFFER(SetEG, 2) {
     constexpr uint32_t invalid = 0x80070057u;

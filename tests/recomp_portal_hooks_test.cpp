@@ -48,7 +48,9 @@ int main(){
     const std::array<std::array<float,3>,4> p{{{0,-2,-1},{0,-2,1},{0,2,1},{0,2,-1}}};
     for(unsigned i=0;i<4;++i){std::memcpy(source_vertices.data()+i*20,p[i].data(),12);for(unsigned j=12;j<20;++j)source_vertices[i*20+j]=uint8_t(i+j);}
     Lookup(2,105);Create(allocation);Draw(true);
-    kernel::W32(0x505970,0xA9);Draw(false);kernel::W32(0x505970,0xA3);
+    for(const uint32_t room:{0xA1u,0xA2u,0xA4u,0xA5u,0xA6u,0xBBu,0xBEu,0xBFu}){kernel::W32(0x505970,room);Draw(true);}
+    for(const uint32_t room:{0x40u,0xA0u,0xC0u}){kernel::W32(0x505970,room);Draw(false);}
+    kernel::W32(0x505970,0xA3);
     kernel::W32(particle+0x1C+0x84,0x20080);Draw(false);kernel::W32(particle+0x1C+0x84,0x80);
     emitted_bytes=40;Draw(false);emitted_bytes=80;
     allocation_result=allocation;X86Context reused;sub_00105E10(reused,nullptr);Draw(false);
@@ -58,5 +60,5 @@ int main(){
     lookup_result=0x900000+105*0xEC;Lookup(2,105);Create(0);Draw(false);
     kernel::W32(descriptor+0xE8,core);Lookup(2,105);Create(0);Draw(true);
     Lookup(2,104);Create(0);Draw(false);
-    std::puts("PASS: original portal identity, room/rotation guards, allocation reuse, failures and ABI");
+    std::puts("PASS: original portal identity, arena range/rotation guards, allocation reuse, failures and ABI");
 }

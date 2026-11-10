@@ -1,6 +1,7 @@
 #pragma once
 #include "input_bindings.h"
 #include <bitset>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 namespace openshao::recomp::raw {
@@ -10,6 +11,10 @@ inline std::mutex mutex;
 inline bool menu=false,neutral=false;
 inline Device capture=Device::None;
 inline std::bitset<256> held;
+inline bool pending_enter=false;
+inline std::atomic<bool> native_enter_accept{false};
+inline void NativeEnterAccept(bool enabled){native_enter_accept.store(enabled,std::memory_order_relaxed);}
+inline bool NativeEnterAccept(){return native_enter_accept.load(std::memory_order_relaxed);}
 inline std::chrono::steady_clock::time_point began;
 inline Result result;
 inline uint32_t navigation=0,last_controller=0;
@@ -24,7 +29,9 @@ inline uint32_t Navigation(){std::lock_guard guard(mutex);const auto value=navig
 inline uint32_t ControllerButtons(){std::lock_guard guard(mutex);return last_controller;}
 inline bool Key(unsigned key,bool down) {
     if(key>=256)return false;
-    std::lock_guard guard(mutex);held[key]=down;
+    std::lock_guard guard(mutex);
+    if(key==13 && down && !held[key] && !menu && NativeEnterAccept())pending_enter=true;
+    held[key]=down;
     if(capture==Device::Keyboard) {
         if(held.none())neutral=true;
         if(neutral && down && bindings::ValidKey(int(key))){result={Device::Keyboard,{},int(key)};capture=Device::None;}
@@ -38,6 +45,7 @@ inline bool Key(unsigned key,bool down) {
     }
     return key==38 || key==40 || key==37 || key==39 || key==13 || key==32 || key==27 || key==8 || key==46;
 }
+inline bool TakeEnter() {std::lock_guard guard(mutex);const bool pressed=pending_enter;pending_enter=false;return pressed;}
 inline void Controller(std::string_view source,uint32_t buttons) {
     std::lock_guard guard(mutex);
     if(capture==Device::Controller) {
@@ -48,5 +56,5 @@ inline void Controller(std::string_view source,uint32_t buttons) {
     } else if(menu)navigation|=buttons&~last_controller;
     last_controller=buttons;
 }
-inline void FocusLost(){std::lock_guard guard(mutex);held.reset();capture=Device::None;result={};navigation=0;last_controller=0;}
+inline void FocusLost(){std::lock_guard guard(mutex);held.reset();pending_enter=false;native_enter_accept.store(false,std::memory_order_relaxed);capture=Device::None;result={};navigation=0;last_controller=0;}
 }

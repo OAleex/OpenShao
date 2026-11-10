@@ -72,3 +72,13 @@ Distributed under 0BSD. See xz-embedded-0BSD.txt for the complete license.
 Lua 5.4.9 (https://www.lua.org/)
 Copyright (c) 1994-2026 Lua.org, PUC-Rio.
 Distributed under MIT. See Lua-MIT.txt for the complete license.
+
+discord-rpc (https://github.com/discord/discord-rpc)
+Revision: 963aa9f3e5ce81a4682c6ca3d136cddda614db33
+Copyright 2017 Discord, Inc.
+Distributed under MIT. See discord-rpc-MIT.txt for the complete license.
+
+RapidJSON (https://github.com/Tencent/rapidjson)
+Revision: 24b5e7a8b27f42fa16b96fc70aade9106cf7102f
+Copyright (C) 2015 THL A29 Limited, a Tencent company, and Milo Yip.
+The executable uses only the MIT-licensed headers. See RapidJSON.txt for the upstream notices.

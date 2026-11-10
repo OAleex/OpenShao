@@ -2,6 +2,7 @@
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
 #include "game_preferences.h"
+#include "audio_output.h"
 #include <bit>
 
 void openshao::preferences::Apply(X86Context& ctx, uint8_t*) {
@@ -13,6 +14,9 @@ void openshao::preferences::Apply(X86Context& ctx, uint8_t*) {
 }
 void openshao::preferences::ApplyNow(X86Context& ctx,const launcher::Settings& settings) {
     const auto saved = ctx;
+    kernel::G<uint8_t>(0x4DF5D0)=uint8_t(settings.audio_output);
+    kernel::G<uint8_t>(0x4E5790)=uint8_t(settings.audio_output);
+    kernel::CallGuest(ctx,0x1B1900,{uint32_t(settings.audio_output)}); ctx=saved;
     const int volumes[] = {settings.music_volume, settings.effects_volume, settings.speech_volume};
     for (unsigned i = 0; i < 3; ++i) {
         const auto value = std::bit_cast<uint32_t>(volumes[i] / 100.f);
@@ -33,6 +37,7 @@ void openshao::preferences::ApplyNow(X86Context& ctx,const launcher::Settings& s
          settings.versus_rounds, settings.versus_time, int(settings.camera_reverse));
 }
 void openshao::preferences::ReadActive(launcher::Settings& s) {
+    s.audio_output=int(audio::output::Current().mode);
     auto volume=[](uint32_t address){return std::clamp(int(std::lround(std::bit_cast<float>(kernel::R32(address))*100)),0,100);};
     s.music_volume=volume(0x4DF5C4);s.effects_volume=volume(0x4DF5C8);s.speech_volume=volume(0x4DF5CC);s.brightness=volume(0x4DF5C0);
     s.versus_rounds=kernel::G<uint8_t>(0x4DF5D1)?1:3;

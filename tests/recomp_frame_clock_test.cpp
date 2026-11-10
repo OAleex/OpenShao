@@ -28,14 +28,33 @@ int main() {
     check(clock.Take(100)==1 && clock.Alpha()==0,"A clock discontinuity must clear timing history");
     clock.Reset();
     check(clock.Take(5000000000)==1 && clock.Alpha()==0,"Changing frame-rate mode must start without accumulated gameplay steps");
-    for(int rate:{60,75,100,120,144,165,240}) {
-        check(openshao::frames::EffectiveRate(60,true,rate)==rate && openshao::frames::EffectiveRate(120,true,rate)==rate,
-              "VSync must follow the current display refresh instead of the stored software cap");
-        check(openshao::frames::EffectiveRate(60,false,rate)==60 && openshao::frames::EffectiveRate(120,false,rate)==120,
-              "Disabling VSync must restore the selected software cap");
+    for(const int fps:openshao::frames::RateOptions) {
+        check(openshao::frames::SafeRate(fps)==fps && openshao::frames::SupportedRate(fps),
+              "Every selectable FPS cap must be accepted by the runtime");
+        for(const int refresh:{60,75,100,120,144,165,240}) {
+            check(openshao::frames::EffectiveRate(fps,true,refresh)==refresh,
+                  "VSync must follow current display refresh rather than the software cap");
+            check(openshao::frames::EffectiveRate(fps,false,refresh)==fps,
+                  "Without VSync, all supported caps must be respected");
+        }
+        for(const bool vsync:{false,true}) {
+            openshao::frames::Configure(fps,vsync);
+            check(openshao::frames::target_rate.load()==fps &&
+                  openshao::frames::OutputCap()==(vsync?0:fps),
+                  "Configuring FPS and VSync must preserve the requested output rate");
+        }
+    }
+    for(const int invalid:{-1,0,30,75,121,166,241,1000}) {
+        check(!openshao::frames::SupportedRate(invalid) && openshao::frames::SafeRate(invalid)==60 &&
+              openshao::frames::EffectiveRate(invalid,false,240)==60,
+              "Unsupported FPS caps must fall back to 60 safely");
+        openshao::frames::Configure(invalid,false);
+        check(openshao::frames::OutputCap()==60,"An invalid FPS cap must never reach the render pacing");
     }
     check(openshao::frames::EffectiveRate(120,true,0)==60 && openshao::frames::EffectiveRate(60,true,NAN)==60,
           "Unavailable display modes must use the safe 60 Hz fallback");
+    check(openshao::frames::EffectiveRate(240,true,1001)==60,
+          "Unreasonably high refresh values must use the safe 60 Hz fallback");
     check(openshao::frames::EffectiveRate(60,true,59.94)==60,"Fractional refresh must round to its nominal output target");
     for(int rate:{60,75,100,120,144,165,240}) {
         openshao::frames::OutputCadence cadence;unsigned outputs=0;

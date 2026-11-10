@@ -18,7 +18,10 @@
 #include "launcher_input_capture.h"
 #include "launcher_settings.h"
 #include "recomp_input.h"
+#include "survival_session.h"
 static bool keyboard_active=false;
+static bool survival_active=false;
+namespace openshao::survival {bool ActiveSession(){return survival_active;}}
 static void TestKeyboard(int port,input::Pad& pad) {if(keyboard_active) openshao::keyboard::Poll(port,pad);}
 namespace app { const GameInfo kGame{.pad=TestKeyboard}; std::filesystem::path ExeDir() { return std::filesystem::current_path(); } }
 namespace openshao { Options options; }
@@ -172,6 +175,41 @@ static void TestMenuControllers() {
     Cancel();Active(false);FocusLost();openshao::controller::Shutdown();
     Check(failures==0,"all-controller menu input regressions");
 }
+static void TestSurvivalPauseMapping() {
+    const toml::table automatic;
+    keyboard_active=true;
+    openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
+    openshao::keyboard::ReleaseAll();openshao::recomp::raw::FocusLost();
+    openshao::keyboard::Key(VK_RETURN,true);
+    auto p=input::Poll(0);
+    Check((p.buttons&0x10) && !(p.buttons&0x20),"Enter remains Start in ordinary gameplay");
+    survival_active=true;
+    p=input::Poll(0);
+    Check(!(p.buttons&0x10) && (p.buttons&0x20),"Enter behaves as Select only during Survival");
+    openshao::keyboard::Key(VK_BACK,true);p=input::Poll(0);
+    Check(!(p.buttons&0x10) && (p.buttons&0x20),"Start and Select together never duplicate Select");
+    openshao::keyboard::Key(VK_RETURN,false);openshao::keyboard::Key(VK_BACK,false);
+    Check(!input::Poll(0).buttons,"releasing both keys clears Survival pause input");
+    openshao::keyboard::Key(VK_RETURN,true);
+    Check((input::Poll(0).buttons&0x20)!=0,"a second Enter press still acts as Select");
+    openshao::keyboard::Key(VK_RETURN,false);
+    openshao::controller::SetMultiplayer(true);
+    const auto device=Attach("OpenShao Survival Select test pad");
+    auto* joystick=SDL_OpenJoystick(device);
+    Check(device && joystick,"attach Survival test controller");Tick();
+    SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_START,true);Tick();
+    const auto controller=input::Poll(1);
+    Check(controller.connected && (controller.buttons&0x20) && !(controller.buttons&0x10),
+          "Ko-op controller Start also opens Select while Survival is active");
+    survival_active=false;
+    p=input::Poll(1);
+    Check((p.buttons&0x10) && !(p.buttons&0x20),"leaving Survival restores the same controller's Start");
+    SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_START,false);Tick();
+    Check(!input::Poll(1).buttons,"releasing controller Start clears the button");
+    SDL_CloseJoystick(joystick);SDL_DetachVirtualJoystick(device);Tick();
+    openshao::controller::SetMultiplayer(false);
+    openshao::keyboard::ReleaseAll();openshao::controller::Shutdown();
+}
 int main() {
     // Override normal backend hints before SDL_Init: hardware cannot be touched.
     for (const char* hint : {SDL_HINT_JOYSTICK_HIDAPI,SDL_HINT_JOYSTICK_WGI,SDL_HINT_XINPUT_ENABLED,
@@ -302,9 +340,19 @@ int main() {
     openshao::keyboard::Message(nullptr,WM_KEYDOWN,'W',0,&key_result);
     Check(input::Poll(0).ly==32767 && !input::Poll(1).ly,"keyboard movement reaches only player one");
     Check(!input::Poll(0).analog[1] && input::Poll(1).analog[1]==255,"gamepad attack reaches only player two");
-    openshao::keyboard::Message(nullptr,WM_KILLFOCUS,0,0,&key_result);
+    SDL_SetJoystickVirtualButton(coop_joy,SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,true);
+    SDL_SetJoystickVirtualAxis(coop_joy,SDL_GAMEPAD_AXIS_LEFTX,32767);
+    SDL_SetJoystickVirtualAxis(coop_joy,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767);
+    Tick();
+    const auto held=input::Poll(1);
+    Check(held.analog[5]==255 && held.lx>0 && held.analog[7]==255,
+          "L1, stick and trigger are held before disconnect");
     SDL_CloseJoystick(coop_joy);SDL_DetachVirtualJoystick(coop);Tick();
-    Check(input::Poll(0).connected && !input::Poll(1).connected,"gamepad unplug does not disconnect keyboard player");
+    const auto released=input::Poll(1);
+    Check(!released.connected && !released.analog[1] && !released.analog[5] && !released.lx && !released.analog[7],
+          "disconnect clears the gamepad's held buttons, stick and trigger");
+    Check(input::Poll(0).connected && input::Poll(0).ly==32767,"gamepad unplug preserves held keyboard movement");
+    openshao::keyboard::Message(nullptr,WM_KEYUP,'W',0,&key_result);
     coop=Attach("OpenShao coop replacement");Tick();
     Check(input::Poll(0).connected && input::Poll(1).connected,"gamepad reconnect returns to second player");
     SDL_DetachVirtualJoystick(coop);Tick();openshao::controller::Shutdown();
@@ -471,9 +519,41 @@ int main() {
         openshao::recomp::raw::Active(false);
         SDL_CloseJoystick(handoff);SDL_DetachVirtualJoystick(id);Tick();
     }
+    openshao::keyboard::ReleaseAll();openshao::recomp::raw::Active(false);
+    openshao::recomp::raw::NativeEnterAccept(true);
+    openshao::keyboard::Key(VK_RETURN,true);p=input::Poll(0);
+    Check(p.analog[0]==255 && !(p.buttons&0x10),"Enter must act only as A in native Survival medal menus");
+    openshao::recomp::raw::NativeEnterAccept(false);p=input::Poll(0);
+    Check(!p.analog[0] && (p.buttons&0x10),"Enter must remain Start when leaving the Survival frontend");
+    openshao::keyboard::Key(VK_RETURN,false);
+    openshao::bindings::Keyboard enter_rebound;
+    for(auto& pair:enter_rebound.keys)pair={0,0};
+    enter_rebound.keys[0]={'Z',0};
+    enter_rebound.keys[1]={VK_RETURN,0};
+    openshao::keyboard::Configure(enter_rebound);
+    openshao::recomp::raw::NativeEnterAccept(true);
+    openshao::keyboard::Key(VK_RETURN,true);p=input::Poll(0);
+    Check(p.analog[0]==255 && !p.analog[1] && !(p.buttons&0x10),
+          "Enter remapped to Back must act only as Accept in the Survival medal menus");
+    openshao::recomp::raw::NativeEnterAccept(false);p=input::Poll(0);
+    Check(!p.analog[0] && p.analog[1]==255,
+          "Leaving the Survival frontend must restore the user's Enter-to-Back mapping");
+    openshao::keyboard::Key(VK_RETURN,false);
+    openshao::keyboard::Configure({});
+    openshao::recomp::raw::NativeEnterAccept(true);
+    openshao::keyboard::Key(VK_RETURN,true);
+    Check(openshao::recomp::raw::TakeEnter() && !openshao::recomp::raw::TakeEnter(),
+          "a native Survival Enter event is delivered once and never replayed across updates");
+    openshao::keyboard::Key(VK_RETURN,false);
+    openshao::keyboard::Key(VK_RETURN,true);
+    openshao::recomp::raw::FocusLost();
+    Check(!openshao::recomp::raw::TakeEnter() && !openshao::recomp::raw::NativeEnterAccept(),
+          "losing focus must discard pending native Enter events and disable the temporary key mapping");
+    openshao::keyboard::Key(VK_RETURN,false);
     openshao::recomp::raw::FocusLost();openshao::controller::Shutdown();
     TestControllerHandoff();
     TestMenuControllers();
+    TestSurvivalPauseMapping();
     Check(openshao::bindings::VirtualKey(SDL_SCANCODE_Z)=='Z' && openshao::bindings::VirtualKey(SDL_SCANCODE_RCTRL)==VK_RCONTROL &&
           openshao::bindings::VirtualKey(SDL_SCANCODE_KP_7)==0x67,"SDL keyboard translation includes remapped letters, modifiers and numpad");
     std::puts("PASS: virtual controller mapping, deadzone, rumble and independent hot-plug ports");

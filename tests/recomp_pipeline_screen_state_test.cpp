@@ -148,12 +148,19 @@ int main() {
         s.vs_handle=0xB0000001;
         for (bool stage1 : {false,true}) {
             ApplyParticlePipelineState(s,ScreenBlend::Alpha,stage1);
-            pixel=MakePixelKey(s,textures);
-            constexpr uint32_t particle_stage[]={5,2,0,1,5,2,0,1,1};
-            for (unsigned i=0; i<9; ++i)
-                Require(pixel.ff[0][i]==particle_stage[i], "particles reverse UI colour arguments while retaining modulate2x alpha");
-            Require(pixel.ff[1][0]==(stage1?4u:1u) && pixel.ff[1][4]==1 && pixel.proj==(stage1?7u:3u),
-                    "particle pixel identity includes the inherited disabled/modulate stage1 alternative");
+            for (bool bound : {false,true}) {
+                textures[1]={bound?kTex2D:kTexNone,0,0,0};
+                pixel=MakePixelKey(s,textures);
+                constexpr uint32_t particle_stage[]={5,2,0,1,5,2,0,1,1};
+                for (unsigned i=0; i<9; ++i)
+                    Require(pixel.ff[0][i]==particle_stage[i], "particles reverse UI colour arguments while retaining modulate2x alpha");
+                Require(pixel.ff[1][0]==(stage1?(bound?4u:2u):1u) && pixel.ff[1][4]==1 &&
+                        pixel.proj==(stage1?7u:3u) && pixel.alphatest,
+                        "particle identity retains alpha testing and lowers an unbound auxiliary texture to current colour");
+                if (stage1) Require(pixel.ff[1][1]==(bound?2u:1u),
+                        "bound auxiliary textures modulate; missing textures select the existing colour");
+            }
+            textures[1]={};
             FillPipelineKey(s,layout,1,2,pass,key);
             Require(key.zen && !key.zwrite && !key.sten && !key.cull && key.blend && key.dst==0x303,
                     "particles test depth without writing it or culling their quads");
@@ -170,7 +177,7 @@ int main() {
             Require(pixel.ff[0][i]==floating_stage[i], "floating particles must modulate vertex colour/alpha by their texture");
             Require(pixel.ff[1][i]==disabled_stage[i], "floating particles disable the second fixed stage");
         }
-        Require(!pixel.programmable && !pixel.alphakill && pixel.proj==3,
+        Require(!pixel.programmable && !pixel.alphakill && !pixel.alphatest && pixel.proj==3,
                 "floating particles use fixed pixels with programmed vertex projection and no alpha-kill");
         FillPipelineKey(floating,floating_layout,1,2,pass,key);
         Require(key.blend && key.src==0x302 && key.dst==1 && key.op==0x8006 && key.zen &&

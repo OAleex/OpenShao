@@ -1,5 +1,4 @@
-// Keep the chosen API stable across guest device resets. A failed Vulkan
-// initialization releases its resources before trying D3D12 for this session.
+// Keep the chosen API across device resets; a failed Vulkan init falls back to D3D12.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -49,6 +48,7 @@ public:
     void WaitFence(uint32_t f)override{inner_->WaitFence(f);}
     bool Busy(uint32_t r)override{return inner_->Busy(r);}
     void WaitResource(uint32_t r)override{inner_->WaitResource(r);}
+    void WaitGpuFrame(uint64_t frame)override{inner_->WaitGpuFrame(frame);}
 private:
     std::unique_ptr<Backend> inner_;
 };

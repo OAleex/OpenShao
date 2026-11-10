@@ -29,9 +29,11 @@ struct Settings {
     bool scorpion_unfiltered = false;
     bool restore_dialogue = true;
     bool cinematic_bars = false;
+    bool improved_difficulty = true;
     mouse::Settings mouse;
     bool original_override = false, camera_reverse = false;
     int music_volume = 90, effects_volume = 90, speech_volume = 90;
+    int audio_output = 1; // Mono / Stereo / Surround in Konfigure Recompilation.
     int brightness = brightness::DefaultPercent, versus_rounds = 3, versus_time = 120;
     std::array<std::string,24> bindings = bindings::controller_defaults;
     bindings::Keyboard keyboard;

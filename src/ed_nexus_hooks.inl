@@ -1,5 +1,6 @@
 #include "ed_nexus_sequence.h"
 #include "pause_recomp.h"
+#include "difficulty.h"
 
 namespace openshao::ed_nexus {
 namespace {
@@ -9,7 +10,21 @@ uint32_t kontent_menu = 0;
 constexpr uint32_t MenuLabel = 0x19F;
 constexpr uint32_t KontentLabel = 0xFFFFFFFE;
 constexpr uint32_t KontentRow = 7;
-constexpr uint32_t KontentListBytes = 9*8;
+// Debug row after Kontent: player damage multiplier, cycled x1 -> x2 -> x4 -> x8 for this session.
+constexpr uint32_t DamageLabel = 0xFFFFFFFD;
+constexpr uint32_t DamageRow = 8;
+// Debug row after player damage: refills both heroes' health (also bypasses the Monk healing cut).
+constexpr uint32_t HealthLabel = 0xFFFFFFFC;
+constexpr uint32_t HealthRow = 9;
+// Debug row after health: Player 2 on/off. The change waits for the next map (ed_nexus.cpp).
+constexpr uint32_t Player2Label = 0xFFFFFFFB;
+constexpr uint32_t Player2Row = 10;
+constexpr uint32_t Player2TextBytes = 64;
+bool player2_pending = false, player2_target = false;
+constexpr uint32_t DebugRows = 11;
+constexpr std::array<uint32_t,4> DamageSteps{1,2,4,8};
+unsigned damage_step = 0;
+constexpr uint32_t KontentListBytes = (DebugRows+1)*8;
 constexpr uint32_t DebugTextBytes = 24;
 constexpr uint32_t PauseLabelBase = 0xFFFFFF00;
 constexpr uint32_t PauseRootBytes = 7*8;
@@ -36,9 +51,9 @@ void WriteGuestText(uint32_t address, const char* text, unsigned bytes) {
         kernel::W32(address+word*4,value);
     }
 }
-void WriteMenuText(uint32_t address,const std::string& text) {
+void WriteMenuText(uint32_t address,const std::string& text,uint32_t bytes=DebugTextBytes) {
     // The owned guest allocation keeps native text pointers valid across draws.
-    WriteGuestText(address,text.c_str(),DebugTextBytes);
+    WriteGuestText(address,text.c_str(),bytes);
 }
 bool EnsurePauseStorage() {
     if (pause_storage) return true;
@@ -99,22 +114,17 @@ bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
         pause_menu.page==PausePage::Settings?pause_storage+PauseRootBytes:
         pause_storage+PauseRootBytes+PauseSettingsBytes;
     if(rows!=expected)return false;
-    // Remapping listens to raw SDL/keyboard input independently of the guest.
-    // Don't let the same captured A/B/D-pad event navigate or close the native
-    // pause menu, especially when capturing its own Cancel or Accept binding.
+    // Remapping reads raw input: the same captured event must not drive the native pause menu.
     if(pause_menu.page==PausePage::Settings && pause_recomp::Capturing()) {
         kernel::Return(ctx,0,0);
         return true;
     }
-    // B (event 8) and Back (event 6) are native pause-close events. While the
-    // custom SETTINGS pages are open, consume them to navigate one level back;
-    // at the native pause root and the separate Exit prompt, keep retail B.
+    // B (8) and Back (6) close pause natively; in SETTINGS they go back one level instead.
     if ((event==6 || (event==8 && pause_menu.page==PausePage::Settings)) &&
         pause_menu.page!=PausePage::Root) {
         if(pause_menu.page==PausePage::Settings && !pause_recomp::Back())RefreshSettingsPage();
         else ShowPausePage(PausePage::Root);
-        // Navigation consumed this input. A zero result lets the native GUI
-        // propagate the same B press and close the surrounding Select menu.
+        // A zero result would let the same B close the Select menu.
         kernel::Return(ctx,1,0);
         return true;
     }
@@ -147,9 +157,7 @@ bool InstallPauseList(X86Context& ctx) {
     }
     const uint32_t original_rows=kernel::R32(list+0x54);
     const uint32_t original_count=kernel::R32(list+0x64);
-    // Retail builder 0xA3D40 copies source 0x4F1CC0 into the list's OWN
-    // destination buffer. 0x4F1CE0 is a different retail four-row table and
-    // must never be used as the original Select List's storage.
+    // Builder 0xA3D40 copies 0x4F1CC0 into the list's own buffer; 0x4F1CE0 is another table.
     bool original_valid=original_rows!=0 && original_count==3;
     if (original_valid) {
         for (unsigned i=0;i<6;++i) {
@@ -181,16 +189,28 @@ bool InstallPauseList(X86Context& ctx) {
     LOGI("Gameplay pause expanded: list=%08X rows=%u",list,pause_menu.root_count);
     return true;
 }
+void WriteDamageText() {
+    WriteMenuText(kontent_menu+KontentListBytes+3*DebugTextBytes,
+                  pause_recomp::Localized("debug.player_damage")+": x"+std::to_string(DamageSteps[damage_step]));
+}
+void WritePlayer2Text() {
+    const bool on=player2_pending?player2_target:Player2Active();
+    std::string text=pause_recomp::Localized("debug.player2")+": "+pause_recomp::Localized(on?"value.on":"value.off");
+    if(player2_pending)text+=" ("+pause_recomp::Localized("debug.next_map")+")";
+    WriteMenuText(kontent_menu+KontentListBytes+5*DebugTextBytes,text,Player2TextBytes);
+}
 bool EnsureMenuStorage() {
     if(!kontent_menu) {
-        kontent_menu=mem::AllocSystem(KontentListBytes+3*DebugTextBytes);
+        kontent_menu=mem::AllocSystem(KontentListBytes+5*DebugTextBytes+Player2TextBytes);
         if(!kontent_menu){LOGI("Cannot allocate debug menu storage");return false;}
     }
-    // All three captions have their own terminated guest storage, including
-    // translated captions longer than the original eight-byte "Nexus" string.
+    // Each caption has its own terminated storage (translations exceed "Nexus").
     WriteMenuText(kontent_menu+KontentListBytes,pause_recomp::Localized("debug.unlock_kontent"));
     WriteMenuText(kontent_menu+KontentListBytes+DebugTextBytes,pause_recomp::Localized("debug.kontent_unlocked"));
     WriteMenuText(kontent_menu+KontentListBytes+2*DebugTextBytes,pause_recomp::Localized("debug.menu"));
+    WriteDamageText();
+    WriteMenuText(kontent_menu+KontentListBytes+4*DebugTextBytes,pause_recomp::Localized("debug.restore_health"));
+    WritePlayer2Text();
     return true;
 }
 void AddKontentAction(X86Context& ctx) {
@@ -205,8 +225,14 @@ void AddKontentAction(X86Context& ctx) {
     for(unsigned i=0;i<14;++i)kernel::W32(kontent_menu+i*4,kernel::R32(0x4F1F00+i*4));
     kernel::W32(kontent_menu+56,KontentLabel);
     kernel::W32(kontent_menu+60,0x135C1); // Retail no-op; accept is handled below.
-    kernel::W32(kontent_menu+64,0xFFFFFFFF);kernel::W32(kontent_menu+68,0);
-    kernel::W32(list+0x54,kontent_menu);kernel::W32(list+0x64,8);
+    kernel::W32(kontent_menu+64,DamageLabel);
+    kernel::W32(kontent_menu+68,0x135C1);
+    kernel::W32(kontent_menu+72,HealthLabel);
+    kernel::W32(kontent_menu+76,0x135C1);
+    kernel::W32(kontent_menu+80,Player2Label);
+    kernel::W32(kontent_menu+84,0x135C1);
+    kernel::W32(kontent_menu+88,0xFFFFFFFF);kernel::W32(kontent_menu+92,0);
+    kernel::W32(list+0x54,kontent_menu);kernel::W32(list+0x64,DebugRows);
 }
 bool in_pause = false, in_nexus = false;
 struct PauseScope {
@@ -259,6 +285,7 @@ void UpdateHeldInput(X86Context& ctx) {
 bool Unlocked() { return sequence.Unlocked(); }
 bool GameplayPaused() { return in_pause; }
 bool KontentUnlocked() { return kontent_unlocked; }
+float PlayerDamage() { return Unlocked() ? float(DamageSteps[damage_step]) : 1.f; }
 void FrontendInput(X86Context& ctx,uint8_t*) {
     // The frontend still ticks with empty input while the held-modifier path runs.
     if (ctx.ecx != 0x598430 || !(kernel::R32(0x67C668) & 1)) sequence.ResetInput();
@@ -323,7 +350,39 @@ X86_FUNC(sub_00013B4D) {
     const uint32_t list=kernel::R32(ctx.esp+4),event=kernel::R32(ctx.esp+8);
     if(openshao::ed_nexus::Unlocked() && openshao::ed_nexus::in_nexus && event==4 && list &&
        openshao::ed_nexus::kontent_menu && kernel::R32(list+0x54)==openshao::ed_nexus::kontent_menu &&
-       kernel::R32(list+0x64)==8 && kernel::R32(list+0x6C)==openshao::ed_nexus::KontentRow) {
+       kernel::R32(list+0x64)==openshao::ed_nexus::DebugRows &&
+       kernel::R32(list+0x6C)==openshao::ed_nexus::DamageRow) {
+        using namespace openshao::ed_nexus;
+        damage_step=(damage_step+1)%DamageSteps.size();
+        WriteDamageText();
+        LOGI("Player damage x%u for this session",DamageSteps[damage_step]);
+        kernel::Return(ctx,1,0);
+        return;
+    }
+    if(openshao::ed_nexus::Unlocked() && openshao::ed_nexus::in_nexus && event==4 && list &&
+       openshao::ed_nexus::kontent_menu && kernel::R32(list+0x54)==openshao::ed_nexus::kontent_menu &&
+       kernel::R32(list+0x64)==openshao::ed_nexus::DebugRows && kernel::R32(list+0x6C)==openshao::ed_nexus::Player2Row) {
+        using namespace openshao::ed_nexus;
+        // Toggle the wanted state; it is applied when the next map loads, like the native spawn.
+        const bool active=Player2Active();
+        player2_target=player2_pending?!player2_target:!active;
+        player2_pending=player2_target!=active;
+        WritePlayer2Text();
+        LOGI("Debug player 2 %s at the next map",player2_pending?(player2_target?"on":"off"):"unchanged");
+        kernel::Return(ctx,1,0);
+        return;
+    }
+    if(openshao::ed_nexus::Unlocked() && openshao::ed_nexus::in_nexus && event==4 && list &&
+       openshao::ed_nexus::kontent_menu && kernel::R32(list+0x54)==openshao::ed_nexus::kontent_menu &&
+       kernel::R32(list+0x64)==openshao::ed_nexus::DebugRows && kernel::R32(list+0x6C)==openshao::ed_nexus::HealthRow) {
+        const unsigned refilled=openshao::difficulty::RefillHeroes(ctx);
+        LOGI("Debug health restore: %u hero(es) refilled",refilled);
+        kernel::Return(ctx,1,0);
+        return;
+    }
+    if(openshao::ed_nexus::Unlocked() && openshao::ed_nexus::in_nexus && event==4 && list &&
+       openshao::ed_nexus::kontent_menu && kernel::R32(list+0x54)==openshao::ed_nexus::kontent_menu &&
+       kernel::R32(list+0x64)==openshao::ed_nexus::DebugRows && kernel::R32(list+0x6C)==openshao::ed_nexus::KontentRow) {
         // Override session availability only; never write flags serialized by the native save system.
         openshao::ed_nexus::kontent_unlocked=true;
         LOGI("All Kontent unlocked for this session; native save flags unchanged");
@@ -372,5 +431,22 @@ X86_FUNC(sub_00016992) {
                        (openshao::ed_nexus::kontent_unlocked?24:0),0);
         return;
     }
+    if(openshao::ed_nexus::kontent_menu && label==openshao::ed_nexus::DamageLabel) {
+        kernel::Return(ctx,openshao::ed_nexus::kontent_menu+openshao::ed_nexus::KontentListBytes+
+                       3*openshao::ed_nexus::DebugTextBytes,0);
+        return;
+    }
+    if(openshao::ed_nexus::kontent_menu && label==openshao::ed_nexus::HealthLabel) {
+        kernel::Return(ctx,openshao::ed_nexus::kontent_menu+openshao::ed_nexus::KontentListBytes+
+                       4*openshao::ed_nexus::DebugTextBytes,0);
+        return;
+    }
+    if(openshao::ed_nexus::kontent_menu && label==openshao::ed_nexus::Player2Label) {
+        kernel::Return(ctx,openshao::ed_nexus::kontent_menu+openshao::ed_nexus::KontentListBytes+
+                       5*openshao::ed_nexus::DebugTextBytes,0);
+        return;
+    }
+    if(const uint32_t text=openshao::survival::Label(label)) {kernel::Return(ctx,text,0);return;}
+    if(const uint32_t text=openshao::difficulty::Label(label,kernel::R32(ctx.esp))) { kernel::Return(ctx,text,0); return; }
     __imp__sub_00016992(ctx,base);
 }

@@ -5,8 +5,7 @@ namespace openshao::pipelines {
 enum class ScreenBlend { Alpha, Additive, ReverseSubtract };
 enum class ScreenStencil { Disabled, WriteMask, TestMask };
 
-// Slots 110/111 at 0050FC6C/0050FC80 share a program, with packed/FLOAT2 UVs.
-// Other mesh declarations share that program too and must not trigger screen warming.
+// Slots 110/111 (0050FC6C/0050FC80) share a program used by other meshes too.
 inline bool IsInterfaceShader(const gpu::VertexShader& vs) {
     if (vs.program.empty() || (vs.stream_stride[0] != 20 && vs.stream_stride[0] != 24)) return false;
     const uint32_t uv_type=vs.stream_stride[0]==20 ? 0x16 : 0x22;
@@ -43,8 +42,7 @@ inline void FixedStages(gpu::State& s) {
 }
 }
 
-// Screen::Render and SetRenderMode (0011C730/0011C250), then optional mask helpers.
-// Attachment presence is selected by the caller: these passes never test depth.
+// Screen::Render and SetRenderMode (0011C730/0011C250); these passes never test depth.
 inline void ApplyInterfacePipelineState(gpu::State& s, ScreenBlend blend, ScreenStencil stencil,
                                         bool alpha_write=true) {
     using namespace gpu;
@@ -73,9 +71,7 @@ inline void ApplyInterfacePipelineState(gpu::State& s, ScreenBlend blend, Screen
     }
 }
 
-// 0012FCC0/0012FBE0 (solid/textured immediate rectangles). A normal overlay
-// inherits the depth test restored after Screen::Render, with depth writes off.
-// The caller may select the original depth-disabled rectangle variant as well.
+// 0012FCC0/0012FBE0 rectangles inherit the depth test with writes off (or the depth-disabled variant).
 inline void ApplyImmediateScreenPipelineState(gpu::State& s, bool textured) {
     ApplyInterfacePipelineState(s,ScreenBlend::Alpha,ScreenStencil::Disabled);
     using namespace gpu;
@@ -85,8 +81,7 @@ inline void ApplyImmediateScreenPipelineState(gpu::State& s, bool textured) {
     s.rs[kRsZEnable]=1;
 }
 
-// EndPrimitive in the pinned SDK expands each submitted register to FLOAT4.
-// Preserve XYZRHW in the synthetic handle, as the draw does. vb=1 is metadata.
+// The pinned SDK expands registers to FLOAT4; keep XYZRHW (vb=1 is metadata).
 inline void MakeImmediateScreenInputs(gpu::State& s, bool textured) {
     auto vs=std::make_shared<gpu::VertexShader>();
     vs->inputs[0]={0,0,0x42};
@@ -98,8 +93,7 @@ inline void MakeImmediateScreenInputs(gpu::State& s, bool textured) {
     s.streams={};
     s.streams[0]={1,s.vs->stream_stride[0]};
 }
-// 00137F30 copies/downsamples with PS139; 00138610 filters with PS138.
-// Pixel microcode belongs to the loaded shader library and is never synthesized here.
+// 00137F30 downsamples with PS139, 00138610 filters with PS138 (never synthesized).
 inline void ApplyFullscreenPipelineState(gpu::State& s, bool four_taps, bool additive=false) {
     const auto pixel=s.ps;
     screen_detail::FixedStages(s);
@@ -133,8 +127,7 @@ inline std::array<gpu::TexInfo,4> FullscreenTextures(bool four_taps) {
     return textures;
 }
 
-// 00127ED0/001277A0 establish the particle state. 0013E1C0 can leave stage 1
-// modulating; 00128160 selects the instance's stencil test and blend flags.
+// 00127ED0/001277A0 set particle state; 0013E1C0 may leave stage 1 modulating; 00128160 picks stencil/blend.
 inline void ApplyParticlePipelineState(gpu::State& s, ScreenBlend blend, bool modulate_stage1,
                                        bool stencil=false) {
     ApplyInterfacePipelineState(s,blend,stencil?ScreenStencil::TestMask:ScreenStencil::Disabled);
@@ -148,8 +141,7 @@ inline void ApplyParticlePipelineState(gpu::State& s, ScreenBlend blend, bool mo
     s.simple[kMAlphaFunc/4]=0x204;
     s.simple[kMAlphaRef/4]=5;
 }
-// 0013E590 selects slot 111 and fixed pixels. Its 24-byte FLOAT2 declaration
-// shares the interface program but modulates both colour and alpha without 2x.
+// 0013E590: slot 111, fixed pixels, FLOAT2; modulates colour and alpha without 2x.
 inline void ApplyFloatingParticlePipelineState(gpu::State& s) {
     ApplyInterfacePipelineState(s,ScreenBlend::Additive,ScreenStencil::Disabled);
     using namespace gpu;

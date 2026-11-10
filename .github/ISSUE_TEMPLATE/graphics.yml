@@ -1,0 +1,88 @@
+name: Graphics or performance problem
+description: Missing or wrong graphics, menu or HUD layout problems, stutter or low frame rate.
+title: "[Graphics] "
+labels: ["graphics", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Compare with the original game when you can. A screenshot or short video is required for visual problems.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version, system, renderer and display settings. **Report a bug** on the launcher's Support page copies this information. Paste it here.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Problem type
+      multiple: true
+      options:
+        - Missing, flickering or stretched geometry
+        - Wrong colors, lighting, shadows or bloom
+        - HUD, menu or text layout
+        - Problem with one aspect ratio or resolution
+        - Cutscene or movie playback
+        - Stutter when entering an area or seeing an effect for the first time
+        - Low or unstable frame rate
+        - Problem at a frame rate limit above 60 FPS
+    validations:
+      required: true
+  - type: dropdown
+    id: renderers
+    attributes:
+      label: Does the other renderer show the same problem?
+      description: Windows offers Direct3D 12 and Vulkan on the launcher's Graphics page.
+      options:
+        - It also happens with the other renderer
+        - It happens only with the renderer in the environment
+        - I did not test the other renderer
+        - Not available on my system
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location in the game
+      description: Chapter, area, Survival level or menu.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is wrong, and what the original game shows.
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Graphics card and driver
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Enabled mods and language packs
+      description: Write "None" if you play without mods.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots, video and diagnostic report
+      description: Drag the files here. Include the diagnostic ZIP from the launcher's Support page.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use the latest OpenShao release and my graphics driver is up to date.
+          required: true
+        - label: I searched the existing issues for this problem.
+          required: true

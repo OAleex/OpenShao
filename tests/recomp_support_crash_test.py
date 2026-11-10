@@ -51,7 +51,8 @@ try:
                     import struct
                     try:
                         state=states[0].read_bytes()
-                        pid=struct.unpack_from('<I',state,12)[0]
+                        # The helper creates the file before writing it; retry until its PID is there.
+                        pid=struct.unpack_from('<I',state,12)[0] if len(state)>=16 else 0
                         if pid:helper=kernel.OpenProcess(0x100001,False,pid)
                     except OSError:pass
                 time.sleep(.01)
@@ -87,6 +88,16 @@ try:
                         assert struct.unpack_from('<I',dump,rva+8)[0]==0xc0000005
                         address=struct.unpack_from('<Q',dump,rva+24)[0]
                         assert f'{address:016X}' in report['reason'],'Dump and report must describe the same native fault'
+                        assert 16 in entries,'Dump must retain memory protection and allocation state for invalid guest pointers'
+                        map_size,map_rva=entries[16]
+                        header_size,entry_size,count=struct.unpack_from('<IIQ',dump,map_rva)
+                        assert header_size>=16 and entry_size>=48 and count>0
+                        assert header_size+entry_size*count<=map_size
+                        regions=[map_rva+header_size+i*entry_size for i in range(count)]
+                        assert any(struct.unpack_from('<Q',dump,p)[0]<=address<
+                                   struct.unpack_from('<Q',dump,p)[0]+struct.unpack_from('<Q',dump,p+24)[0]
+                                   and struct.unpack_from('<I',dump,p+32)[0]==0x1000 for p in regions),\
+                            'Memory map must identify the faulting instruction as committed memory'
                         context_size,context_rva=struct.unpack_from('<II',dump,rva+160)
                         assert context_size>=256 and struct.unpack_from('<Q',dump,context_rva+248)[0]!=0
                         current=[p for p in (data/'crashes').glob('*.dmp') if p.name!='old.dmp']

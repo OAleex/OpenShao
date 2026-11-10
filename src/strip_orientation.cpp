@@ -104,8 +104,7 @@ bool RestoreKnownWastelandHouseOpacity(uint32_t room, std::span<uint8_t> archive
     }
     for (const auto& repair : kWastelandHouseOpacity) {
         const size_t at = size_t(repair.block) * 16;
-        // BC3's six-alpha palette supplies opaque selector 7 when neither
-        // endpoint is opaque. Keep both endpoints and all color data intact.
+        // BC3 six-alpha palette: selector 7 is opaque when neither endpoint is.
         const uint64_t opaque = texture[at] == 255 ? 0 : texture[at + 1] == 255 ? 1 : 7;
         uint64_t selectors = 0;
         for (unsigned i = 0; i < 6; ++i) selectors |= uint64_t(texture[at + 2 + i]) << (i * 8);
@@ -122,8 +121,7 @@ bool RepairKnownStripOrientation(std::span<const uint8_t> vertices, std::span<ui
 }
 bool RepairKnownRoomStripOrientation(uint32_t room, std::span<const uint8_t> vertices,
                                     std::span<uint8_t> source) {
-    // Some arena meshes also occur in campaign rooms. Bind the additional
-    // authored facing metadata to the arena before falling back to shared repairs.
+    // Arena meshes also used in campaign rooms: prefer the arena's facing metadata.
     for (const auto& entry : kRoomStripRepairs) {
         if (entry.room == room && entry.repair.vertex_bytes == vertices.size() &&
             size_t(entry.repair.source_words) * 2 == source.size() && RepairStripOrientation(

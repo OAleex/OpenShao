@@ -1,4 +1,5 @@
 #include "host.h"
+#include "difficulty.h"
 #include "launcher.h"
 #include "menu_text.h"
 #include "runtime_paths.h"
@@ -54,8 +55,7 @@ X86_FUNC(sub_00015C4F) {
         const auto original=kernel::R32(resource+8);
         if(original && original<=UINT32_MAX-3 && mem::IsCommitted(original+3) && kernel::R32(original)==Keys.size()) {
             if(const auto translated=Table()) {
-                // Feed the normal loader serialized text. It retains its own allocation sizes,
-                // copies and release path; the original resource and pack remain unchanged.
+                // Feed serialized text to the normal loader; the original resource stays unchanged.
                 struct Restore {uint32_t slot,value;~Restore(){kernel::W32(slot,value);}} restore{resource+8,original};
                 kernel::W32(resource+8,translated);
                 __imp__sub_00015C4F(ctx,base);
@@ -69,6 +69,7 @@ X86_FUNC(sub_00015C4F) {
 
 X86_EXTERN_FUNC(__imp__sub_00152A30);
 X86_FUNC(sub_00152A30) {
+    if(openshao::difficulty::SaveListText(ctx,base,openshao::difficulty::TextCall::Plain,__imp__sub_00152A30))return;
     const auto slot=ctx.esp+20,original=kernel::R32(slot);
     if(original==0x4AAC04) {
         const auto text=Text("system.wait");
@@ -84,8 +85,7 @@ X86_FUNC(sub_00152A30) {
 
 X86_EXTERN_FUNC(__imp__sub_00015C45);
 X86_FUNC(sub_00015C45) {
-    // Opening a folder does not discard progress. B can perform the PC action
-    // directly without the retail warning that precedes rebooting to the dashboard.
+    // Opening a folder keeps progress: skip the dashboard-reboot warning.
     const auto slot=ctx.esp+4,original=kernel::R32(slot);
     struct Restore {uint32_t slot,value;~Restore(){kernel::W32(slot,value);}} restore{slot,original};
     kernel::W32(slot,1);
@@ -95,8 +95,7 @@ X86_FUNC(sub_00015C45) {
 X86_EXTERN_FUNC(__imp__sub_0011B960);
 X86_FUNC(sub_0011B960) {
     if(kernel::R32(ctx.esp)!=0xA0EAE){__imp__sub_0011B960(ctx,base);return;}
-    // This caller requests Xbox storage management. Keep the native warning open
-    // and show the actual save directory instead of attempting a dashboard reboot.
+    // Xbox storage management: show the save directory instead of rebooting.
     if(!openshao::options.background) {
 #ifdef _WIN32
         ShellExecuteW(nullptr,L"open",openshao::paths::SaveRoot().c_str(),nullptr,nullptr,SW_SHOWNORMAL);

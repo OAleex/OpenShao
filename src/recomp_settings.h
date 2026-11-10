@@ -4,6 +4,7 @@
 struct X86Context;
 namespace openshao::recomp {
 bool MainInput(X86Context& ctx,uint8_t* base);
+void RestoreMainSelector();
 bool Active();
 bool ExtraSelected();
 bool CustomScene(uint32_t scene);

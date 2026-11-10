@@ -50,12 +50,14 @@ inline thread_local unsigned backdrop_depth=0;
 inline thread_local bool artwork_sprite=false;
 inline thread_local bool cinematic_sprite=false;
 inline constexpr float ArtworkFooter=64;
+inline Rect FitArtwork(float width,float height,Scale scale) {
+    auto bounds=Fit(640/scale.x,480/scale.y-ArtworkFooter,width/height);
+    bounds.x-=320/scale.x;bounds.y-=240/scale.y;
+    return bounds;
+}
 enum class TutorialSprite {None,Panel,Portrait};
-// TopSplit moves each vertex toward its own side of the viewport, so a shared
-// composition keeps its pieces whole and only quads crossing the center widen.
-// TopStretch maps the shared Ko-op bar linearly, keeping its fill proportional.
-// KoopComboRight is player two's combo block: the retail layout runs past the
-// right edge (also at 4:3), so it mirrors player one's inset from its medallion.
+// TopSplit pushes vertices to their side (only center-crossing quads widen); TopStretch maps the Ko-op bar linearly.
+// KoopComboRight mirrors player one's inset (the retail layout runs past the right edge).
 enum class UiAnchor {None,TopLeft,TopRight,BottomLeft,BottomRight,TutorialPrompt,TopSplit,TopStretch,KoopComboRight,EnemyLeft,EnemyRight};
 inline constexpr float KoopComboInset=78;
 inline thread_local UiAnchor sprite_anchor=UiAnchor::None;
@@ -63,8 +65,7 @@ inline thread_local UiAnchor font_anchor=UiAnchor::None;
 inline Scale AnchorOffset(UiAnchor anchor,float ratio) {
     if(anchor==UiAnchor::None)return {0,0};
     const auto scale=CanvasScale(ratio);
-    // Keep common enemy bars on their authored vertical baseline. Anchor only
-    // their horizontal position, including in portrait Automatic viewports.
+    // Enemy bars keep their authored vertical baseline; anchor only horizontally.
     if(anchor==UiAnchor::EnemyLeft || anchor==UiAnchor::EnemyRight)
         return {(anchor==UiAnchor::EnemyLeft?-320.f:320.f)*(1/scale.x-1),0};
     if(anchor==UiAnchor::TopSplit || anchor==UiAnchor::TopStretch)return {0,-240.f*(1/scale.y-1)};

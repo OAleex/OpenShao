@@ -1,0 +1,108 @@
+name: Crash, freeze or startup failure
+description: OpenShao closes, stops responding, shows an error or does not start.
+title: "[Crash] "
+labels: ["crash", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        After a crash, OpenShao can create a diagnostic ZIP with the crash dump. Open the launcher's **Support** page, select **Generate report**, then **Report a bug**. The launcher opens this form and fills the environment field.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version, system, renderer and display settings. The launcher fills this field.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      options:
+        - The game closed
+        - The game stopped responding
+        - An error message appeared
+        - The game does not start
+        - The launcher closed or does not open
+    validations:
+      required: true
+  - type: dropdown
+    id: moment
+    attributes:
+      label: When did it happen?
+      options:
+        - When starting the game
+        - During loading
+        - In a menu
+        - During gameplay
+        - During a cutscene or movie
+        - When saving or loading
+        - When closing the game
+        - In the launcher
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Location in the game
+      description: Chapter, area, Survival level or menu, and the characters you were using.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message
+      description: Copy the exact text of any message.
+      render: text
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Often
+        - Rarely
+        - Once
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware and drivers
+      description: Processor, graphics card and driver version.
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Enabled mods and language packs
+      description: Write "None" if you play without mods.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Diagnostic report
+      description: Drag the diagnostic ZIP here. It includes the crash dump when one is available.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use my own copy of the USA/Europe Xbox release of Mortal Kombat - Shaolin Monks.
+          required: true
+        - label: I use the latest OpenShao release.
+          required: true
+        - label: I searched the existing issues for this problem.
+          required: true

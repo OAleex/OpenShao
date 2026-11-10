@@ -10,16 +10,25 @@ int main() {
     check(model.Rows()[5].key=="settings.save" && model.Rows()[6].key=="settings.discard","Enhancements must have a separate main-menu entry");
     model.Enter(5);check(model.CurrentPage()==Page::Home,"Saving must not enter a configuration category");
     model.Go(Page::Enhancements);
-    check(model.Title()=="recomp.enhancements" && model.Rows().size()==5 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
+    check(model.Title()=="recomp.enhancements" && model.Rows().size()==6 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
           model.Rows()[1].key=="settings.restore_dialogue" && model.Rows()[1].value=="value.on" &&
           model.Rows()[2].key=="settings.cinematic_bars" && model.Rows()[2].value=="value.off" &&
-          model.Rows()[3].key=="settings.save" && model.Rows()[4].key=="settings.discard",
+          model.Rows()[3].key=="settings.improved_difficulty" && model.Rows()[3].value=="value.on" &&
+          model.Rows()[4].key=="settings.save" && model.Rows()[5].key=="settings.discard",
           "The main-menu Enhancements page must expose its toggles and explicit Save/Discard actions");
     model.Change(2,1);
     check(openshao::launcher::Merge({},model.Draft())["enhancements"]["cinematic_bars"].value_or(false) && model.Dirty(),
           "The cinematic bar row must enable and persist the enhancement");
     model.Discard();model.Go(Page::Enhancements);
     check(model.Rows()[2].value=="value.off","Discard must restore the cinematic bar preference");
+    model.Change(3,1);
+    check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["improved_difficulty"].value_or(true) && model.Rows()[3].value=="value.off" && model.Dirty(),
+          "Players must be able to choose the original difficulty selector");
+    model.Discard();model.Go(Page::Enhancements);
+    check(model.Rows()[3].value=="value.on" && model.Draft().improved_difficulty,"Discard must restore the improved difficulty preference");
+    model.Change(4,1);
+    check(model.Rows()[4].key=="settings.save" && !model.Dirty(),
+          "Save must remain an action after removing the retired shadow setting");
     model.Change(1,1);
     check(!model.Draft().restore_dialogue && model.Rows()[1].value=="value.off" && model.Dirty(),
           "Players must be able to choose the original dialogue behavior");
@@ -62,8 +71,17 @@ int main() {
     model.Change(1,1);check(model.Draft().width>=320 && model.Draft().height>=240,"A custom width must initialize both resolution dimensions");
     model.Back();model.Enter(3);model.Change(0,1);
     check(model.Draft().master_volume>42 && original.master_volume==42,"Edits must remain in an isolated draft until saved");
-    check(model.Rows().size()==1 && model.Rows()[0].key=="settings.master","Recompilation audio must expose only the global output volume");
-    model.Change(1,1);model.Change(2,-1);model.Change(3,1);
+    const auto audio_rows=model.Rows();
+    check(audio_rows.size()==2 && audio_rows[0].key=="settings.master" && audio_rows[1].key=="audio.output" && audio_rows[1].value=="audio.stereo",
+          "Recompilation Audio must show Master Volume and Audio Output immediately, with Stereo as the default");
+    model.Change(1,1);
+    check(model.Draft().audio_output==2 && model.Rows()[1].value=="audio.surround" && original.audio_output==1,
+          "Changing Audio Output must select Surround in the draft without changing the opening settings");
+    model.Change(1,1);
+    check(model.Draft().audio_output==0 && model.Rows()[1].value=="audio.mono","Audio Output must wrap forward to Mono");
+    model.Change(1,-1);
+    check(model.Draft().audio_output==2,"Audio Output must wrap backward to Surround");
+    model.Change(1,-1);model.Change(2,-1);model.Change(3,1);
     check(model.Draft().music_volume==original.music_volume && model.Draft().effects_volume==original.effects_volume && model.Draft().speech_volume==original.speech_volume && model.Draft().original_override==original.original_override,
         "Global audio edits must preserve the native music, effects and speech controls and persistence policy");
     model.Back();model.Enter(2);model.Enter(0);
@@ -100,12 +118,27 @@ int main() {
     if(rate!=graphics.end()) {
         const auto row=size_t(rate-graphics.begin());
         check(rate->value=="60 FPS","The frame rate row must start at 60 FPS");
+        for(const int fps:{120,144,165,240,60}) {
+            model.Change(row,1);
+            const auto persisted=openshao::launcher::Merge({},model.Draft());
+            check(model.Rows()[row].value==std::to_string(fps)+" FPS" &&
+                  persisted["fps_cap"].value_or(0)==fps &&
+                  openshao::launcher::Read(persisted).fps_cap==fps,
+                  "Each selectable FPS limit must display and round-trip correctly");
+            check(!model.Draft().vsync,"Changing frame rate must preserve disabled VSync");
+        }
+        model.Change(row,-1);check(model.Rows()[row].value=="240 FPS","The frame rate must wrap backward to 240 FPS");
+        for(const int fps:{165,144,120,60}) {
+            model.Change(row,-1);
+            check(model.Rows()[row].value==std::to_string(fps)+" FPS",
+                  "Reverse navigation must offer every supported FPS limit in order");
+        }
+        model.Change(2,1);
+        const auto vsync_limit=model.Draft().fps_cap;
         model.Change(row,1);
-        check(model.Rows()[row].value=="120 FPS" && openshao::launcher::Merge({},model.Draft())["fps_cap"].value_or(0)==120,
-              "The frame rate row must select and persist 120 FPS");
-        check(!model.Draft().vsync,"Changing frame rate must preserve the disabled VSync preference");
-        model.Change(row,1);check(model.Rows()[row].value=="60 FPS","The frame rate must wrap to 60 FPS");
-        model.Change(row,-1);check(model.Rows()[row].value=="120 FPS","The frame rate must wrap backward to 120 FPS");
+        check(model.Rows()[row].value=="value.display_refresh" &&
+              model.Draft().fps_cap==vsync_limit,
+              "VSync must follow display refresh without changing the stored software limit");
         model.Discard();check(model.Draft()==original,"Discard must restore the opening frame rate");
     }
     for(const auto page:{Page::Display,Page::Graphics,Page::Controls,Page::Controller,Page::Keyboard,Page::KeyboardAlternate,Page::Mouse,Page::Audio,Page::Language}) {

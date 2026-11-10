@@ -1,4 +1,5 @@
 #include "language_credits.h"
+#include "difficulty.h"
 #include "cpu/x86_ops.h"
 #include <cstring>
 #include <limits>
@@ -33,6 +34,7 @@ X86_FUNC(sub_000EBD00) {
 }
 
 X86_FUNC(sub_00152960) {
+    openshao::difficulty::PopupFooter(ctx);
     const auto slot = ctx.esp + 20;
     if (openshao::language::CreditsEnabled() && Read(base, ctx.esp) == 0x4B419 &&
         Read(base, ctx.esp + 16) == 2 && ctx.edi &&

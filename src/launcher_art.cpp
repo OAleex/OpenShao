@@ -25,7 +25,6 @@ uint32_t Mix(uint32_t a, uint32_t b, float t) {
     };
     return channel(16) | channel(8) | channel(0);
 }
-// Soft red body that warms toward coral and amber along the stroke and at the bristle edges.
 uint32_t Flame(float t, float edge) {
     constexpr uint32_t stops[] = {0xA5313A, 0xCC4844, 0xE8704F, 0xF7AC60};
     const float m = std::clamp(0.02f + 0.62f * t + 0.48f * edge * edge, 0.f, 0.999f) * 3.f;
@@ -150,8 +149,7 @@ void Enso(const Canvas& c, ImVec2 center, float R, float width, float drawn, flo
         const float dryness = 0.25f + 0.75f * edge + (r.f() - 0.5f) * 0.3f;
         const float limit = std::min(end, drawn);
         if (limit <= begin) continue;
-        // Each bristle is one ribbon with its own ink amount at every step, so dry patches and the stroke's
-        // ends fade out instead of breaking off. A one-pixel transparent fringe keeps the edges smooth.
+        // Each bristle is a ribbon with its own ink per step, so dry patches fade; one-pixel fringe for smooth edges.
         const float half = c.S(std::max(1.f, width / float(bristles) * 2.2f)) * 0.5f, fringe = 1.f;
         const int n = int(float(steps) * (limit - begin)) + 2;
         const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
@@ -197,7 +195,6 @@ void BrushDash(const Canvas& c, float x, float y, float length) {
 
 bool LanguageFlag(const Canvas& c, ImVec2 center, float width, std::string_view language, float alpha) {
     if (language != "pt-BR" && language != "pt-br") return false;
-    // Brazil, 10:7.
     const float w = width, h = width * 0.7f, x0 = center.x - w / 2, y0 = center.y - h / 2;
     c.Rect(x0, y0, x0 + w, y0 + h, Rgb(0x009C3B, alpha), 3);
     const float mx = w * 0.085f, my = h * 0.12f;

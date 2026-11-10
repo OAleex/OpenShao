@@ -1,12 +1,5 @@
 #pragma once
-// Pipeline precompilation: every pipeline a draw uses is recorded as a recipe (the inputs that
-// built it, not driver output), tagged with the room that was loading. Background workers rebuild
-// the recipes at boot and move a room's recipes to the front of the queue when that room loads, so
-// a draw finds its pipeline already made instead of compiling it on the render thread.
-//
-// Recipes survive renderer and driver updates: the backend regenerates the HLSL from the recipe.
-// A recipe that uses one of the title's vertex programs waits until the program is known, either
-// from this machine's recipe file or from the title creating the shader while it loads an asset.
+// Recipes store pipeline inputs and room IDs (not driver binaries); workers rebuild them at boot and by room.
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +19,7 @@ struct VertexRecipe {
     uint16_t regs = 0;
     uint8_t pretransformed = 0;
     uint8_t quad = 0;
-    uint32_t reserved = 0;
+    uint32_t sprite = 0;
     gpu::FixedKey fixed{};
 };
 static_assert(sizeof(VertexRecipe) == 48);
@@ -40,25 +33,24 @@ struct Recipe {
     VertexRecipe vertex{};
     gpu::PixelKey pixel{};
     uint32_t key_size = 0;   // the backend's pipeline key, byte for byte
+    uint32_t reserved = 0;
     uint8_t key[kMaxPipelineKey] = {};
 };
 static_assert(sizeof(gpu::PixelKey) % 4 == 0);
-static_assert(sizeof(Recipe) == 16 + sizeof(VertexRecipe) + sizeof(gpu::PixelKey) + 4 + kMaxPipelineKey);
+static_assert(sizeof(Recipe) == 16 + sizeof(VertexRecipe) + sizeof(gpu::PixelKey) + 8 + kMaxPipelineKey);
 
 uint64_t KeyHash(std::span<const uint8_t> key);
 
 class Builder {
 public:
     virtual ~Builder() = default;
-    // Called on a worker thread. program is empty for fixed function recipes. Builds and keeps the
-    // pipeline for the next draw that asks for it; false when it cannot be built.
+    // Runs on a worker; program is empty for fixed function. Returns false on failure.
     virtual bool BuildPipeline(const Recipe& recipe, std::span<const uint32_t> program) = 0;
 };
 
-// The backend's device is ready. layout identifies the backend and its key layout: recipes from a
-// different layout are discarded.
+// Call after device init; recipes with another layout are discarded.
 void Start(const std::filesystem::path& file, uint64_t layout, Builder* builder);
-// Stops the workers. Call before the backend's device or pipeline storage is released.
+// Stop workers before releasing the backend device or pipeline storage.
 void Shutdown();
 
 // Render thread: a pipeline was used successfully for the first time. room is CurrentRoom().
@@ -72,8 +64,7 @@ struct BatchStatus {
 };
 // An asset owns a batch until ReleaseBatch. Zero means the active-batch limit was reached.
 Batch BeginBatch(uint32_t room);
-// Prediction never persists a recipe. Record persists it when ordinary rendering observes it.
-// Program words are copied; an omitted program remains a dependency until RegisterProgram.
+// Record persists observed recipes; an omitted program stays a dependency until RegisterProgram.
 bool Submit(Batch batch, const Recipe& recipe, std::span<const uint32_t> program = {});
 void SealBatch(Batch batch);
 // Unknown or released handles are Cancelled. Ready requires sealing and successful dependencies.
@@ -91,8 +82,7 @@ void RegisterProgram(std::span<const uint32_t> words);
 uint64_t ProgramHash(std::span<const uint32_t> words);
 // The title is loading a room's assets: its recipes go first.
 void RoomLoading(uint32_t room);
-// Waits while recipes recorded in this room are queued or building, up to OPENSHAO_PIPELINE_WAIT_MS
-// (2000 by default, 0 never waits). Waits once per room entry.
+// Waits once per room for its recipes, up to OPENSHAO_PIPELINE_WAIT_MS (default 2000, 0 = never).
 void WaitForRoom(uint32_t room);
 
 // Deduplicates work on one key between the render thread and the workers.
@@ -130,4 +120,4 @@ private:
     uint64_t key_;
 };
 
-}  // namespace openshao::pipelines
+}

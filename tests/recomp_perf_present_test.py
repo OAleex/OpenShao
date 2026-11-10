@@ -64,6 +64,7 @@ struct Swap {
 };
 class D3D12Backend {
 public:
+    static constexpr unsigned kFrames = 3;
     bool cap_ = false, ramp_dirty_ = false, tearing_ = true;
     Resource lut_;
     int lut_state_ = 0;
@@ -71,6 +72,8 @@ public:
     Swap* swap_ = &swap;
     uint64_t presents_ = 0, frame_ = 0, last_presented_ = 0;
     std::atomic<uint64_t> presents_seen_{0};
+    std::atomic<uint64_t> present_fence_[kFrames + 1]{};
+    uint64_t fence_value_ = 0;
     unsigned settings_calls = 0;
     void Present(const Surface&);
     void FinishCapture(const Surface&) { Advance(2); }
@@ -151,12 +154,12 @@ int main() {
         backend.cap_ = false;
         diagnostics = false;
         backend.Present({});
-        require(reports.size() == 2 && g_perf.present == 11 && g_perf.swap == 5,
-                "disabled diagnostics must retain completed timing totals");
+        require(reports.size() == 2 && g_perf.present == 0 && g_perf.swap == 5,
+                "disabled diagnostics must skip scoped clock collection");
         diagnostics = true;
         backend.Present({});
-        require(reports.size() == 3 && reports[2].present == 22 && reports[2].swap == 10,
-                "report boundary must include all completed frames exactly once");
+        require(reports.size() == 3 && reports[2].present == 11 && reports[2].swap == 10,
+                "report boundary must include enabled scopes and completed swaps exactly once");
         require(backend.presents_ == 4 && backend.settings_calls == 4,
                 "timing adaptation must preserve present and settings execution");
         return 0;

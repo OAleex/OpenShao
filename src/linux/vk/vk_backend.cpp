@@ -551,6 +551,10 @@ public:
     bool DeliverLate(uint32_t data) override;
     void RecordLate(uint32_t data) override;
     void Flush() override { Submit(true); }
+    void WaitGpuFrame(uint64_t frame) override {
+        const uint64_t fence = present_fences_[frame % (kFrames + 1)].load(std::memory_order_acquire);
+        if (fence) WaitFence(fence);
+    }
     void SetGamma(const uint8_t* ramp) override;
     void ClearReport() override { counted_.clear(); }
     // Release only after the fence covering the recorded commands completes.
@@ -738,8 +742,11 @@ private:
     bool precise_ok_ = false;  // occlusionQueryPrecise
     bool dynamic_ext_ = false;  // VK_KHR_dynamic_rendering enabled
     VkFormat depth_format_ = VK_FORMAT_D24_UNORM_S8_UINT;
+    bool shadow_target_linear_ = false;
+    bool shadow_texture_linear_ = false;
     VkSemaphore timeline_ = VK_NULL_HANDLE;
     uint64_t fence_value_ = 0;
+    std::atomic<uint64_t> present_fences_[kFrames + 1]{};
     Frame frames_[kFrames];
     uint64_t frame_ = 0;
     VkSwapchainKHR swap_ = VK_NULL_HANDLE;
@@ -758,8 +765,7 @@ private:
     std::unordered_map<uint64_t, uint64_t> shader_src_;  // vertex and pixel program keys to source hash
     std::unordered_map<uint64_t, VkPipeline> psos_;
     std::unordered_map<uint64_t, VkPipeline> blit_psos_;
-    // Modules and pipelines the precompile workers built; the render thread adopts them on use.
-    // pre_modules_ also lists the render thread's modules: blobs_ shares those handles.
+    // Modules and pipelines built by precompile workers; pre_modules_ also lists the render thread's.
     std::mutex pre_mutex_;
     std::unordered_map<uint64_t, VkShaderModule> pre_modules_;
     std::unordered_map<uint64_t, VkPipeline> pre_psos_;
@@ -1027,6 +1033,10 @@ bool VulkanBackend::CreateDevice() {
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
     depth_format_ = (fp.optimalTilingFeatures & depth_need) == depth_need ? VK_FORMAT_D24_UNORM_S8_UINT
                                                                           : VK_FORMAT_D32_SFLOAT_S8_UINT;
+    vk.vkGetPhysicalDeviceFormatProperties(gpu_, depth_format_, &fp);
+    shadow_target_linear_ = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+    vk.vkGetPhysicalDeviceFormatProperties(gpu_, VK_FORMAT_D32_SFLOAT, &fp);
+    shadow_texture_linear_ = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
     dyn.pNext = nullptr;
     timeline.pNext = &dyn;
     f2.pNext = &timeline;
@@ -2406,7 +2416,9 @@ void VulkanBackend::EnsureStageSamplers(const State& s, const DrawTextures& stag
         if (stages.info[i].shadow) {
             // the console tests texel OP r, Vulkan tests r OP texel
             static const uint8_t swap[8] = {0, 4, 2, 6, 1, 5, 3, 7};
-            sd.minFilter = sd.magFilter = lin(min) || lin(mag) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+            const bool linear = (lin(min) || lin(mag)) &&
+                (stages.rt[i] ? shadow_target_linear_ : shadow_texture_linear_);
+            sd.minFilter = sd.magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
             sd.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sd.compareEnable = VK_TRUE;
             sd.compareOp = VkCompareOp(swap[CmpIndex(s.rs[kRsShadowFunc])]);
@@ -2520,8 +2532,7 @@ void VulkanBackend::KeyDepthStencil(const State& s, const Assembled& a, PsoKey& 
         k.szfail = SimpleState(s, kMStencilZFail);
         k.spass = SimpleState(s, kMStencilPass);
     }
-    // Constant bias uses 24-bit UNORM units; D32 scales them by the primitive depth exponent.
-    // Slope bias uses console pixels, so account for render scale.
+    // Constant bias in 24-bit UNORM units (D32 scales by depth exponent); slope bias in console pixels.
     if (a.topology == Topology::Triangles && SimpleState(s, kMSolidOffsetEnable)) {
         k.zbias = int32_t(std::lround(Bits(SimpleState(s, kMDepthOffset)) * kDepth24Max / s.zscale));
         k.zslope = Bits(SimpleState(s, kMSlopeScale)) * (bound_ds_ ? float(bound_ds_->w) / bound_ds_->gw : 1.0f);
@@ -2680,8 +2691,7 @@ void FillTransformConstants(const State& s, GuestExtent size, DrawConstants& c) 
     for (int t = 0; t < 4; t++) Transpose(s.transforms[kTsTexture0 + size_t(t)].data(), c.tm[t]);
 }
 
-// D3DLIGHT8 float layout: Type, Diffuse[4], Specular[4], Ambient[4], Position[3],
-// Direction[3], Range, Falloff, Attenuation[3], Theta, Phi.
+// D3DLIGHT8: Type, Diffuse4, Specular4, Ambient4, Position3, Direction3, Range, Falloff, Attenuation3, Theta, Phi.
 constexpr int kLightFloats = 26;
 constexpr int kLightDiffuse = 1;
 constexpr int kLightSpecular = 5;
@@ -3377,6 +3387,7 @@ void VulkanBackend::Present(const Surface& front) {
     }
     if (acquired) DrawFrame(t, bi);
     Submit(false, acquired ? f.acquire : VK_NULL_HANDLE, acquired ? swap_done_[bi] : VK_NULL_HANDLE);
+    present_fences_[presents_ % (kFrames + 1)].store(fence_value_, std::memory_order_release);
     DeliverReports();
     if (acquired) {
         auto perf_swap = PerfClock::now();
@@ -3595,8 +3606,7 @@ void VulkanBackend::SetGamma(const uint8_t* ramp) {
     ramp_dirty_ = true;
 }
 
-// Pipeline precompilation. The workers mirror EnsureVertexShader, EnsurePixelShader and
-// EnsurePipeline; keep them in step.
+// Precompile workers mirror EnsureVertexShader/EnsurePixelShader/EnsurePipeline.
 static_assert(sizeof(PsoKey) <= openshao::pipelines::kMaxPipelineKey);
 
 VkShaderModule VulkanBackend::PrecompileModule(const std::string& src, const char* entry, vkshader::Stage stage,

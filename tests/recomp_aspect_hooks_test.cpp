@@ -1,5 +1,7 @@
 #include "aspect_ratio.h"
 #include "launcher.h"
+#include "menu_renderer.h"
+#include "survival_mode.h"
 #include "app/app.h"
 #include "core/log.h"
 #include <array>
@@ -31,6 +33,18 @@ unsigned Selection(){return 0;}
 unsigned SelectorY(){return 188;}
 bool Graphic(X86Context&,uint32_t,uint32_t,uint32_t,uint32_t){return false;}
 }
+namespace openshao::survival {
+static bool medallion_menu=false;
+static bool setup_popup=false;
+static bool transitioning=false;
+static bool character_selection=false;
+static uint32_t player_mode=0;
+bool MedallionMenu(){return medallion_menu;}
+bool Transitioning(){return transitioning;}
+bool SetupPopup(){return setup_popup;}
+bool CharacterSelection(){return character_selection;}
+uint32_t PlayerMode(){return player_mode;}
+}
 static std::array<uint8_t,8<<20> memory{};
 static openshao::launcher::Settings settings;
 namespace openshao::launcher {const Settings& Current(){return settings;}}
@@ -47,10 +61,14 @@ void Return(X86Context& ctx,uint32_t value,int args){ctx.eax=value;ctx.esp+=4+ar
 static unsigned sprites=0;
 static bool expanded_red=false;
 static bool tutorial_drawing=false;
+static bool pause_drawing=false;
 static bool cinematic_drawing=false;
 static bool health_drawing=false;
+static bool might_drawing=false;
+static bool might_right=false;
 static bool artwork_drawing=false,artwork_clipped=false;
 static uint32_t queued_text_y=0;
+static float queued_text_scale=0;
 static std::array<float,8> tutorial_drawn{};
 static uint32_t gui_sprite_result=0x5100;
 static float prompt_drawn_x=0;
@@ -70,8 +88,17 @@ X86_FUNC(__imp__sub_0011D000){
         fill[i].x=i<2?(portrait?112.f:-320.5f):(portrait?351.f:111.5f);
         fill[i].y=i%2?(portrait?240.5f:239.5f):(portrait?70.5f:116.5f);fill[i].color=0x7F004488;
     }
+    if(pause_drawing)for(unsigned i=0;i<4;++i) {
+        fill[i].x=i<2?-280.5f:279.5f;fill[i].y=i%2?149.5f:-150.5f;
+        fill[i].color=0x7F004488;fill[i].uv=0x12345678;
+    }
     if(health_drawing)for(unsigned i=0;i<4;++i) {
         fill[i].x=i<2?-290.5f:109.5f;fill[i].y=i%2?-150.5f:-210.5f;
+        fill[i].color=0x7F808080;fill[i].uv=0x12345678;
+    }
+    if(might_drawing)for(unsigned i=0;i<4;++i) {
+        fill[i].x=(might_right?230.f:-245.f)+(i<2?-25.5f:25.5f);
+        fill[i].y=i%2?160.5f:-160.5f;
         fill[i].color=0x7F808080;fill[i].uv=0x12345678;
     }
     if(cinematic_drawing)for(unsigned i=0;i<4;++i) {
@@ -90,6 +117,7 @@ X86_FUNC(__imp__sub_0011D000){
 }
 X86_FUNC(__imp__sub_00016866){OriginalResult(ctx,13);ctx.eax=gui_sprite_result;}
 X86_FUNC(__imp__sub_000165C3){OriginalResult(ctx,1);}
+X86_FUNC(__imp__sub_000152A9){OriginalResult(ctx,1);}
 X86_FUNC(sub_001EE580);
 static void QueueFixture() {
     X86Context enqueue;enqueue.esp=0x1800;enqueue.ecx=0x7800;
@@ -110,7 +138,21 @@ X86_FUNC(__imp__sub_000133A0){
 }
 X86_FUNC(__imp__sub_000149FD){QueueFixture();OriginalResult(ctx);}
 X86_FUNC(__imp__sub_00016267){QueueFixture();OriginalResult(ctx);}
-X86_FUNC(__imp__sub_00152CE0){QueueFixture();OriginalResult(ctx);}
+X86_FUNC(__imp__sub_000124C3){
+    kernel::W32(0x7A00,std::bit_cast<uint32_t>(float(int32_t(kernel::R32(ctx.esp+4)))));
+    kernel::W32(0x7A04,std::bit_cast<uint32_t>(float(int32_t(kernel::R32(ctx.esp+8)))));
+    QueueFixture();QueueFixture();OriginalResult(ctx);
+}
+X86_FUNC(__imp__sub_00152CE0){
+    queued_text_y=kernel::R32(ctx.esp+8);
+    queued_text_scale=std::bit_cast<float>(kernel::R32(ctx.esp+28));
+    if(queue_fixture) {
+        kernel::W32(0x7A00,std::bit_cast<uint32_t>(float(int32_t(kernel::R32(ctx.esp+4)))));
+        kernel::W32(0x7A04,std::bit_cast<uint32_t>(float(int32_t(kernel::R32(ctx.esp+8)))));
+        kernel::W32(0x7A34,kernel::R32(ctx.esp+20));
+    }
+    QueueFixture();OriginalResult(ctx);
+}
 X86_FUNC(__imp__sub_000123BA){QueueFixture();OriginalResult(ctx,4);}
 X86_FUNC(__imp__sub_001EE580){
     const auto queue=ctx.ecx,index=kernel::R32(queue),command=kernel::R32(ctx.esp+4);
@@ -154,8 +196,13 @@ X86_FUNC(sub_0013FFB0);
 static bool modal_mesh=false;
 static bool gallery_mesh=false;
 static uint32_t selector_argument_y=0;
+static unsigned selector_draws=0;
+static unsigned auxiliary_glint_draws=0;
+static unsigned courtyard_draws=0;
 X86_FUNC(__imp__sub_001B2C40){
-    if(ctx.ecx==0x592D20)selector_argument_y=kernel::R32(ctx.esp+20);
+    if(ctx.ecx==0x592D20){selector_argument_y=kernel::R32(ctx.esp+20);++selector_draws;}
+    if(ctx.ecx==0x5929D8)++auxiliary_glint_draws;
+    if(ctx.ecx==0x58E4F0)++courtyard_draws;
     if(modal_mesh) {
         const float rectangles[5][4]={{-.1f,.03f,645,146},{-.1f,326,645,478.1f},
                                       {-.15f,146,80,326},{560,146,644.99f,326},{80,146,560,326}};
@@ -191,6 +238,7 @@ X86_FUNC(__imp__sub_00100B44){
     OriginalResult(ctx,5);
 }
 static float mesh_top=-.5f;
+static bool gold_order_mesh=false;
 X86_FUNC(__imp__sub_0013FFB0){
     const unsigned index=kernel::R32(0x63F5E0);
     if(gallery_mesh) {
@@ -198,7 +246,8 @@ X86_FUNC(__imp__sub_0013FFB0){
         for(unsigned t=0;t<2;++t) {
             const auto record=0x63F5E4+(index+t)*0x6C;
             std::memset(kernel::HostPtr(record),0,0x6C);
-            kernel::W32(record,0x01010101);kernel::W32(record+0x68,0x81870000);
+            kernel::W32(record,gold_order_mesh?kernel::R32(0x7B4C):0x01010101);
+            kernel::W32(record+0x68,0x81870000);
             for(unsigned v=0;v<3;++v) {
                 const unsigned c=corners[t][v];
                 const float x=c%2?639.5f:-.5f,y=c/2?479.5f:mesh_top;
@@ -221,6 +270,9 @@ X86_FUNC(__imp__sub_00141BF0){
     for(unsigned i=0;i<24;++i)kernel::W32(quad+i*4,0xCD000000+i);
     OriginalResult(ctx);
 }
+#include "difficulty.h"
+namespace openshao::difficulty {bool SaveListText(X86Context&,uint8_t*,TextCall,void(*)(X86Context&,uint8_t*)){return false;}
+void KillPanel(X86Context& ctx,uint8_t* base,void(*original)(X86Context&,uint8_t*)){original(ctx,base);}}
 #include "aspect_hooks.inl"
 X86_FUNC(sub_0012FDE0);
 X86_FUNC(sub_001B2C40);
@@ -237,6 +289,8 @@ int main(){
     kernel::W32(0x59847C,0x7200);kernel::W32(0x74E4,16);
     kernel::W32(0x5985E4,0);kernel::W32(0x5984B0,0x5000);
     kernel::W32(0x4008,0x5000);artwork_drawing=true;
+    kernel::W32(0x5000+0x1D8,0x7000);
+    kernel::W32(0x7004,588u|(480u<<16));
     for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
         settings.aspect_ratio=mode;
         if(settings.aspect_ratio=="auto")openshao::aspect::Output(640,960);
@@ -251,6 +305,20 @@ int main(){
         Check(Near(pixel_ratio,588.f/480) && !artwork_clipped,
               "artwork retains its authored display proportions without the old canvas clip");
         Check(art.esp==0x1008 && art.eax==0x1234,"artwork rendering preserves the native return ABI");
+        for(const unsigned native_y:{255u,277u}) {
+            X86Context title;
+            kernel::W32(title.esp,0x4C8BE);kernel::W32(title.esp+8,native_y);
+            kernel::W32(title.esp+24,std::bit_cast<uint32_t>(.9f));
+            kernel::W32(title.esp+28,std::bit_cast<uint32_t>(.9f));
+            sub_00152CE0(title,nullptr);
+            const float image_scale=(tutorial_drawn[3]-tutorial_drawn[1])/480;
+            const float projected_y=(float(queued_text_y)-240)*scale.y+240;
+            Check(std::abs(projected_y-(top+(bottom-top)*float(native_y)/480))<=.51f &&
+                  Near(queued_text_scale,.9f*image_scale),
+                  "the localized technique title follows the fitted artwork and its baked commands");
+            Check(kernel::R32(0x1008)==native_y && F32(0x101C)==.9f,
+                  "the technique hook restores native text arguments");
+        }
     }
     for(const auto [caller,expected]:{std::pair{0x4C822u,448u},std::pair{0x4C857u,446u},
                                       std::pair{0x4C942u,448u},std::pair{0x4C973u,446u}}) {
@@ -321,6 +389,29 @@ int main(){
         }
     }
     kernel::W32(0x5000+0x1FC,0);health_drawing=false;sprites=0;
+    // The fill, target marker and input glyph use the meter callbacks. The
+    // three frame pieces have a separate callback for each player.
+    might_drawing=true;
+    for(const auto [mode,shift]:{std::pair{"original",0.f},std::pair{"16:9",320.f/3},std::pair{"16:10",64.f},
+                                 std::pair{"21:9",240.f},std::pair{"32:9",1600.f/3},std::pair{"auto",0.f}}) {
+        settings.aspect_ratio=mode;openshao::aspect::Output(1000,1500);
+        for(const auto callback:{0x12E6Eu,0x166BDu,0x12FA4u,0x12789u,0x11D93u,0x15CE5u,0x11244u,0x158A8u}) {
+            might_right=callback==0x11D93u || callback==0x15CE5u || callback==0x158A8u;
+            kernel::W32(0x5000+0x1FC,callback);
+            X86Context meter;kernel::W32(meter.esp+4,0x4000);sub_0011D000(meter,nullptr);
+            const float native_x=might_right?204.5f:-270.5f;
+            Check(Near(tutorial_drawn[0],native_x+(might_right?shift:-shift)) &&
+                  Near(tutorial_drawn[4]-tutorial_drawn[0],51.f) &&
+                  Near(tutorial_drawn[1],-160.5f) && Near(tutorial_drawn[3],160.5f) &&
+                  meter.esp==0x1008,
+                  "Test Your Might frame, meter and input glyph move together without stretching or vertical movement");
+        }
+        kernel::W32(0x5000+0x1FC,0x161FE);
+        X86Context other;kernel::W32(other.esp+4,0x4000);sub_0011D000(other,nullptr);
+        Check(!expanded_red && Near(tutorial_drawn[0],might_right?204.5f:-270.5f),
+              "other HUD callbacks keep their native centered-canvas placement");
+    }
+    might_drawing=false;might_right=false;kernel::W32(0x5000+0x1FC,0);sprites=0;
 
     settings.aspect_ratio="32:9";
     kernel::W32(0x639224,0x3000);kernel::W32(0x3308,0x2000);
@@ -612,9 +703,8 @@ int main(){
     Check(expanded_red,"the native solid-fill sprite expands Game Over's red overlay without changing its color");
     ctx={};kernel::W32(0x752C,0);kernel::W32(0x7544,std::bit_cast<uint32_t>(1.f));sub_0011D000(ctx,nullptr);
     Check(!expanded_red,"full-screen textured artwork remains fitted rather than being treated as a solid fill");
-    // Exercise the native GUI image factory and the later screen-sprite pass.
-    // A tutorial's blue band ends where its portrait begins; it is not a full
-    // viewport tint. Only these message-manager image roles may escape fitting.
+    // Native GUI image factory and screen-sprite pass: a tutorial's blue band ends at its
+    // portrait; only these message-manager image roles may escape fitting.
     tutorial_drawing=true;
     // Retail portrait: centered at 551.5, 239 authored pixels wide. Its old
     // right edge is 31.5 pixels beyond the stage, independently of aspect.
@@ -667,6 +757,42 @@ int main(){
     }
     gui_sprite_result=0x5100;kernel::W32(0x4008,0x5100);
     tutorial_drawing=false;
+    // Pausing a message frees its image cache. Later GUI allocations can reuse
+    // those sprite addresses for the pause backdrop, frame and submenu pieces.
+    pause_drawing=true;
+    for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
+        settings.aspect_ratio=mode;
+        for(const auto output:{std::pair{1920u,1080u},std::pair{900u,1600u}}) {
+            openshao::aspect::Output(output.first,output.second);
+            for(const auto [manager,image]:{std::pair{0x4EF3C8u,0xA9u},std::pair{0x4EF3C8u,0x9Du},
+                                           std::pair{0x4EF3C8u,0x40u},std::pair{0x4E6E20u,0x99u}}) {
+                ctx={};ctx.ecx=0x4E6E20;sub_000165C3(ctx,nullptr);
+                gui_sprite_result=0x5100;kernel::W32(0x5100+0x1FC,0);
+                ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,0x9D);
+                sub_00016866(ctx,nullptr);
+                ctx={};ctx.ecx=manager;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,image);
+                sub_00016866(ctx,nullptr);
+                ctx={};kernel::W32(ctx.esp+4,0x4000);sub_0011D000(ctx,nullptr);
+                Check(!expanded_red && Near(tutorial_drawn[0],-280.5f) && Near(tutorial_drawn[4],279.5f) &&
+                      Near(tutorial_drawn[1],-150.5f) && Near(tutorial_drawn[3],149.5f),
+                      "pause and submenu sprites reusing a message address retain native geometry in every aspect");
+            }
+            for(const uint32_t image:{0xA9u,0x9Du,0x9Eu}) {
+                ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,image);
+                sub_00016866(ctx,nullptr);
+                ctx={};ctx.ecx=0x4E6E20;sub_000152A9(ctx,nullptr);
+                Check(ctx.eax==0x1234 && ctx.ecx==0x5678 && ctx.guard==0x9876 && ctx.esp==0x1008,
+                      "destroying message sprites preserves the original result and stack cleanup");
+                ctx={};kernel::W32(ctx.esp+4,0x4000);sub_0011D000(ctx,nullptr);
+                Check(!expanded_red && Near(tutorial_drawn[0],-280.5f) && Near(tutorial_drawn[4],279.5f),
+                      "destroyed tutorial sprites cannot deform a subsequent pause or debug menu");
+                Check(openshao::aspect::tutorial_portrait_inset==0,
+                      "destroying the message cache also retires its portrait inset");
+            }
+        }
+    }
+    pause_drawing=false;
+    ctx={};ctx.ecx=0x4E6E20;sub_000165C3(ctx,nullptr);
     settings.aspect_ratio="auto";openshao::aspect::Output(1080,720);
     ctx={};ctx.ecx=0x4E6E20;kernel::W32(ctx.esp+4,0xE);kernel::W32(ctx.esp+8,0x9D);sub_00016866(ctx,nullptr);
     std::array<TintVertex,4> band{{{-320.5f,116.5f,121,0x3C7F7F7F,0x1234},{-320.5f,239.5f,121,0x3C7F7F7F,0x1234},
@@ -691,14 +817,31 @@ int main(){
 
     // Exercise the actual native producer -> queue slot -> copied command ->
     // deferred font hook. A new unanchored command must erase the slot's tag.
-    auto render_queue=[&] {
-        X86Context copy;copy.ecx=0x7800;kernel::W32(copy.esp+4,0x7D00);kernel::W32(copy.esp+8,0);
+    auto render_queue=[&](uint32_t index=0) {
+        X86Context copy;copy.ecx=0x7800;kernel::W32(copy.esp+4,0x7D00);kernel::W32(copy.esp+8,index);
         sub_001EEC70(copy,nullptr);
         openshao::aspect::CanvasScope fonts;
         X86Context draw;kernel::W32(draw.esp+4,0x7D00);sub_001EF210(draw,nullptr);
         Check(Near(F32(0x7D00),F32(0x7A00)) && Near(F32(0x7D04),F32(0x7A04)) && draw.esp==0x1008,
               "anchoring restores the copied font command and preserves its native return context");
     };
+    for(const auto [mode,shift]:{std::pair{"original",0.f},std::pair{"16:9",320.f/3},std::pair{"16:10",64.f},
+                                 std::pair{"21:9",240.f},std::pair{"32:9",1600.f/3},std::pair{"auto",0.f}}) {
+        settings.aspect_ratio=mode;openshao::aspect::Output(1000,1500);
+        for(const auto [caller,x,y]:{std::array{0x8A810u,75u,412u},std::array{0x8A810u,550u,412u},
+                                     std::array{0x8AB0Cu,320u,40u}}) {
+            kernel::W32(0x7800,0);
+            queue_fixture=true;
+            ctx={};kernel::W32(ctx.esp,caller);kernel::W32(ctx.esp+4,x);kernel::W32(ctx.esp+8,y);
+            kernel::W32(ctx.esp+20,0x7C00);sub_00152CE0(ctx,nullptr);
+            queue_fixture=false;
+            render_queue();
+            const float expected_x=x==75?75.f-shift:x==550?550.f+shift:320.f;
+            Check(std::abs(prompt_drawn_x-expected_x)<.001f && Near(prompt_drawn_y,float(y)) &&
+                  (x==320 || shift==0 || !prompt_clipped),
+                  "the deferred Test Your Might timer follows either frame while the title stays centered");
+        }
+    }
     kernel::W32(0x7800,0);kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
     kernel::W32(0x7A04,std::bit_cast<uint32_t>(60.f));kernel::W32(0x7A34,0x7C00);kernel::W32(0x7C00,0x1234);
     ctx={};sub_00014A2A(ctx,nullptr);render_queue();
@@ -714,6 +857,31 @@ int main(){
         Check(Near(prompt_drawn_x,x+(x<320?-1:1)*320.f/3) && !prompt_clipped,"Ko-op labels follow their player's top corner");
     }
     kernel::W32(0x5ACEBC,0);kernel::W32(0x790088,0);
+    // The game's Danger producer sends a foreground and outline through the
+    // deferred font queue, tagged independently for both players.
+    kernel::W32(0x5ACEBC,0x790000);
+    for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
+        settings.aspect_ratio=mode;openshao::aspect::Output(1000,1500);
+        for(const auto game_mode:{0u,1u,2u})for(const auto player:{1u,2u}) {
+            kernel::W32(0x790088,game_mode);
+            const auto anchor=player==1?openshao::aspect::UiAnchor::TopLeft:openshao::aspect::UiAnchor::TopRight;
+            const auto offset=openshao::aspect::AnchorOffset(anchor,openshao::aspect::Current());
+            const float x=player==1?208.f:432.f;
+            kernel::W32(0x7800,0);
+            X86Context danger;kernel::W32(danger.esp+4,uint32_t(x));kernel::W32(danger.esp+8,108);
+            kernel::W32(danger.esp+16,player);sub_000124C3(danger,nullptr);
+            Check(kernel::R32(0x7800)==2 && danger.esp==0x1004 &&
+                  openshao::aspect::text_layout==openshao::aspect::TextLayout::None,
+                  "the two Danger text layers retain the original call and restore their scope");
+            for(unsigned layer=0;layer<2;++layer) {
+                render_queue(layer);
+                Check(Near(prompt_drawn_x,x+(game_mode==2?0:offset.x)) &&
+                      Near(prompt_drawn_y,108.f+(game_mode==2?0:offset.y)),
+                      "Danger foreground and outline follow the player's HUD, preserving Versus and 4:3");
+            }
+        }
+    }
+    kernel::W32(0x790088,0);kernel::W32(0x5ACEBC,0);
     for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
         settings.aspect_ratio=mode;openshao::aspect::Output(480,800);
         const auto scale=openshao::aspect::CanvasScale(openshao::aspect::Current());
@@ -731,9 +899,8 @@ int main(){
     kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
     kernel::W32(0x7800,0);QueueFixture();render_queue();
     Check(Near(prompt_drawn_x,100) && prompt_clipped,"ordinary text reusing a health queue slot keeps its original layout and clipping");
-    // The three retail combo producers enqueue separate praise, count and
-    // multiplier commands. Every glyph must retain its offset from solo health,
-    // including long labels that cross the authored canvas midpoint.
+    // Combo praise, count and multiplier glyphs keep their offset from solo health,
+    // including long labels crossing the canvas midpoint.
     kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,0);
     for(const auto producer:{sub_000133A0,sub_000149FD,sub_00016267}) {
         for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
@@ -819,16 +986,146 @@ int main(){
     kernel::W32(0x50FB04,640);kernel::W32(0x50FB08,480);sub_00141BF0(ctx,nullptr);
     Check(Near(F32(0x6000),79.5f) && Near(F32(0x6018),559.5f) && kernel::R32(0x6010)==0xCD000004 && ctx.esp==0x1004,
           "movie fitting preserves its source UVs and the original cdecl return context");
+    // The Versus arena-name producer stays silent under the Survival difficulty popup
+    // (its caption overlapped the description at y=345).
+    auto arena_caption=[&](uint32_t caller,bool popup,uint32_t top,uint32_t parent){
+        openshao::survival::setup_popup=popup;
+        const uint32_t depth=top==0x596810?2:1;
+        kernel::W32(0x6C9308,depth);
+        kernel::W32(0x6C9308+depth*4,top);
+        if(depth>1)kernel::W32(0x6C9308+(depth-1)*4,parent);
+        kernel::W32(0x7800,0);
+        queued_text_y=0;
+        X86Context caption;kernel::W32(caption.esp,caller);
+        kernel::W32(caption.esp+4,320);kernel::W32(caption.esp+8,345);
+        kernel::W32(caption.esp+20,0x7C00);
+        sub_00152CE0(caption,nullptr);
+        return std::array<uint32_t,3>{kernel::R32(0x7800),queued_text_y,caption.esp};
+    };
+    Check(arena_caption(0x45F0D,true,0x596810,0x598DF0)==std::array<uint32_t,3>{0,0,0x1004} &&
+          arena_caption(0x4F97B,true,0x596810,0x598DF0)==std::array<uint32_t,3>{0,0,0x1004} &&
+          arena_caption(0x4F97B,true,0x598DF0,0x598430)==std::array<uint32_t,3>{0,0,0x1004},
+          "the exact native Versus ROOFTOPS caption must not reach the font queue during Survival difficulty");
+    Check(arena_caption(0x45F0E,true,0x596810,0x598DF0)[0]==1 &&
+          arena_caption(0x4F97C,true,0x596810,0x598DF0)[0]==1 &&
+          arena_caption(0x45F0D,false,0x596810,0x598DF0)[0]==1 &&
+          arena_caption(0x45F0D,true,0x596810,0x598430)[0]==1 &&
+          arena_caption(0x45F0D,true,0x598430,0)[0]==1,
+          "unrelated text, normal Versus and other menus preserve all native centered font draws");
+    openshao::survival::setup_popup=false;
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
-    for(const auto aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2})for(unsigned pal=0;pal<2;++pal)for(unsigned row=0;row<9;++row) {
+    kernel::W32(0x59843C,0x7200);kernel::W32(0x7200+0x2A0,6);
+    kernel::W32(0x592D20+0xC,0);
+    ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x592D20+0xC)==1,
+          "The rendered main menu must reactivate the single native white selector after retail navigation disables it");
+    kernel::W32(0x592D20+0xC,0);kernel::W32(0x7200+0x2A0,19);
+    ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x592D20+0xC)==0,
+          "The native exit movie must not reactivate a selection sparkle over its transition");
+    kernel::W32(0x7200+0x2A0,6);openshao::survival::setup_popup=true;
+    ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x592D20+0xC)==0,
+          "The Survival setup popup must not reactivate the underlying main-menu sparkle");
+    openshao::survival::setup_popup=false;
+    for(const auto aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2})for(unsigned pal=0;pal<2;++pal)for(unsigned row=0;row<10;++row) {
         settings.aspect_ratio="auto";openshao::aspect::Output(unsigned(aspect*480),480);
         kernel::W32(0x598468,row);kernel::W32(0x4DF4DC,28);kernel::W32(0x5CE864,pal);
         openshao::recomp::extra_selected=row>=6;
         const auto step=28+pal*2,original_y=155+pal*10+(row%7)*step;
         ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,original_y);sub_001B2C40(ctx,nullptr);
-        Check(selector_argument_y==155+pal*10+row*step && kernel::R32(0x1014)==original_y && ctx.esp==0x101C,
-              "all nine main-menu sparkles must follow their logical row in both native video layouts and restore the guest argument");
+        const unsigned visual=row==9?3:row>=3?row+1:row;
+        Check(selector_argument_y==133+pal*10+visual*(step-6) && kernel::R32(0x1014)==original_y && ctx.esp==0x101C,
+              "all ten main-menu sparkles must follow the compact visual rows and restore the guest argument");
     }
+    openshao::survival::medallion_menu=true;kernel::W32(0x6C930C,0x598430);
+    // The Graphic mock returns false: test both the unfiltered native batch and the
+    // filtered composition without an aspect requeue.
+    const uint32_t saved_main_scene=kernel::R32(0x59843C);
+    kernel::W32(0x59843C,0x7600);
+    kernel::W32(0x7600+0x2E8,0x7A00);
+    kernel::W32(0x7A08,5);kernel::W32(0x7A0C,0x7B00);
+    kernel::W32(0x7B48,0x001C000D);
+    gallery_mesh=true;gold_order_mesh=true;
+    for(const bool native_gold:{true,false}) {
+        kernel::W32(0x63F5E0,0);
+        openshao::aspect::animation_scene=0x7600;
+        constexpr std::array<uint32_t,3> parts{0x59FB5186u,0x71960991u,0x4599E8C7u};
+        const unsigned start=native_gold?0u:1u;
+        for(unsigned part=start;part<parts.size();++part) {
+            kernel::W32(0x7B4C,parts[part]);
+            ctx={};kernel::W32(ctx.esp+12,0x001C000D);sub_0013FFB0(ctx,nullptr);
+            const unsigned first=(part-start)*2;
+            Check(kernel::R32(0x63F5E0)==first+2 &&
+                  kernel::R32(0x63F5E4+first*0x6C)==parts[part] &&
+                  kernel::R32(0x63F5E4+(first+1)*0x6C)==parts[part],
+                  "the aspect hook keeps each native ornament pair in its original queue order");
+        }
+        const unsigned native_count=unsigned(parts.size()-start)*2;
+        const auto before_selector=selector_draws;
+        kernel::W32(0x7B4C,0xE1E1E1E1u);
+        kernel::W32(0x598468,0);kernel::W32(0x5CE864,0);
+        ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,155);sub_001B2C40(ctx,nullptr);
+        Check(kernel::R32(0x63F5E0)==native_count+2 &&
+              kernel::R32(0x63F5E4+native_count*0x6C)==0xE1E1E1E1u &&
+              kernel::R32(0x63F5E4+(native_count+1)*0x6C)==0xE1E1E1E1u &&
+              selector_draws==before_selector+1 && selector_argument_y==133 && ctx.esp==0x101C,
+              "Survival draws the single white selector after the native ornament without requeueing bronze");
+        if(!native_gold)for(unsigned i=0;i<native_count+2;++i)
+            Check(kernel::R32(0x63F5E4+i*0x6C)!=0x59FB5186u,
+                  "an already filtered Survival batch stays free of the bronze pointer after the white selector");
+    }
+    gallery_mesh=false;gold_order_mesh=false;openshao::aspect::animation_scene=0;
+    kernel::W32(0x59843C,saved_main_scene);
+    for(unsigned row=0;row<4;++row) {
+        kernel::W32(0x598468,row);kernel::W32(0x5CE864,0);
+        ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,155+row*28);sub_001B2C40(ctx,nullptr);
+        const unsigned visual=openshao::menu::MainVisualRow(row),step=kernel::R32(0x4DF4DC);
+        const int expected=int(155+row*28+(visual-row)*step)+int(-openshao::menu::MainMenuRise+openshao::menu::MainListAdjustment(visual));
+        Check(int(selector_argument_y)==expected && kernel::R32(0x1014)==155+row*28,
+              "the Survival white glint uses Main's own row placement, since its options are Main's rows");
+    }
+    openshao::survival::transitioning=true;
+    kernel::W32(0x7200+0x2A0,2);kernel::W32(0x592D20+0xC,0);
+    ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
+    Check(kernel::R32(0x592D20+0xC)==1,
+          "the native player-focus movie cannot turn off the only white selection sparkle");
+    const auto previous_survival_draws=selector_draws;
+    kernel::W32(0x598468,1);
+    ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,183);sub_001B2C40(ctx,nullptr);
+    Check(selector_draws==previous_survival_draws+1 &&
+          int(selector_argument_y)==183+int(-openshao::menu::MainMenuRise+openshao::menu::MainListAdjustment(1)) && ctx.esp==0x101C,
+          "Ko-op retains the white sparkle during selection motion instead of losing focus");
+    openshao::survival::transitioning=false;
+    ctx={};ctx.ecx=0x5929D8;sub_001B2C40(ctx,nullptr);
+    Check(auxiliary_glint_draws==0,"the Survival Main overlay must not add a second random sparkle");
+    openshao::survival::medallion_menu=false;
+    kernel::W32(0x6C930C,0x598430);
+    ctx={};ctx.ecx=0x5929D8;sub_001B2C40(ctx,nullptr);
+    Check(auxiliary_glint_draws==0 && ctx.esp==0x101C,
+          "the native main menu suppresses the independent sparkle that duplicates its selection cursor");
+    kernel::W32(0x6C930C,0x598DF0);
+    ctx={};ctx.ecx=0x5929D8;sub_001B2C40(ctx,nullptr);
+    Check(auxiliary_glint_draws==1,
+          "menu sparkle filtering must leave other native screens and effects intact");
+    kernel::W32(0x58E4F0+0xC,1);kernel::W32(0x58E4F0+0x2A0,4);
+    const auto courtyard_before=courtyard_draws;
+    ctx={};ctx.ecx=0x58E4F0;sub_001B2C40(ctx,nullptr);
+    Check(courtyard_draws==courtyard_before+1 && kernel::R32(0x58E4F0+0xC)==1,"the fighter screen keeps drawing its courtyard backdrop");
+    kernel::W32(0x6C930C,0x598430);
+    ctx={};ctx.ecx=0x58E4F0;sub_001B2C40(ctx,nullptr);
+    Check(courtyard_draws==courtyard_before+1 && kernel::R32(0x58E4F0+0xC)==0 && kernel::R32(0x58E4F0+0x2A0)==0 && ctx.esp==0x101C,
+          "a fighter courtyard left running is stopped instead of showing through Main's backdrop");
+    kernel::W32(0x6C930C,0x598430);
+    const auto before_characters=selector_draws;
+    for(unsigned depth:{1u,2u}) {
+        kernel::W32(0x6C9308,depth);kernel::W32(0x6C930C,0x598DF0);
+        kernel::W32(0x6C9310,0x596810);
+        ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,235);sub_001B2C40(ctx,nullptr);
+        Check(selector_draws==before_characters && ctx.esp==0x101C,
+              "character selection and its difficulty popup must not draw the main-menu sparkle and retain native stack cleanup");
+    }
+    kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     ctx={};kernel::W32(ctx.esp,0x48F0C);kernel::W32(ctx.esp+20,0x7000);
     kernel::W32(ctx.esp+12,60);kernel::W32(ctx.esp+24,std::bit_cast<uint32_t>(.8f));
     sub_00152AE0(ctx,nullptr);

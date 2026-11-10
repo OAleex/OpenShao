@@ -12,6 +12,7 @@
 #include "launcher_settings.h"
 #include "recomp_input.h"
 #include "recomp_settings.h"
+#include "survival_session.h"
 #include "input_bindings.h"
 #include "host.h"
 #include "keyboard.h"
@@ -70,8 +71,7 @@ void Sticks(int16_t raw_x,int16_t raw_y,int16_t& x,int16_t& y) {
 void Add(SDL_JoystickID id) {
     for (auto& s:slots) if (s.device && SDL_GetGamepadID(s.device)==id) return;
     auto it=std::find_if(slots.begin(),slots.end(),[](const Slot& s){return !s.device;});
-    // A new Ko-op session starts with keyboard P1. Later devices fill the
-    // missing controller player without changing any connected player's port.
+    // A new Ko-op session starts with keyboard P1; later devices fill the missing player.
     if(multiplayer && !slots[0].device && !slots[1].device)it=slots.begin()+1;
     if (it==slots.end()) return;
     auto* pad=SDL_OpenGamepad(id);
@@ -115,8 +115,7 @@ void SetMultiplayer(bool enabled) {
     if (multiplayer==enabled) return;
     multiplayer=enabled;
     const auto count=std::count_if(slots.begin(),slots.end(),[](const Slot& s){return s.device!=nullptr;});
-    // Compact only at a mode boundary: a surviving controller may occupy any
-    // slot, but one controller must enter Ko-op on P2 and return to solo on P1.
+    // One controller enters Ko-op on P2 and returns to solo on P1.
     std::array<Slot,4> assigned{};
     int port=enabled && count<2?1:0;
     for(const auto& s:slots)if(s.device)assigned[port++]=s;
@@ -265,8 +264,7 @@ void Update() {
             s.sent[0]=low; s.sent[1]=high; s.refreshed=now;
         }
     }
-    // Publish one combined snapshot so idle pads cannot release or repeat
-    // another pad's menu buttons. An empty device list also releases input.
+    // One combined snapshot, so idle pads cannot release another pad's buttons.
     recomp::raw::Controller(raw_source,raw_buttons);
 }
 void Shutdown() {
@@ -375,6 +373,7 @@ Pad Poll(int port) {
         // Ko-op requires two advertised sources; never copy P1 input into P2.
         Pad keyboard{};app::kGame.pad(0,keyboard);p.connected=keyboard.connected;
     }
+    if(p.connected)p.buttons=openshao::survival::PauseButtons(p.buttons,openshao::survival::ActiveSession());
     return p;
 }
 void Rumble(int port,uint16_t left,uint16_t right) {

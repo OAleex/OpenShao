@@ -33,7 +33,7 @@ def adapt_backend(backend, replace_once):
     backend = replace_once(backend, '    blobs_[hash] = code;\n    return code.Get();',
         '    disk_cache_.StoreShader(hash, code.Get(), PerfMs(compile_started));\n'
         '    blobs_[hash] = code;\n    return code.Get();')
-    if backend.count('dev_->CreateGraphicsPipelineState(') != 4:
+    if backend.count('dev_->CreateGraphicsPipelineState(') != 5:
         raise ValueError('The pinned renderer pipeline creation paths changed')
     backend = backend.replace('dev_->CreateGraphicsPipelineState(', 'disk_cache_.CreatePipeline(')
     backend = replace_once(backend, '    presents_++;',

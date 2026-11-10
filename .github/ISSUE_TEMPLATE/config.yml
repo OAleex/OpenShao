@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Download the latest release
+    url: https://github.com/OAleex/OpenShao/releases/latest
+    about: Update OpenShao before reporting. The problem may already be fixed.
+  - name: Player instructions and folders
+    url: https://github.com/OAleex/OpenShao#where-are-my-saves-settings-and-logs
+    about: Find your saves, settings, logs and diagnostic reports.

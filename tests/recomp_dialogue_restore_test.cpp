@@ -1,3 +1,4 @@
+#include "dialogue_queue.h"
 #include "kernel/kernel.h"
 #include "launcher.h"
 #include <array>
@@ -12,6 +13,8 @@ std::array<uint8_t, 8 << 20> memory{};
 openshao::launcher::Settings settings;
 bool paused = false, accept_message = true;
 bool native_stream_playing = false;
+bool defer_survival_music = false;
+unsigned native_music_stops = 0;
 bool accept_animation = true;
 bool accept_audio = true;
 bool accept_stream = true;
@@ -20,10 +23,20 @@ unsigned activation_calls = 0;
 unsigned stream_play_calls = 0;
 uint32_t last_native_sound = 0, last_native_bank = 0;
 uint32_t variation_seed = 0;
+std::vector<uint32_t> voice_stops;
 uint32_t caption_lookup_sound = 0;
 std::vector<std::array<uint32_t, 2>> messages;
 std::vector<std::array<uint32_t, 3>> sounds;
 std::vector<uint32_t> streams;
+std::array<uint32_t, 16> submitted_message{};
+void SubmitMessage(uint32_t info) {
+    for (uint32_t i = 0; i < submitted_message.size(); ++i)
+        submitted_message[i] = kernel::R32(info + i * 4);
+    messages.push_back({submitted_message[6], submitted_message[5]});
+    kernel::G<uint8_t>(0x4E74E0) = 1;
+    kernel::W32(0x4E74F4, submitted_message[5]);
+    kernel::W32(0x4E74F8, submitted_message[6]);
+}
 void Original(X86Context& ctx, unsigned arguments = 0) {
     ctx.eax = 0x1234;
     ctx.ecx = 0x5678;
@@ -31,19 +44,35 @@ void Original(X86Context& ctx, unsigned arguments = 0) {
 }
 }
 namespace logx { void Write(Level, const char*, ...) {} }
+uint32_t checkpoint_restores = 0;
+uint32_t save_slot_transfers = 0;
+namespace openshao::difficulty { uint32_t CheckpointRestores() { return checkpoint_restores; }
+uint32_t SaveSlotTransfers() { return save_slot_transfers; } }
 namespace openshao::launcher { const Settings& Current() { return settings; } }
 namespace openshao::ed_nexus { bool GameplayPaused() { return paused; } }
+namespace openshao::survival {void VoicePlayed(uint32_t,uint32_t){} void UpdateVoice(X86Context&){} bool FilterLevelMessage(uint32_t){return false;} bool DeferMusic(uint32_t){return defer_survival_music;} void TriggerActivated(X86Context&,uint32_t,bool){} }
 namespace kernel {
 uint8_t* g_base = memory.data();
 uint32_t CallGuest(X86Context& ctx, uint32_t fn, const uint32_t* args, size_t count) {
     // Guest execution is the external boundary. The host hooks and their state
     // below are production code; the native message renderer is tested in-game.
     if (fn == 0x1A76D0) return G<uint8_t>(0x6C4198);
+    if (fn == 0x1353F && !count) {
+        ++native_music_stops;
+        W32(0x62DC08,0);
+        W32(0x62DC0C,0);
+        return 0;
+    }
     if (fn == 0x152360) {
         if (ctx.ecx != 0x653C64 || !count || !args[0]) std::abort();
         return native_stream_playing ? 1u : 0u;
     }
     if (fn == 0x15A430) return variation_seed;
+    if (fn == 0x152380) {
+        if (ctx.ecx != 0x653C64 || count != 1) std::abort();
+        voice_stops.push_back(args[0]);
+        return 0;
+    }
     if (fn == 0x150DF0) {
         for (uint32_t i = 0; i < R32(0x653BCC); ++i)
             if (R32(R32(0x653BD4) + i * 24) == args[0]) return i;
@@ -70,24 +99,44 @@ uint32_t CallGuest(X86Context& ctx, uint32_t fn, const uint32_t* args, size_t co
         ctx.esp += 100;
         return 0;
     }
+    if (fn == 0x135A3 && count == 2) {
+        if (ctx.ecx != 0x4E6E20 || args[1] != 1) std::abort();
+        SubmitMessage(args[0]);
+        ctx.eax = 0xDEAD;
+        ctx.ecx = 0xBEEF;
+        ctx.esp += 100;
+        return 0;
+    }
     std::cerr << "Unexpected guest call " << std::hex << fn << '\n';
     std::abort();
 }
 }
 X86_FUNC(__imp__sub_001A1880) { Original(ctx); }
+X86_FUNC(__imp__sub_001A1860) { kernel::W32(0x6C03DC, 0); Original(ctx); }
+X86_WEAK_FUNC(sub_001A1860, __imp__sub_001A1860)
+X86_FUNC(__imp__sub_000135A3) {
+    SubmitMessage(kernel::R32(ctx.esp + 4));
+    Original(ctx, 2);
+}
+X86_WEAK_FUNC(sub_000135A3, __imp__sub_000135A3)
 X86_FUNC(__imp__sub_001A1850) { kernel::W32(0x6C03DC, 0); Original(ctx); }
 X86_FUNC(__imp__sub_001A18F0) {
     const auto args = kernel::R32(kernel::R32(ctx.esp + 4) + 8);
     const auto actor = kernel::R32(kernel::R32(ctx.esp + 8) + 0x10);
     last_native_sound = kernel::R32(args);
     last_native_bank = kernel::R32(args+4);
-    if (!kernel::G<uint8_t>(0x6C4198) && !kernel::R32(0x6C03DC) &&
+    if (last_native_sound && !kernel::G<uint8_t>(0x6C4198) && !kernel::R32(0x6C03DC) &&
         (kernel::R32(args + 8) == 0xFFFFFFFFu || kernel::R16(0x5D38B6 + actor * 0x3238) || !kernel::R32(args + 8))) {
         kernel::W32(0x6C03DC, 0x5000);
     }
     Original(ctx, 3);
 }
 X86_FUNC(__imp__sub_00170330) { ++activation_calls; Original(ctx, 3); }
+X86_FUNC(__imp__sub_00016924) {
+    if (const auto manager = kernel::R32(0x599844)) kernel::W32(manager + 0x1C, 1);
+    Original(ctx, 3);
+}
+X86_WEAK_FUNC(sub_00016924, __imp__sub_00016924)
 X86_WEAK_FUNC(sub_00170330, __imp__sub_00170330)
 X86_FUNC(__imp__sub_0017C040) {
     const auto sound=kernel::R32(ctx.esp + 4);
@@ -109,6 +158,22 @@ X86_FUNC(__imp__sub_0017C0B0) {
     Original(ctx);
 }
 X86_WEAK_FUNC(sub_0017C0B0, __imp__sub_0017C0B0)
+X86_FUNC(__imp__sub_0017C110) { Original(ctx); }
+X86_WEAK_FUNC(sub_0017C110, __imp__sub_0017C110)
+X86_FUNC(__imp__sub_00016C9E) { Original(ctx); }
+X86_WEAK_FUNC(sub_00016C9E, __imp__sub_00016C9E)
+X86_FUNC(__imp__sub_0001698D) { Original(ctx); }
+X86_WEAK_FUNC(sub_0001698D, __imp__sub_0001698D)
+X86_FUNC(__imp__sub_0001353F) { Original(ctx); }
+X86_WEAK_FUNC(sub_0001353F, __imp__sub_0001353F)
+X86_FUNC(__imp__sub_00012D60) { Original(ctx); }
+X86_WEAK_FUNC(sub_00012D60, __imp__sub_00012D60)
+X86_FUNC(__imp__sub_00012B85) { Original(ctx); }
+X86_WEAK_FUNC(sub_00012B85, __imp__sub_00012B85)
+X86_FUNC(__imp__sub_000125A4) { Original(ctx); }
+X86_WEAK_FUNC(sub_000125A4, __imp__sub_000125A4)
+X86_FUNC(__imp__sub_00152380) { Original(ctx); }
+X86_WEAK_FUNC(sub_00152380, __imp__sub_00152380)
 X86_FUNC(__imp__sub_000147F0) { Original(ctx, 3); }
 X86_WEAK_FUNC(sub_000147F0, __imp__sub_000147F0)
 X86_FUNC(__imp__sub_000111EF) { Original(ctx); ctx.eax = caption_lookup_sound; }
@@ -157,8 +222,12 @@ X86_EXTERN_FUNC(sub_000111EF);
 X86_EXTERN_FUNC(sub_00176270);
 X86_EXTERN_FUNC(sub_00151560);
 X86_EXTERN_FUNC(sub_00151610);
+X86_EXTERN_FUNC(sub_000135A3);
+X86_EXTERN_FUNC(sub_001A1860);
 
 int main() {
+    // Ordering checks below advance one voice update at a time; pacing has its own timed checks.
+    openshao::dialogue::SetRestoreGaps(0, 0);
     unsigned failures = 0;
     auto check = [&](bool ok, const char* why) {
         if (!ok) { ++failures; std::cerr << why << '\n'; }
@@ -166,6 +235,7 @@ int main() {
     auto reset = [&] {
         memory.fill(0);
         variation_seed = 0;
+        voice_stops.clear();
         caption_lookup_sound = 0;
         accept_animation = true;
         accept_audio = true;
@@ -178,10 +248,30 @@ int main() {
         sub_001A1850(ctx, memory.data());
         kernel::W32(0x505970, 98);
         kernel::W32(0x639224, 0x80010000);
+        kernel::W32(0x4EF42C, 1);  // gameplay frames, not a held loading frame
         messages.clear();
         sounds.clear();
         streams.clear();
     };
+    reset();
+    defer_survival_music=true;
+    kernel::W32(0x62DC08,0x5000);
+    kernel::W32(0x62DC0C,0x12345678);
+    kernel::W32(0x1004,0x709D5875);
+    X86Context music_ctx{};music_ctx.esp=0x1000;music_ctx.eax=0xABCD;
+    sub_0001698D(music_ctx,memory.data());
+    check(native_music_stops==1 && !kernel::R32(0x62DC08) && !kernel::R32(0x62DC0C) &&
+          music_ctx.esp==0x1004 && music_ctx.eax==0xABCD,
+          "Deferring Level One music stops a preexisting native track exactly once and preserves the calling ABI");
+    music_ctx={};music_ctx.esp=0x1000;music_ctx.eax=0xBCDE;
+    sub_0001698D(music_ctx,memory.data());
+    check(native_music_stops==1 && music_ctx.esp==0x1004 && music_ctx.eax==0xBCDE,
+          "Repeated deferred requests cannot replay or repeatedly stop music");
+    defer_survival_music=false;
+    music_ctx={};music_ctx.esp=0x1000;
+    sub_0001698D(music_ctx,memory.data());
+    check(music_ctx.esp==0x1004 && music_ctx.eax==0x1234,
+          "Ordinary music requests still reach the native music player outside Survival");
     auto tick = [&] {
         X86Context ctx{}; ctx.esp = 0x1000;
         sub_001A1880(ctx, memory.data());
@@ -205,6 +295,102 @@ int main() {
         kernel::G<uint8_t>(0x5144F8) = 0;
         kernel::G<uint8_t>(0x6C4198) = 0;
     };
+
+    auto voice = [&](uint32_t actor_slot, uint32_t sound = 0x12345678, uint32_t bank = 0x871111EC,
+                     uint32_t condition = 0xFFFFFFFF, uint32_t trigger = 0) {
+        kernel::W32(0x1004, 0x2000); kernel::W32(0x1008, 0x2200);
+        kernel::W32(0x2008, 0x2100); kernel::W32(0x2100, sound);
+        kernel::W32(0x2104, bank); kernel::W32(0x2108, condition);
+        kernel::W32(0x2210, actor_slot);
+        kernel::W32(0x100C, trigger);
+        X86Context ctx{}; ctx.esp = 0x1000;
+        sub_001A18F0(ctx, memory.data());
+        check(ctx.eax == 0x1234 && ctx.ecx == 0x5678 && ctx.esp == 0x1010,
+              "Voice recovery must preserve native registers and its three-argument stack");
+    };
+
+    auto tutorial = [&](uint32_t text = 24, uint32_t type = 6) {
+        for (uint32_t i = 0; i < 16; ++i) kernel::W32(0x2400 + i * 4, i + 0x100);
+        kernel::W32(0x2414, type); kernel::W32(0x2418, text);
+        kernel::W32(0x1004, 0x2400); kernel::W32(0x1008, 1);
+        X86Context ctx{}; ctx.esp = 0x1000; ctx.ecx = 0x4E6E20;
+        sub_000135A3(ctx, memory.data());
+        check(ctx.esp == 0x100C, "Tutorial submission must retain the native callee-cleaned ABI");
+    };
+    auto tutorial_voice = [&] {
+        reset(); kernel::W32(0x505970, 96); kernel::W32(0x514508, 0x18797C6C);
+        voice(0, 0x65138D8A); native_stream_playing = true;
+    };
+    tutorial_voice(); tutorial();
+    check(messages.empty() && kernel::R32(0x6C03DC) == 0x5000,
+          "The first attack tutorial must wait for the preceding character voice instead of cutting it");
+    // The native event uses a temporary stack descriptor. Deferral must own a copy.
+    kernel::W32(0x2418, 999); kernel::W32(0x2420, 999);
+    tick(); tick();
+    check(messages.empty(), "The first attack tutorial must wait for actual playback completion");
+    native_stream_playing = false; paused = true; tick();
+    check(messages.empty(), "A completed tutorial voice must not open its panel while paused");
+    paused = false; tick(); tick();
+    check(messages.size() == 1 && messages[0] == std::array<uint32_t, 2>{24, 6} &&
+          submitted_message[8] == 0x108,
+          "The tutorial must submit its original descriptor exactly once after the voice ends");
+
+    tutorial_voice(); native_stream_playing = false; tutorial();
+    check(messages.size() == 1, "An already-finished voice must not add a tutorial delay");
+    tutorial_voice(); tutorial(25, 0);
+    check(messages.size() == 1, "Non-modal messages must retain their native timing");
+    for (uint32_t room : {96u, 98u, 136u}) for (uint32_t type : {6u, 8u, 9u}) {
+        tutorial_voice(); kernel::W32(0x505970, room); tutorial(73, type);
+        check(messages.size() == 1,
+              "Other tutorial panels and feedback must open on their native schedule, without a message backlog");
+    }
+    tutorial_voice(); kernel::W32(0x6C03DC, 0x7000); tutorial(24, 6);
+    check(messages.size() == 1, "The first attack panel must not wait for an unrelated voice");
+    tutorial_voice(); tutorial();
+    kernel::W32(0x6C03DC, 0); voice(0, 0x7183CEE9); tick();
+    check(messages.size() == 1, "A replacement voice must not extend the pending attack panel's original wait");
+    tutorial_voice(); tutorial(24, 6); tutorial(73, 8);
+    check(messages.size() == 1 && messages[0] == std::array<uint32_t, 2>{73, 8},
+          "An unrelated feedback panel must not wait behind the pending attack panel");
+    native_stream_playing = false; tick(); tick();
+    check(messages.size() == 1, "A newer tutorial must invalidate a pending older panel instead of replaying it later");
+    tutorial_voice(); tutorial(); settings.restore_dialogue = false; tick();
+    check(messages.size() == 1, "Disabling restoration must release the original pending tutorial");
+    auto presentation_stop = [&](uint32_t caller, uint32_t type, uint32_t text, uint32_t mapped_sound = 0) {
+        kernel::W32(0x1000, caller); kernel::G<uint8_t>(0x4E74E0) = 1;
+        kernel::W32(0x4E74F4, type); kernel::W32(0x4E74F8, text);
+        kernel::W32(0x5B04A8, 0x6000); kernel::W32(0x6000 + text * 4, mapped_sound);
+        X86Context ctx{}; ctx.esp = 0x1000;
+        sub_001A1860(ctx, memory.data());
+        check(ctx.esp == 0x1004, "Voice-stop filtering must retain the native ABI");
+    };
+    for (uint32_t caller : {0x85EE1u, 0x864B7u}) {
+        tutorial_voice(); presentation_stop(caller, 8, 73);
+        check(kernel::R32(0x6C03DC) == 0x5000,
+              "Unvoiced combat feedback must preserve the playing instruction without delaying the feedback");
+        tutorial_voice(); presentation_stop(caller, 9, 110);
+        check(kernel::R32(0x6C03DC) == 0x5000, "An unvoiced lock-on hint must preserve current speech");
+        tutorial_voice(); presentation_stop(caller, 8, 73, 0x12345678);
+        check(!kernel::R32(0x6C03DC), "A voiced replacement must retain native voice ownership");
+    }
+    tutorial_voice(); presentation_stop(0x716BF, 8, 73);
+    check(!kernel::R32(0x6C03DC), "A real scene change must still stop its old voice");
+    tutorial_voice(); settings.restore_dialogue = false; presentation_stop(0x85EE1, 8, 73);
+    check(!kernel::R32(0x6C03DC), "Disabled restoration must keep the native presentation stop");
+    tutorial_voice(); settings.restore_dialogue = false; tutorial();
+    check(messages.size() == 1, "Disabling dialogue restoration must retain retail tutorial timing");
+    for (uint32_t address : {0x505970u, 0x639224u, 0x514508u}) {
+        tutorial_voice(); tutorial(); kernel::W32(address, kernel::R32(address) + 1);
+        native_stream_playing = false; tick();
+        check(messages.empty(), "A deferred tutorial must not survive a change of room, world or scene");
+    }
+    tutorial_voice(); tutorial(); play(0x18797C6C); finish();
+    native_stream_playing = false; tick();
+    check(messages.empty(), "Replaying the same scene must cancel its old deferred tutorial");
+    tutorial_voice(); tutorial();
+    X86Context cleared{}; cleared.esp = 0x1000; sub_001A1850(cleared, memory.data());
+    native_stream_playing = false; tick();
+    check(messages.empty(), "Level initialization must clear a deferred tutorial");
 
     reset(); tick();
     check(messages.empty(), "Unrelated gameplay must not display the Cage message");
@@ -235,6 +421,18 @@ int main() {
 
     reset(); play(); finish(); tick();
     check(messages.size() == 1, "Scene cleanup after a skip must also allow the message");
+    reset(); play(); finish();
+    kernel::W32(0x69654C, 0xABCD1234); kernel::W32(0x696550, 0); kernel::W32(0x696554, 0x5000);
+    native_stream_playing = true; tick();
+    check(messages.empty(), "The restored Cage caption must not talk over an original audiostream");
+    native_stream_playing = false; tick();
+    check(messages.size() == 1, "The restored Cage caption must follow once the audiostream ends");
+    openshao::dialogue::SetRestoreGaps(.3, .3);
+    reset(); play(); finish(); tick();
+    check(messages.empty(), "The restored Cage caption must not start in the frame its scene ends");
+    std::this_thread::sleep_for(std::chrono::milliseconds(350)); tick();
+    check(messages.size() == 1, "The restored Cage caption must start after the short silence");
+    openshao::dialogue::SetRestoreGaps(0, 0);
     reset(); play(); settings.restore_dialogue = false; finish(); tick();
     settings.restore_dialogue = true; tick();
     check(messages.empty(), "Disabling restoration must cancel the pending caption");
@@ -257,17 +455,6 @@ int main() {
     check(messages.size() == 2,
           "Skip cleanup that clears an unplayed caption must not lose the restored line");
 
-    auto voice = [&](uint32_t actor_slot, uint32_t sound = 0x12345678, uint32_t bank = 0x871111EC,
-                     uint32_t condition = 0xFFFFFFFF) {
-        kernel::W32(0x1004, 0x2000); kernel::W32(0x1008, 0x2200);
-        kernel::W32(0x2008, 0x2100); kernel::W32(0x2100, sound);
-        kernel::W32(0x2104, bank); kernel::W32(0x2108, condition);
-        kernel::W32(0x2210, actor_slot);
-        X86Context ctx{}; ctx.esp = 0x1000;
-        sub_001A18F0(ctx, memory.data());
-        check(ctx.eax == 0x1234 && ctx.ecx == 0x5678 && ctx.esp == 0x1010,
-              "Voice recovery must preserve native registers and its three-argument stack");
-    };
     reset(); kernel::W32(0x6C03DC, 1); voice(13);
     kernel::W32(0x6C03DC, 0); tick();
     check(sounds.size() == 1 && sounds[0][2] == 0x12345678,
@@ -308,6 +495,20 @@ int main() {
     kernel::W32(0x639224, 0); kernel::W32(0x6C03DC, 0); tick();
     check(sounds.empty(), "World teardown must cancel dialogue before native audio resources unload");
 
+    for (const bool observed_frame : {false, true}) {
+        reset(); kernel::W32(0x505970, 96); play(0x11112222);
+        if (observed_frame) tick();
+        kernel::W32(0x6C03DC, 1); voice(0, 0x12345678);
+        finish(); kernel::W32(0x6C03DC, 0); tick(); tick();
+        check(sounds.empty(), observed_frame
+            ? "Normal scene completion must discard speech deferred during its cleanup"
+            : "Skipping a scene before its first voice update must discard its deferred speech");
+    }
+    reset(); kernel::W32(0x514508, 0x11112222);
+    kernel::W32(0x6C03DC, 1); voice(0);
+    kernel::W32(0x514508, 0x33334444); kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.empty(), "A changed scene must cancel old speech even if its active frames were missed");
+
     reset(); kernel::W32(0x6C03DC, 1); voice(0, 0x11110000);
     kernel::W32(0x6C03DC, 0); voice(0, 0x22220000); tick();
     kernel::W32(0x6C03DC, 0); tick();
@@ -326,17 +527,49 @@ int main() {
     kernel::W32(0x69654C, 0xABCD1234);
     kernel::W32(0x696550, 0); kernel::W32(0x696554, 0x5000);
     native_stream_playing = true; tick();
-    check(sounds.empty(), "An original playing audiostream must block the deferred dialogue");
+    check(sounds.size() == 1 && sounds.back()[2] == 0x12345678,
+          "An authored vosound must follow its native speech slot independently of other active streams");
     native_stream_playing = false; tick();
     check(sounds.size() == 1 && sounds.back()[2] == 0x12345678,
-          "Deferred dialogue must resume after the original audiostream truly ends");
+          "Ending a separate stream must not repeat an already restored script line");
     reset(); kernel::W32(0x6C03DC, 1); voice(0); tick();
     std::this_thread::sleep_for(std::chrono::milliseconds(4100)); tick();
     kernel::W32(0x6C03DC, 0); tick();
     check(sounds.size() == 1, "A localized voice longer than four seconds must not expire its waiting response");
+    openshao::dialogue::SetRestoreGaps(.3, .3);
+    reset(); kernel::W32(0x6C03DC, 1); voice(0); kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.empty(), "A restored line must not start glued to the speech that delayed it");
+    std::this_thread::sleep_for(std::chrono::milliseconds(350)); tick();
+    check(sounds.size() == 1, "A restored line must play once the short silence has passed");
+    openshao::dialogue::SetRestoreGaps(0, 0);
+    reset(); kernel::W32(0x6C03DC, 1); voice(0); kernel::W32(0x6C03DC, 0);
+    kernel::W32(0x6C92F8, 1); tick();
+    check(sounds.empty(), "A restored line must not play during a held loading frame");
+    kernel::W32(0x6C92F8, 0); kernel::W32(0x4EF42C, 0); tick();
+    check(sounds.size() == 1,
+          "A zero render-callback flag must not suppress dialogue during a running Wu Shi world");
+    kernel::W32(0x4EF42C, 1); tick();
+    check(sounds.size() == 1, "A later render-callback flag change must not duplicate restored dialogue");
     reset(); kernel::W16(0x5D38B6, 1); voice(0, 0, 0x871111EC, 1);
     check(last_native_sound == 0xEFD60587 && !kernel::R32(0x2100),
           "Kung Lao's connected moon event must use its existing original recording and restore the script bytes");
+    // Native once gates check trigger+0x70 bit1: _d_kl_moon2b (0x401) and the 0x403
+    // moon triggers must keep separate gates.
+    for (uint32_t trigger : {0x2500u, 0x2600u}) {
+        reset(); kernel::W16(0x5D38B6, 1);
+        kernel::W32(trigger + 0x70, 0x401);
+        voice(0, 0, 0x871111EC, 1, trigger);
+        check((kernel::R32(trigger + 0x70) & 2) != 0,
+              "Restoring the moon cue must retain native once-only scheduling instead of looping every frame");
+        check((kernel::R32(trigger + 0x70) & ~2u) == 0x401,
+              "Repairing moon repetition must preserve the trigger's other conditions and enable flags");
+    }
+    reset(); kernel::W16(0x5D38B6, 1); kernel::W32(0x2570, 0x401);
+    voice(0, 0xA8767F57, 0x871111EC, 1, 0x2500);
+    check(kernel::R32(0x2570) == 0x401, "Other native speech must retain its repeat behavior");
+    reset(); kernel::W16(0x5D38B6, 1); kernel::W32(0x505970, 96); kernel::W32(0x2570, 0x401);
+    voice(0, 0, 0x871111EC, 1, 0x2500);
+    check(kernel::R32(0x2570) == 0x401, "The moon scheduling repair must stay in its original room");
     reset(); kernel::W16(0x5D38B6, 1); settings.restore_dialogue = false; voice(0, 0, 0x871111EC, 1);
     check(last_native_sound == 0, "Disabling restoration must preserve the original zero sound request");
 
@@ -375,8 +608,29 @@ int main() {
         {0xFB84C07D, 0x3B40C987, 0}, {0x2326CE4B, 0xDDF65883, 1},
         {0xCB402320, 0x0620E037, 0}, {0x6465CF88, 0xA7360BE3, 1},
     };
+    // The warlord remarks need the warlord: an enemy that appears with _d_war_evnts' spawn.
+    auto enemy = [&](uint32_t slot, uint32_t id, int32_t health) {
+        const uint32_t at = 0x5D1AB8 + slot * 0x3238, component = 0x7400 + slot * 0x400;
+        kernel::W32(at + 0x68, id); kernel::W16(at + 0x1DFE, 20); kernel::W32(at + 0x200, component);
+        kernel::W32(component + 0x368, uint32_t(health)); kernel::W32(component + 0x370, 500);
+    };
     for (auto cue : cues) {
-        reset(); activate(101, cue.target, cue.character); tick();
+        const bool warlord = cue.target == 0xCB402320 || cue.target == 0x6465CF88;
+        if (warlord) {
+            reset(); kernel::W32(0x505970, 101); enemy(4, 0xEE01, 300); tick();
+            activate(101, cue.target, cue.character); tick();
+            check(sounds.empty(), "Other enemies alone do not stand in for the warlord");
+            reset(); kernel::W32(0x505970, 101); enemy(4, 0xEE01, 300); tick();
+            activate(101, 0x94FE469F, cue.character, 1, 0x3A); tick();
+            activate(101, cue.target, cue.character); tick();
+            check(sounds.empty(), "When the warlord does not appear (already beaten), the monk stays quiet");
+        }
+        reset();
+        if (warlord) {
+            kernel::W32(0x505970, 101); enemy(4, 0xEE01, 300); tick();
+            enemy(5, 0xB055, 500); activate(101, 0x94FE469F, cue.character, 1, 0x3A); tick();
+        }
+        activate(101, cue.target, cue.character); tick();
         check(sounds.size() == 1 && sounds[0][2] == cue.sound,
               "A surviving Wu Shi activation must recover its exact authored character line");
         kernel::W32(0x6C03DC, 0); activate(101, cue.target, cue.character); tick();
@@ -389,8 +643,7 @@ int main() {
         check(sounds.empty(), "A valid original trigger must not gain a duplicate recovery request");
     }
     reset(); activate(96, 0xB001C237, 0); tick();
-    check(sounds.size() == 1 && sounds[0][2] == 0x822C1D1F,
-          "Raiden's surviving combo-tutorial activation must recover the original instruction");
+    check(sounds.empty(), "Raiden's combo tip (vo_rdn_help_gl_ps2_13) was removed from the story");
     reset(); tick();
     std::this_thread::sleep_for(std::chrono::milliseconds(4100));
     activate(101, 0xC1CE6AC6, 0); tick();
@@ -411,36 +664,6 @@ int main() {
     check(sounds.size() == 1 && sounds[0][2] == 0x7CE0B357,
           "The loading-scene guard must retain the authored post-scene request");
 
-    // The deleted quake targets retain their hit schedules, while these original
-    // recordings independently establish singular/plural escape warnings.
-    struct EscapeFixture { uint32_t first, second, solo, koop; int16_t actor; };
-    const EscapeFixture escape[] = {
-        {0x983DC662, 0x9F8C2AF9, 0xBEC5353E, 0x0CE5E92E, 0},
-        {0x29AEB768, 0xB7CA22CB, 0xEA53782A, 0xADF302FA, 1},
-    };
-    for (const auto& cue : escape) for (uint32_t mode : {0u, 1u}) {
-        reset(); kernel::W32(0x5ACEBC, 0x3400); kernel::W32(0x3488, mode);
-        activate(96, cue.first, cue.actor); tick();
-        check(sounds.size() == 1 && sounds[0][2] == (mode ? cue.koop : cue.solo),
-              "A quake-hit recovery must use the current protagonist's singular solo or plural ko-op warning");
-        kernel::W32(0x6C03DC, 0); activate(96, cue.second, cue.actor); tick();
-        check(sounds.size() == 1, "Alternate quake-hit targets must share one delivered escape warning per actor and room");
-        reset(); kernel::W32(0x5ACEBC, 0x3400); kernel::W32(0x3488, mode);
-        activate(96, cue.second, cue.actor); tick();
-        check(sounds.size() == 1 && sounds[0][2] == (mode ? cue.koop : cue.solo),
-              "Either surviving quake-hit target must recover the escape warning");
-        reset(); kernel::W32(0x5ACEBC, 0x3400);
-        activate(96, cue.first, cue.actor == 0 ? 1 : 0); tick();
-        check(sounds.empty(), "A quake activation for the other protagonist must not use the wrong voice");
-        reset(); kernel::W32(0x5ACEBC, 0x3400); settings.restore_dialogue = false;
-        activate(96, cue.first, cue.actor); tick();
-        check(sounds.empty(), "Disabling recovery must leave the lost quake activations unchanged");
-        reset(); kernel::W32(0x5ACEBC, 0x3400);
-        activate(98, cue.first, cue.actor); tick();
-        check(sounds.empty(), "Escape warnings must remain in the original first-room quake context");
-        reset(); activate(96, cue.first, cue.actor); tick();
-        check(sounds.empty(), "No escape warning may be invented before the native game-mode state exists");
-    }
     reset(); kernel::W32(0x6C03DC, 1); kernel::W32(0x5D1AB8 + 0x68, 10);
     voice(0, 0x11112222); kernel::W32(0x5D1AB8 + 0x68, 11); voice(0, 0x11112222);
     kernel::W32(0x6C03DC, 0); tick(); tick();
@@ -536,6 +759,19 @@ int main() {
     check(last_native_sound==0x526CF529 && last_native_bank==0x871111EC &&
           kernel::R32(0x2100)==0x93FDBC98 && kernel::R32(0x2104)==0xAECADCD8,
           "The acid puzzle's broken Liu hint must use his existing localized Forest Map 9 line");
+    kernel::W32(0x6C03DC, 0); voice(0,0x93FDBC98,0xAECADCD8);
+    check(last_native_sound==0, "The acid hint's authored 800-update recurrence must play only once per visit");
+    kernel::W32(0x6C03DC, 0); kernel::W16(0x5D38B6,1); voice(0,0x8B431000,0xAECADCD8);
+    check(last_native_sound==0xDF681048, "Each monk keeps his own acid hint in Ko-op");
+    kernel::W32(0x6C03DC, 0); kernel::W16(0x5D38B6,0);
+    kernel::W32(0x505970,137); tick(); kernel::W32(0x505970,136); tick();
+    voice(0,0x93FDBC98,0xAECADCD8);
+    check(last_native_sound==0x526CF529, "Re-entering Forest Map 9 must allow the acid hint again");
+    reset(); kernel::W32(0x505970,136); kernel::W32(0x6C03DC,0x7000);
+    voice(0,0x93FDBC98,0xAECADCD8); kernel::W32(0x6C03DC,0); tick(); tick();
+    check(sounds.size()==1 && sounds[0][2]==0x526CF529, "A deferred acid hint must still play");
+    kernel::W32(0x6C03DC,0); voice(0,0x93FDBC98,0xAECADCD8);
+    check(last_native_sound==0, "A deferred acid hint that played must not repeat");
     reset(); kernel::W32(0x505970,136); kernel::W16(0x5D38B6,1);
     voice(0,0x8B431000,0xAECADCD8);
     check(last_native_sound==0xDF681048,
@@ -630,6 +866,14 @@ int main() {
           "A variation whose direct definition is absent from the loaded locale must retain the original stream");
 
     struct CaptionFixture { uint32_t room, text, original, recovered; };
+    for(const uint32_t host_text:{0xFFFFFD20u,0xFFFFFD00u,0xFFFFFD01u,0xFFFFFD02u,0xFFFFFD03u}){
+        X86Context custom{};custom.esp=0x1000;custom.ecx=0x12345678;
+        kernel::W32(custom.esp,0x86EE7);kernel::W32(custom.esp+4,host_text);
+        caption_lookup_sound=0xDEADBEEF;
+        sub_000111EF(custom,memory.data());
+        check(custom.eax==0 && custom.ecx==0x12345678 && custom.esp==0x1004,
+              "Host Survival rules and portal messages bypass the native voice array before its unbounded text lookup");
+    }
     const CaptionFixture caption_fixtures[]{
         {101, 102, 0, 0x83D60341}, {108, 15, 0, 0x36E6C19B},
         {101, 14, 0x39D84601, 0x0C96F6E1}, {99, 11, 0x77ACBBDF, 0x73D3D82C},
@@ -673,6 +917,35 @@ int main() {
         kernel::W32(0x3008, 0x4000); kernel::W32(0x3118, uint32_t(ids.size()));
         for (size_t i = 0; i < ids.size(); ++i) kernel::W32(0x4000 + uint32_t(i) * 28, ids[i]);
     };
+    // The monk's escape warning plays as the first gate opens (_d_door05up/_d_door05_b), not on quake hits.
+    struct EscapeFixture { uint32_t first, second, solo, koop; int16_t actor; };
+    const EscapeFixture escape[] = {
+        {0x983DC662, 0x9F8C2AF9, 0xBEC5353E, 0x0CE5E92E, 0},
+        {0x29AEB768, 0xB7CA22CB, 0xEA53782A, 0xADF302FA, 1},
+    };
+    for (const auto& cue : escape) for (uint32_t mode : {0u, 1u}) {
+        const uint32_t expected = mode ? cue.koop : cue.solo;
+        reset(); definitions({expected}); kernel::W32(0x5ACEBC, 0x3400); kernel::W32(0x3488, mode);
+        activate(96, cue.first, cue.actor); kernel::W32(0x6C03DC, 0); tick();
+        check(sounds.empty(), "A quake hit must no longer carry the escape warning");
+        activate(96, 0x9406D458, cue.actor, 1, 142); tick();
+        check(sounds.empty(), "The gate warning waits a beat after the gate starts opening");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1600)); tick();
+        check(sounds.size() == 1 && sounds[0][2] == expected,
+              "The first gate must carry the protagonist's solo or Ko-op escape warning");
+        kernel::W32(0x6C03DC, 0); activate(96, 0x9406D458, cue.actor, 1, 142); tick(); tick();
+        check(sounds.size() == 1, "The gate warning plays once per room load");
+        reset(); definitions({expected}); kernel::W32(0x5ACEBC, 0x3400); kernel::W32(0x3488, mode);
+        activate(96, 0x9406D458, cue.actor, 0, 142); activate(98, 0x9406D458, cue.actor, 1, 142); tick();
+        check(sounds.empty(), "Only the first gate's activation in Wu Shi Map 01 carries the warning");
+        reset(); definitions({expected}); kernel::W32(0x5ACEBC, 0x3400); settings.restore_dialogue = false;
+        activate(96, 0x9406D458, cue.actor, 1, 142); tick();
+        check(sounds.empty(), "Disabling recovery leaves the gate unchanged");
+    }
+    reset(); definitions({0xBEC5353E}); kernel::W32(0x5ACEBC, 0x3400);
+    activate(96, 0x9A955116, 0, 1, 33); tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1600)); tick();
+    check(sounds.size() == 1 && sounds[0][2] == 0xBEC5353E, "Either gate opening carries the warning");
     // Tombs Map 31 has a connected text-58 event and two unused original
     // entrance takes. The chosen voice follows the actual lead character.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
@@ -726,10 +999,13 @@ int main() {
         {104, 0xC3FF4851, 71, false, {0x34179BEB,0xBB576E4B}},
         {72, 0x898DD582, 54, true, {0x7D0C8867,0x3AACF2B7,0x1EDCBD5D,0x597CC78D,0x641CEE3D}},
         {72, 0x898DD582, 54, false, {0x7D0C8867,0x3AACF2B7,0xDB7B83D3,0x9CDBF903,0x1EDCBD5D,0x597CC78D,0x641CEE3D}},
-        {144, 0x1569801B, 59, false, {0xE8D4E56F,0xAF749FBF,0xD4A5AA7A,0x9305D0AA,0x1C45250A}},
+        {144, 0x1569801B, 59, false, {0xE8D4E56F,0xAF749FBF,0xD4A5AA7A,0x9305D0AA,0x1C45250A,
+            0x8B04D055,0xCCA4AA85,0xF1C48335,0xBB749B94,0x4FE2748B,0x72825D3B}},
         {132, 0x2DB6EB65, 66, true, {0xBEAE2A44,0xF90E5094}},
-        {160, 0xB9E947A4, 52, true, {0xBDBB26C9,0x784BCBC8,0xD32CA20D,0x948CD8DD,0xA9ECF16D,0x2763861E,0x60C3FCCE}},
-        {160, 0xB9E947A4, 55, false, {0xBDBB26C9,0x784BCBC8,0xA9ECF16D,0x2763861E,0x60C3FCCE}},
+        {160, 0xB9E947A4, 52, true, {0xBDBB26C9,0x784BCBC8,0xD32CA20D,0x948CD8DD,0xA9ECF16D,0x2763861E,0x60C3FCCE,
+            0x0F9BFAD9,0x452BE278,0x9C60D6C1}},
+        {160, 0xB9E947A4, 55, false, {0xBDBB26C9,0x784BCBC8,0xA9ECF16D,0x2763861E,0x60C3FCCE,
+            0x0F9BFAD9,0x452BE278,0x9C60D6C1}},
         {15, 0x457D44DD, 0, false, {0x02DD3E0D}},
         {15, 0x280C26F7, 1, false, {0x6FAC5C27}},
         {73, 0x56E516CA, 62, true, {0x584D7D7D,0xC4F60FC3,0xEA6DA16D,0xD9F33F7B}},
@@ -756,9 +1032,8 @@ int main() {
         settings.restore_dialogue = false; kernel::W32(0x6C03DC, 0); voice(0, family.source);
         check(last_native_sound == family.source, "Disabling restoration must retain every original scripted family");
     }
-    // Baraka: the original phase1/2 07 taunt must stay retail, not randomly
-    // replaced by any of the nine 03/04/05 laughs. Native phase3 06_1 is the
-    // real later event to which a SINGLE supplemental reaction can be queued.
+    // Baraka's phase1/2 07 taunt stays retail; only native phase3 06_1 may queue a
+    // single supplemental reaction.
     const std::vector<uint32_t> baraka_reactions{0xF26D1CDF,0xB5CD660F,0x88AD4FBF,
         0x37CA2251,0x706A5881,0x4D0A7131,0x91BD29E5,0xD61D5335,0xEB7D7A85};
     for (const auto seed : {0u, 1u, 1234u}) {
@@ -804,9 +1079,8 @@ int main() {
         check(sounds.size()==2 && sounds.back()[2]==0xF26D1CDF,
               "After authentic phase3 speech, co-op and solo Baraka each allow one late reaction");
     }
-    // Solo never receives retail 08_1 from the original script. It must
-    // nevertheless reach BOTH user-approved 08 alternatives via a real 06
-    // phase3 request, then play its one late reaction LAST.
+    // Solo never gets retail 08_1: a real phase3 06 request reaches both approved 08
+    // alternatives, then its late reaction plays last.
     for (const uint32_t seed : {0u, 1u}) {
         reset();definitions({0x9F25265E,0xA2450FEE,0xF26D1CDF});
         kernel::W32(0x505970,15);kernel::W16(0x5D38B6,56);
@@ -829,9 +1103,8 @@ int main() {
         check(sounds.size()==2,
               "Repeating phase3 cannot loop either solo Baraka speech or reaction");
     }
-    // If the initially selected take is missing, try the other actual loaded
-    // definition; if neither exists, keep the original phase3 voice and the
-    // independently available later reaction.
+    // A missing take falls back to the other loaded one; with neither, keep the
+    // original phase3 voice and the later reaction.
     reset();definitions({0xA2450FEE,0xF26D1CDF});
     kernel::W32(0x505970,15);kernel::W16(0x5D38B6,56);
     kernel::W32(0x5D1AB8+0x68,0xBABA);kernel::W32(0x5ACEBC,0x3500);
@@ -850,9 +1123,8 @@ int main() {
     kernel::W32(0x5ACEBC,0x3500);settings.restore_dialogue=false;
     voice(0,0xA0553378,0xAECADCD8);kernel::W32(0x6C03DC,0);tick();
     check(sounds.empty(),"Disabling dialogue recovery preserves original Baraka only");
-    // LF Map 5's two new Mileena 5_03 takes explicitly address BOTH monks.
-    // Neither may replace the original 5_02 solo taunt, entrance or a taunt
-    // spoken by some other actor or in another room.
+    // LF Map 5's two Mileena 5_03 takes address both monks and never replace 5_02, her
+    // entrance or other actors' and rooms' taunts.
     for (int scenario = 0; scenario < 5; ++scenario) {
         reset(); definitions({0xBEAE2A44,0xF90E5094});
         kernel::W32(0x505970, scenario == 2 ? 133 : 132);
@@ -879,9 +1151,8 @@ int main() {
         kernel::W32(0x4E74E4, sound);
         kernel::W32(0x4E74E8, handle);
     };
-    // The Fist of Ruin tutorial in Evil Monastery Map4 is native text100.
-    // Liu's remark about Kitana may follow it, but never interrupt the
-    // tutorial popup / original Raiden voice or play in a different room.
+    // Evil Monastery Map 4 Fist of Ruin tutorial (text100): Liu's Kitana remark may follow,
+    // never interrupt it or play in another room.
     for (int scenario=0;scenario<6;++scenario) {
         reset();definitions(scenario==4 ? std::vector<uint32_t>{} :
                             std::vector<uint32_t>{0xA6A85EC8});
@@ -903,10 +1174,8 @@ int main() {
     tick();kernel::G<uint8_t>(0x4E74E0)=0;tick();
     check(sounds.size()==1 && sounds.back()[2]==0xA6A85EC8,
           "Fist of Ruin type6 popup can be a visible message without a normal caption audio handle");
-    // Foundry Map11's two original stage voices describe the background
-    // warriors, which are spawned by the local _d_bgchar01 stage event. No
-    // original sound request exists: this is a guarded editorial ONE-SHOT
-    // after the room settles, not an invented native dialogue trigger.
+    // Foundry Map 11 background warriors (_d_bgchar01) have no native sound request: one
+    // guarded editorial line after the room settles.
     for (const auto hero : {int16_t(0),int16_t(1)}) {
         reset();definitions({0xA09578E5,0x7B43C051});
         kernel::W32(0x505970,74);kernel::W16(0x5D38B6,hero);
@@ -927,10 +1196,8 @@ int main() {
         for(unsigned i=0;i<95;++i)tick();
         check(sounds.empty(),"Foundry spectator remarks must not play in wrong room, without bank/hero or disabled recovery");
     }
-    // Forest Map10 = native room 137; debug_map 138 is a display index, not
-    // CurrentRoom. The original room137 XBE dispatcher prebuffers E8F451C7
-    // and MTR3652 _d_spawn activates _d_snakes with target91FD0438/index19.
-    // Neither entering the room nor buffering the stream proves an emergence.
+    // Forest Map 10 = room 137 (debug 138 is a display index). _d_snakes (91FD0438/19) starts
+    // the emergence; entering or prebuffering E8F451C7 proves nothing.
     reset();definitions({0x919A865F});kernel::W32(0x505970,137);
     kernel::W16(0x5D38B6,1);tick();
     check(sounds.empty(),"Forest snake guidance must not play on map entry");
@@ -983,10 +1250,8 @@ int main() {
     kernel::G<uint8_t>(0x4E74E0)=0;tick();
     check(sounds.size()==1 && sounds.back()[2]==0x919A865F,
           "Raiden can play once when the native snake stream and caption are finished");
-    // Retail can display the authored snake camera sequence yet reject its
-    // audiostreamplay (missing prebuffer, sound option or script guard). A
-    // genuine _d_snakes activation followed by the native cinematic edge is
-    // sufficient to deliver Raiden after it, never while the scene is active.
+    // Retail may show the snake camera yet reject its stream: a real _d_snakes activation plus
+    // the cinematic edge delivers Raiden after the scene, never during it.
     reset();definitions({0x919A865F});activate(137,0x91FD0438u,1,1,19);
     kernel::G<uint8_t>(0x6C4198)=1;tick();
     check(sounds.empty(),"A visual snake cinematic in progress cannot be interrupted by Raiden");
@@ -999,9 +1264,8 @@ int main() {
     kernel::G<uint8_t>(0x6C4198)=1;tick();
     kernel::G<uint8_t>(0x6C4198)=0;tick();
     check(sounds.empty(),"An unrelated cinematic without original snake activation must not request Raiden");
-    // New independent source of truth: the original 17C0B0 PLAY callback
-    // accepts the preloaded E8F451C7 stream, even if the earlier indirect
-    // activatetrigger callback 170330 did not pass through our wrapper.
+    // Independent source: the 17C0B0 PLAY callback accepting E8F451C7, even when
+    // activatetrigger 170330 bypassed our wrapper.
     reset();definitions({0x919A865F});kernel::W32(0x505970,137);
     original_stream_event(0xE8F451C7);tick();
     check(sounds.empty(),"A native script audiostreamplay request alone cannot prove Raiden's scene has played");
@@ -1096,8 +1360,12 @@ int main() {
         kernel::W32(0x505970, 129); tick();
         kernel::W32(0x505970, 128); forest_caption(62, raiden, 0x5000); tick();
         kernel::G<uint8_t>(0x4E74E0) = 0; tick();
+        check(sounds.size() == 1, "Re-entering the Forest Map 1 room must not repeat an addition already heard");
+        ++checkpoint_restores; tick();
+        kernel::W32(0x6C03DC, 0); forest_caption(62, raiden, 0x5000); tick();
+        kernel::G<uint8_t>(0x4E74E0) = 0; tick();
         check(sounds.size() == 2 && sounds.back()[2] == reply,
-              "Re-entering the Forest Map 1 room can recover its hint response again");
+              "After a death/retry checkpoint restore the hint response plays again");
     }
     for (uint32_t scenario = 0; scenario < 7; ++scenario) {
         reset(); definitions({0x33A9328C, 0xC46D848D}); kernel::W32(0x505970, 128);
@@ -1183,6 +1451,20 @@ int main() {
     kernel::W32(0x696550, 0); tick();
     check(sounds.size() == 1, "Opening thought may start when the native scene stops");
 
+    for (const bool observed_frame : {false, true}) {
+        reset(); definitions({0xC629944C}); kernel::W32(0x505970, 128);
+        forest_caption(55, 0, 0); tick();
+        kernel::G<uint8_t>(0x4E74E0) = 0;
+        play(0x12344321);
+        if (observed_frame) tick();
+        finish(); tick(); tick();
+        check(sounds.empty(), "An old area-title reply must not survive a later finished or skipped scene");
+    }
+    reset(); definitions({0xC629944C}); kernel::W32(0x505970, 128);
+    forest_caption(55, 0, 0); tick(); kernel::G<uint8_t>(0x4E74E0) = 0;
+    kernel::W32(0x514508, 0x12344321); tick();
+    check(sounds.empty(), "A scene replacement must invalidate an extra still waiting outside the voice queue");
+
     // The second tree's original text63 is voiced by Smoke. Raiden's unused
     // 2_03 guidance should complement that voice, not replace or duplicate it.
     reset(); definitions({0xC33F8FCE}); kernel::W32(0x505970, 129);
@@ -1217,10 +1499,8 @@ int main() {
         check(sounds.empty(), "Evil Monastery marker must not restore rejected tower speech");
     }
 
-    // The player's actual offering leads to the original Warrior Shrine door
-    // stream. Its location title is mtxt_shrine (type 2, text 0), NOT the
-    // older text15 prompt. Never claim a completed visit before the real
-    // cs_wu_shi_13_2 (sound 800DFF7A) has started AND ended.
+    // Warrior Shrine: the door stream follows the offering; title is mtxt_shrine. A visit only
+    // counts once cs_wu_shi_13_2 (800DFF7A) has started and ended.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         const auto expected = hero == 0 ? 0x29314E8Bu : 0xE5E6EFA6u;
         reset(); definitions({0x29314E8B, 0xE5E6EFA6}); kernel::W32(0x505970, 108);
@@ -1270,9 +1550,8 @@ int main() {
     kernel::W32(0x696554, 0x5000); native_stream_playing = true; tick();
     settings.restore_dialogue = false; native_stream_playing = false; tick();
     check(sounds.empty(), "Disabled restoration cannot add shrine commentary after the native scene");
-    // Wu Shi Map 11 also has an initial mixed voiced scene followed by later
-    // water-lever victory streams. The four recordings are alternative takes:
-    // choose ONE appropriate hero line only after the real first CS ends.
+    // Wu Shi Map 11: four alternative takes; pick one hero line only after the first
+    // voiced scene really ends.
     for (const auto hero : {int16_t(0), int16_t(1)}) for (uint32_t take : {0u, 1u}) {
         const uint32_t expected = hero == 0 ? (take ? 0x96DE55A2u : 0xD17E2F72u)
                                             : (take ? 0x172550E4u : 0x50852A34u);
@@ -1348,25 +1627,34 @@ int main() {
         const auto reply = hero == 0 ? 0xBF0AC77Du : 0x64DC7FC9u;
         reset(); definitions({0xBF0AC77D, 0x64DC7FC9}); kernel::W32(0x505970, 96);
         kernel::W16(0x5D38B6, hero); voice(0, original);
+        kernel::W32(0x6C03DC, 0); tick(); tick();
         check(last_native_sound == original && sounds.empty(),
-              "Wu Shi Raiden reminders must keep the original monk's authored speech first");
-        kernel::W32(0x6C03DC, 0); tick();
-        check(sounds.size()==1 && sounds.back()[2]==reply,
-              "The original Wu Shi reminder may be followed by the same monk's unused response");
-        kernel::W32(0x6C03DC, 0); voice(0, original); tick();
-        check(sounds.size()==1,"Repeated Raiden reminders cannot flood recovered Wu Shi responses");
-        reset(); definitions({reply}); kernel::W32(0x505970, 97);
-        kernel::W16(0x5D38B6, hero); voice(0, original);
-        kernel::W32(0x6C03DC, 0); tick();
-        check(sounds.empty(), "Wu Shi's added responses must remain in their original Map 2 room");
-        reset(); definitions({reply}); kernel::W32(0x505970, 96);
-        kernel::W16(0x5D38B6, hero == 0 ? 1 : 0); voice(0, original);
-        kernel::W32(0x6C03DC, 0); tick();
-        check(sounds.empty(), "Wu Shi's response must not use the wrong hero's voice");
+              "The intro response must not pull the Wu Shi 2_02 reply forward");
+        reset(); definitions({0xBF0AC77D, 0x64DC7FC9});
+        activate(96, 0xB001C237, hero); tick(); tick();
+        check(sounds.size()==1 && sounds[0][2]==reply,
+              "The monk's Wu Shi 2_02 reply takes the removed combo tip's place, in the hero's voice");
+        kernel::W32(0x6C03DC, 0); activate(96, 0xB001C237, hero); tick(); tick();
+        check(sounds.size()==1, "The Wu Shi 2_02 reply plays once");
+        if (hero == 0) {
+            reset(); definitions({0xBF0AC77D, 0x64DC7FC9});
+            activate(96, 0xB001C237, hero); tick(); tick();
+            voice_stops.clear(); native_stream_playing = true; voice(0, 0x12345678);
+            native_stream_playing = false;
+            check(voice_stops.size()==1 && voice_stops[0]==0x5000 &&
+                  last_native_sound==0x12345678 && kernel::R32(0x6C03DC)==0x5000,
+                  "Native speech must interrupt our own addition instead of being deferred behind it");
+            reset(); definitions({0x12345678}); kernel::W32(0x505970, 96); kernel::W32(0x6C03DC, 0x7000);
+            native_stream_playing = true; voice(0, 0x12345678); native_stream_playing = false;
+            check(voice_stops.empty() || voice_stops.back()!=0x7000,
+                  "Native speech must never stop another native voice");
+        }
+        reset(); definitions({0xBF0AC77D, 0x64DC7FC9}); kernel::W16(0x5D38B6, 5);
+        activate(96, 0xB001C237, 5); tick(); tick();
+        check(sounds.empty(), "Only Liu Kang or Kung Lao answer");
     }
-    // Soul Tombs/Baraka: a separately requested Liu 16_05 may be replaced
-    // only for a SOLO Kung Lao player. Do not rewrite in co-op, other rooms,
-    // with absent bank definitions or with recovery disabled.
+    // Soul Tombs/Baraka: Liu 16_05 is replaced only for solo Kung Lao; never in Ko-op,
+    // other rooms, without definitions or with recovery off.
     for (int scenario=0; scenario<6; ++scenario) {
         reset(); definitions(scenario == 4 ? std::vector<uint32_t>{} :
                              std::vector<uint32_t>{0x530DACE6});
@@ -1379,9 +1667,8 @@ int main() {
         check(last_native_sound == expected && kernel::R32(0x2100)==0x6935F9CD,
               "Baraka's standalone original line may select Kung only in the valid solo-Kung context");
     }
-    // Scorpion's source 04 taunt still plays FIRST. Its distinct 02_1 line
-    // is an optional ONCE follow-up, never a replacement/loop and never
-    // triggered by another character, idle entry or disabled restoration.
+    // Scorpion's 04 taunt plays first; 02_1 is an optional once follow-up, never a
+    // replacement, loop or another actor's trigger.
     reset(); definitions({0x168B9C83}); kernel::W32(0x505970,160);
     kernel::W16(0x5D38B6,52); kernel::W32(0x5D1AB8+0x68,0x9000); tick();
     check(sounds.empty(),"Scorpion cannot speak an added line solely on boss room entry");
@@ -1413,9 +1700,8 @@ int main() {
         kernel::W32(0x6C03DC,0);tick();
         check(sounds.empty(),"Scorpion's extra speech must reject incorrect room, actor, option or bank");
     }
-    // Evil Monastery Map4: original text45 is the audible start of the first
-    // THREE-sister fight. A Mileena-specific 3-women joke may start only after
-    // that caption/audio ends, with all three opponents still present.
+    // Evil Monastery Map 4: text45 opens the three-sister fight; the Mileena joke waits
+    // for it to end with all three still present.
     auto three_sisters = [&] {
         for (uint32_t i=0;i<3;++i) {
             const uint32_t at=0x5D1AB8+(i+2)*0x3238;
@@ -1451,9 +1737,8 @@ int main() {
         tick();kernel::G<uint8_t>(0x4E74E0)=0;tick();
         check(sounds.empty(),"The three-woman joke requires true start and opponents; freeing Kitana cancels it");
     }
-    // Spare EM4 recordings are one-shot fight comments, NOT room-entry lines.
-    // Only a confirmed END of Mileena's original attack animations (which
-    // contain the retail attack grunts) may schedule the editorial speech.
+    // Spare EM4 lines are one-shot fight comments: only the end of Mileena's original
+    // attack animations may schedule them.
     auto mileena_anim = [&](uint32_t anim) {
         kernel::W32(0x1004,3);kernel::W32(0x1008,anim);
         X86Context ctx{};ctx.esp=0x1000;
@@ -1499,9 +1784,8 @@ int main() {
     activate(195,2447738644u,0,1,4);mileena_anim(1700);tick();
     check(sounds.size()==1 && sounds.back()[2]==0x804E23CE,
           "Freeing Kitana must cancel any later Mileena combat taunt, not erase the original scene");
-    // Forest Map 5 must NEVER try to play Evil Monastery return voices.
-    // The stage is allowed to use only the original loaded Forest bank;
-    // there must be no host PCM playback or cross-bank substitution.
+    // Forest Map 5 never plays Evil Monastery voices: only its loaded bank, no host PCM
+    // or cross-bank substitution.
     reset();definitions({0x0ACC1FAF,0x4D6C657F});
     kernel::W32(0x505970,132);kernel::W16(0x5D38B6,66);
     kernel::W32(0x5D1AB8+0x68,0xB000);
@@ -1521,23 +1805,103 @@ int main() {
     reset(); definitions({0xF26D1CDF}); kernel::W32(0x505970,15); kernel::W16(0x5D38B6,59);
     voice(0,0x66FE4E8E,0xAECADCD8);
     check(last_native_sound==0x66FE4E8E,"A Baraka family must not be selected for another actor sharing a script request");
-    struct ActivationFixture { uint32_t room, target, index, sound; int16_t actor; };
-    const ActivationFixture phase_activations[]{
-        {96,0x30A4AFE0,0xFFFFFFFF,0x2AD7B0C5,0},
-    };
-    for (const auto& cue : phase_activations) {
-        reset(); definitions({cue.sound}); activate(cue.room,cue.target,cue.actor,1,cue.index); tick();
-        check(sounds.size()==1 && sounds[0][2]==cue.sound,
-              "An existing authored combat or tutorial activation must recover the context-matched direct recording");
-        kernel::W32(0x6C03DC,0); activate(cue.room,cue.target,cue.actor,1,cue.index); tick();
-        check(sounds.size()==1, "A restored phase instruction must not repeat on the same activation");
-        reset(); definitions({cue.sound}); settings.restore_dialogue=false;
-        activate(cue.room,cue.target,cue.actor,1,cue.index); tick();
-        check(sounds.empty(), "Disabled restoration must leave contextual activation instructions silent");
+    // Orochi (Tombs Map 13) heals by devouring Tarkatans: the hero remarks once per visit.
+    for (const auto hero : {int16_t(0), int16_t(1)}) {
+        const uint32_t remark = hero == 0 ? 0xAE950209u : 0x94AD5722u;
+        const uint32_t boss = 0x5D1AB8 + 3 * 0x3238;
+        reset(); definitions({0xAE950209, 0x94AD5722}); kernel::W32(0x505970, 12); kernel::W16(0x5D38B6, hero);
+        kernel::W32(boss + 0x68, 0xB055); kernel::W16(boss + 0x1DFE, 80); kernel::W32(boss + 0x200, 0x7000);
+        kernel::W32(0x7000 + 0x370, 1000); kernel::W32(0x7000 + 0x368, 300); tick();
+        kernel::W32(0x7000 + 0x368, 250); tick(); tick();
+        check(sounds.empty(), "Damage to Orochi must not trigger the feeding remark");
+        kernel::W32(0x7000 + 0x368, 400); tick(); tick();
+        check(sounds.size() == 1 && sounds[0][2] == remark, "Orochi's healing must trigger the hero's feeding remark");
+        kernel::W32(0x6C03DC, 0); kernel::W32(0x7000 + 0x368, 500); tick(); tick();
+        check(sounds.size() == 1, "The feeding remark plays only once per visit");
+        reset(); definitions({remark}); kernel::W32(0x505970, 13); kernel::W16(0x5D38B6, hero);
+        kernel::W32(boss + 0x68, 0xB055); kernel::W16(boss + 0x1DFE, 80); kernel::W32(boss + 0x200, 0x7000);
+        kernel::W32(0x7000 + 0x370, 1000); kernel::W32(0x7000 + 0x368, 300); tick();
+        kernel::W32(0x7000 + 0x368, 400); tick(); tick();
+        check(sounds.empty(), "The feeding remark belongs to Orochi's arena");
     }
-    // Real Ermac phase activations originate from the room script, whose
-    // event actor may NOT be the live Ermac instance. A phase cinematic can
-    // clear the normal voice queue, so keep the request until AFTER it ends.
+    // An optional addition waiting in the queue must not defer native speech when the slot is free.
+    {
+        const uint32_t boss = 0x5D1AB8 + 3 * 0x3238;
+        reset(); definitions({0xAE950209}); kernel::W32(0x505970, 12);
+        kernel::W32(boss + 0x68, 0xB055); kernel::W16(boss + 0x1DFE, 80); kernel::W32(boss + 0x200, 0x7000);
+        kernel::W32(0x7000 + 0x370, 1000); kernel::W32(0x7000 + 0x368, 300); tick();
+        kernel::W32(0x6C03DC, 0x7100); kernel::W32(0x7000 + 0x368, 400); tick();
+        check(sounds.empty(), "The remark waits while another voice speaks");
+        kernel::W32(0x6C03DC, 0); voice(0, 0x12345678);
+        check(last_native_sound == 0x12345678 && kernel::R32(0x6C03DC) == 0x5000,
+              "A queued optional addition must not defer native speech when the voice slot is free");
+        kernel::W32(0x6C03DC, 0); tick(); tick();
+        check(sounds.size() == 1 && sounds[0][2] == 0xAE950209, "The addition plays after the native line");
+    }
+    // Baraka's impale prompt (template 8, text 106) is voiced by vo_rai_impale 20 ticks later.
+    reset(); definitions({0x323E17E6}); kernel::W32(0x505970, 15);
+    kernel::G<uint8_t>(0x4E74E0) = 1; kernel::W32(0x4E74E4, 0x323E17E6); kernel::W32(0x4E74E8, 0); tick();
+    voice(0, 0x323E17E6);
+    check(last_native_sound == 0x323E17E6 && kernel::R32(0x6C03DC) == 0x5000 && sounds.empty(),
+          "Raiden's impale line must start with its prompt, not after the prompt closes");
+    reset(); definitions({0x323E17E6}); kernel::W32(0x505970, 15);
+    kernel::G<uint8_t>(0x4E74E0) = 1; kernel::W32(0x4E74E4, 0xFFFFFFFF); kernel::W32(0x4E74E8, 0); tick();
+    voice(0, 0x323E17E6);
+    check(last_native_sound == 0x323E17E6 && kernel::R32(0x6C03DC) == 0x5000 && sounds.empty(),
+          "A portrait prompt without a caption voice (sound FFFFFFFF) must not delay the script's line");
+    reset(); definitions({0x12345678}); kernel::W32(0x505970, 15);
+    kernel::G<uint8_t>(0x4E74E0) = 1; kernel::W32(0x4E74E4, 0x0BADF00D); kernel::W32(0x4E74E8, 0); tick();
+    voice(0, 0x12345678);
+    check(kernel::R32(0x6C03DC) == 0, "Another line still yields while a caption is creating its own voice");
+    std::this_thread::sleep_for(std::chrono::milliseconds(600)); tick(); tick();
+    check(sounds.size() == 1 && sounds[0][2] == 0x12345678,
+          "A caption that never creates its voice must not hold other speech for its whole display");
+    kernel::G<uint8_t>(0x4E74E0) = 0;
+    // Ermac's first line plays as _d_ermac raises him from the statue, once per room load.
+    {
+        const uint32_t ermac = 0x5D1AB8 + 2 * 0x3238;
+        reset(); definitions({0x537C2156}); kernel::W32(0x505970, 108);
+        activate(108, 0x769191E3, 0, 1, 3); tick();
+        check(sounds.empty(), "Ermac's intro waits for the spawn to settle");
+        kernel::W16(ermac + 0x1DFE, 68); kernel::W32(ermac + 0x68, 0xE123);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600)); tick(); tick();
+        check(sounds.size() == 1 && sounds[0][2] == 0x537C2156, "Ermac must open his presentation with his first line");
+        kernel::W32(0x6C03DC, 0); activate(108, 0x769191E3, 0, 1, 3);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600)); tick(); tick();
+        check(sounds.size() == 1, "Ermac's intro line plays once per room load");
+    }
+    // Wu Shi Map 06: Raiden explains the save shrines at the first totem, in a new unsaved campaign.
+    {
+        auto new_game = [&] { kernel::W32(0x505970, 96); play(0x7922A984); finish(); tick(); };
+        auto shrine_prompt = [&] {
+            kernel::W32(0x505970, 101); kernel::W32(0x6C03DC, 0); tick();
+            kernel::G<uint8_t>(0x4E74E0) = 1; kernel::W32(0x4E74F8, 60); tick();
+            kernel::G<uint8_t>(0x4E74E0) = 0; tick(); tick();
+        };
+        reset(); definitions({0x4B368C31}); new_game(); shrine_prompt();
+        check(sounds.size() == 1 && sounds[0][2] == 0x4B368C31, "A new game's first totem prompt brings Raiden's shrine hint");
+        shrine_prompt();
+        check(sounds.size() == 1, "The shrine hint plays once");
+        kernel::W32(0x505970, 102); tick(); shrine_prompt();
+        check(sounds.size() == 1, "Coming back to Map 06 does not repeat the shrine hint");
+        ++checkpoint_restores; tick(); shrine_prompt();
+        check(sounds.size() == 2, "After death or retry before saving, the shrine hint plays again");
+        ++save_slot_transfers; reset(); definitions({0x4B368C31}); shrine_prompt();
+        check(sounds.empty(), "Saving ends the shrine tutorial for that campaign");
+        ++save_slot_transfers; reset(); definitions({0x4B368C31}); shrine_prompt();
+        check(sounds.empty(), "A loaded campaign never gets the shrine tutorial");
+        reset(); definitions({0x4B368C31}); new_game(); shrine_prompt();
+        check(sounds.size() == 1, "A new game after loading another one still gets the tutorial");
+        reset(); definitions({0x4B368C31}); new_game(); kernel::W32(0x505970, 107); tick();
+        kernel::G<uint8_t>(0x4E74E0) = 1; kernel::W32(0x4E74F8, 60); tick(); kernel::G<uint8_t>(0x4E74E0) = 0; tick(); tick();
+        check(sounds.empty(), "Only the first totem, in Wu Shi Map 06, brings the hint");
+        save_slot_transfers = 0;
+    }
+    // Owner removed Raiden's vo_rdn_help_gl_ps2_1 ("defeat these enemies") from _d_tutor01.
+    reset(); definitions({0x2AD7B0C5}); activate(96,0x30A4AFE0,0); tick();
+    check(sounds.empty(), "The deleted _d_tutor01 target must stay silent");
+    // Ermac phase activations come from the room script (not the live Ermac); a phase
+    // cinematic can clear the queue, so hold the request until it ends.
     reset();definitions({0x14DC5B86,0x29BC7236});
     kernel::W16(0x5D38B6+0x3238,68);
     kernel::W32(0x5D1AB8+0x3238+0x68,0xE123);
@@ -1619,27 +1983,18 @@ int main() {
     };
     reset(); definitions({0x9EABBADC}); kernel::W32(0x505970,195); kernel::W16(0x5D38B6,65);
     animation(0,1721); tick();
-    check(sounds.size()==1 && sounds[0][2]==0x9EABBADC,
-          "Kitana's first completed capture animation must request the contextual spell warning");
-    kernel::W32(0x6C03DC,0); animation(0,1721); tick();
-    kernel::W32(0x5D1AB8+0x24,0); animation(0,1721); tick();
-    check(sounds.size()==1,"Repeating Kitana's captive state must not repeat Raiden's first warning");
-    reset(); definitions({0x9EABBADC}); kernel::W32(0x505970,195); kernel::W16(0x5D38B6,65);
-    accept_animation=false; animation(0,1721); tick();
-    check(sounds.empty(),"A rejected animation must not trigger its recovery voice");
-    accept_animation=true; animation(0,1721); tick();
-    check(sounds.size()==1,"A rejected animation must leave the later real capture eligible");
+    check(sounds.empty(), "Raiden's capture warning (vo_rdn_em_4_01) was removed from the story");
     for (const auto actor : {int16_t(66),int16_t(67)}) {
         const uint32_t group=actor==66?0xE35C1CF7:0xF0252683;
         reset(); stream_bank(group,{0x6B2B1C1C}); kernel::W32(0x505970,195); kernel::W16(0x5D38B6,actor);
         animation(0,1723); tick(); kernel::W32(0x6C03DC,0); tick();
-        check(sounds.size()==2 && sounds[0][2]==group && sounds[1][2]==0x6B2B1C1C,
-              "A real freeing attempt must queue the correct sister's original voice family and one Raiden warning");
+        check(sounds.size()==1 && sounds[0][2]==group,
+              "A real freeing attempt must queue the correct sister's original voice family, without Raiden's removed warning");
         kernel::W32(0x6C03DC,0); animation(0,1723); tick();
-        check(sounds.size()==2,"A repeated same-animation request must not flood freeing voices");
+        check(sounds.size()==1,"A repeated same-animation request must not flood freeing voices");
         kernel::W32(0x5D1AB8+0x24,0); animation(0,1723); tick();
-        check(sounds.size()==3 && sounds.back()[2]==group,
-              "A later distinct freeing attempt must retain native family variation without repeating Raiden");
+        check(sounds.size()==2 && sounds.back()[2]==group,
+              "A later distinct freeing attempt must retain native family variation");
     }
     auto native_audio = [&](uint32_t sound, bool banked=false) {
         kernel::W32(0x1004,banked?0:sound); kernel::W32(0x1008,sound);
@@ -1650,10 +2005,159 @@ int main() {
               "Native take recovery must preserve original argument words, result registers and callee stack cleanup");
         return ctx.eax;
     };
-    // Retail character voices may bypass the stage vosound event entirely.
-    // When the exact Liu 16_05 leaf reaches either native sound entry point,
-    // solo Kung should use the alternative in the SAME Soul Tombs bank.
-    // This test does not pretend to replace voices baked into film streams.
+    // Shao Kahn (room 73): the lead monk opens the fight as Shao Kahn's intro scene ends.
+    for (const auto hero : {int16_t(0), int16_t(1)}) {
+        const uint32_t opener = hero == 0 ? 0x2AFD818Fu : 0xC99901EFu;
+        auto count = [&](uint32_t sound) {
+            return std::count_if(sounds.begin(), sounds.end(), [&](const auto& x) { return x[2] == sound; });
+        };
+        reset(); definitions({opener}); kernel::W32(0x505970, 73); kernel::W16(0x5D38B6, hero);
+        play(0x60F8EA8D); tick();
+        check(count(opener) == 0, "The opener waits for Shao Kahn's intro to end");
+        finish(); tick();
+        check(count(opener) == 1, "The lead monk opens the Shao Kahn fight as the intro ends");
+        kernel::W32(0x6C03DC, 0); native_audio(0xFEDCADEA, true); tick();
+        check(count(0xFEDCADEA) == 1, "Shao Kahn's first taunt still plays with its gesture");
+        reset(); definitions({opener}); kernel::W32(0x505970, 72); kernel::W16(0x5D38B6, hero);
+        play(0x60F8EA8D); tick(); finish(); tick();
+        check(count(opener) == 0, "The opener belongs to Shao Kahn's arena");
+    }
+    // Foundry Map 04 (room 67): the lead monk points out the hooks as the entry camera (cin1) ends.
+    auto cin_camera = [&](uint32_t index) {
+        kernel::W32(0x599844, 0x3000);
+        kernel::W32(0x1004, 0x2000); kernel::W32(0x2008, 0x2100); kernel::W32(0x2100, index);
+        X86Context ctx{}; ctx.esp = 0x1000;
+        sub_00016924(ctx, memory.data());
+        check(ctx.eax == 0x1234 && ctx.ecx == 0x5678 && ctx.esp == 0x1010,
+              "The camera hook must preserve the native play_cincamera result and stack");
+    };
+    auto camera_ends = [&] { kernel::W32(0x301C, 0); };
+    for (const auto hero : {int16_t(0), int16_t(1)}) {
+        const uint32_t hint = hero == 0 ? 0x26AAB15Fu : 0xEA7D1072u;
+        auto heard = [&](uint32_t sound) {
+            return std::count_if(sounds.begin(), sounds.end(), [&](const auto& x) { return x[2] == sound; });
+        };
+        reset(); definitions({hint}); kernel::W32(0x505970, 67); kernel::W16(0x5D38B6, hero); tick();
+        cin_camera(1); tick(); tick();
+        check(heard(hint) == 0, "The hooks hint never talks over the entry camera");
+        camera_ends(); tick(); tick();
+        check(heard(hint) == 1, "The lead monk points out the hooks as the entry camera ends");
+        kernel::W32(0x6C03DC, 0);
+        cin_camera(3); tick(); camera_ends(); tick(); tick();
+        check(heard(hint) == 1, "The lift camera does not carry the hooks hint");
+        cin_camera(1); tick(); camera_ends(); tick(); tick();
+        check(heard(hint) == 1, "The hooks hint plays once per attempt");
+        reset(); definitions({hint}); kernel::W32(0x505970, 68); kernel::W16(0x5D38B6, hero); tick();
+        cin_camera(1); tick(); camera_ends(); tick(); tick();
+        check(heard(hint) == 0, "The hooks hint belongs to Foundry Map 04");
+        // After Test Your Might, the cauldron camera (cin2) ends with the monk's cauldron remark.
+        const uint32_t cauldron = hero == 0 ? 0x0AA55E0Eu : 0x67D43C24u;
+        reset(); definitions({hint, cauldron}); kernel::W32(0x505970, 67); kernel::W16(0x5D38B6, hero); tick();
+        cin_camera(2); tick(); tick();
+        check(heard(cauldron) == 0, "The cauldron remark waits a beat into the cauldron camera");
+        for (int i = 0; i < 46; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); tick(); }
+        check(heard(cauldron) == 1 && heard(hint) == 0,
+              "The lead monk remarks on the cauldron during its camera, without the hooks hint");
+        camera_ends(); tick(); tick();
+        kernel::W32(0x6C03DC, 0);
+        cin_camera(2); tick(); camera_ends(); tick(); tick();
+        check(heard(cauldron) == 1, "The cauldron remark plays once per attempt");
+    }
+    // Foundry Map 03 (room 66): Kung Lao speaks during the forge door camera (cin1) after the press.
+    {
+        const uint32_t remark = 0xE7636035;
+        auto heard = [&](uint32_t sound) {
+            return std::count_if(sounds.begin(), sounds.end(), [&](const auto& x) { return x[2] == sound; });
+        };
+        auto run = [&](int ms) {
+            for (int i = 0; i < ms / 50; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); tick(); }
+        };
+        reset(); definitions({remark}); kernel::W32(0x505970, 66); kernel::W16(0x5D38B6, 1); tick();
+        cin_camera(1); tick();
+        check(heard(remark) == 0, "The forge door remark waits a beat into the camera");
+        run(1300);
+        check(heard(remark) == 1, "Kung Lao speaks during the forge door camera");
+        camera_ends(); kernel::W32(0x6C03DC, 0); tick();
+        cin_camera(1); run(1300); camera_ends(); tick();
+        check(heard(remark) == 1, "The forge door remark plays once per attempt");
+        reset(); definitions({remark}); kernel::W32(0x505970, 66); kernel::W16(0x5D38B6, 0); tick();
+        cin_camera(1); run(1300); camera_ends(); tick();
+        check(heard(remark) == 0, "Liu has no forge door take");
+        reset(); definitions({remark}); kernel::W32(0x505970, 66); kernel::W16(0x5D38B6, 0);
+        kernel::W32(0x5ACEBC, 0x4000); kernel::W32(0x4000 + 0x88, 1); kernel::W16(0x5D38B6 + 0x3238, 1); tick();
+        cin_camera(1); run(1300); camera_ends(); tick();
+        check(heard(remark) == 1, "In Ko-op Kung Lao speaks the forge door remark as player 2 too");
+        reset(); definitions({remark}); kernel::W32(0x505970, 67); kernel::W16(0x5D38B6, 1); tick();
+        cin_camera(1); run(1300); camera_ends(); tick();
+        check(heard(remark) == 0, "The forge door remark belongs to Foundry Map 03");
+    }
+    // Foundry Map 02 (room 65): Liu remarks on the furnace 2 s after entering, until it is used.
+    {
+        const uint32_t remark = 0x2BB4C118;
+        auto heard = [&](uint32_t sound) {
+            return std::count_if(sounds.begin(), sounds.end(), [&](const auto& x) { return x[2] == sound; });
+        };
+        auto enter = [&](int16_t hero, bool solved) {
+            reset(); definitions({remark}); kernel::W32(0x505970, 65); kernel::W16(0x5D38B6, hero);
+            kernel::W32(0x5ACEBC, 0x4000); kernel::G<uint8_t>(0x4000 + 0x4874 + 26) = solved;
+            tick();
+        };
+        auto play_for = [&](int ms) {
+            for (int i = 0; i < ms / 50; ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); tick(); }
+        };
+        enter(0, false); tick();
+        check(heard(remark) == 0, "The furnace remark waits two seconds after entering");
+        play_for(2300); tick();
+        check(heard(remark) == 1, "Liu remarks on the furnace two seconds after entering");
+        kernel::W32(0x6C03DC, 0);
+        kernel::W32(0x505970, 66); tick(); kernel::W32(0x505970, 65); tick();
+        play_for(2300); tick();
+        check(heard(remark) == 2, "Until the furnace is used, every entry to Foundry Map 02 repeats the remark");
+        enter(0, true);
+        play_for(2300); tick();
+        check(heard(remark) == 0, "Once the furnace has been used (gameevent 26), the remark is gone");
+        enter(1, false);
+        play_for(2300); tick();
+        check(heard(remark) == 0, "Kung Lao has no furnace take");
+        enter(1, false); kernel::W32(0x4000 + 0x88, 1); kernel::W16(0x5D38B6 + 0x3238, 0);
+        play_for(2300); tick();
+        check(heard(remark) == 1, "In Ko-op Liu speaks the furnace remark as player 2 too");
+    }
+    // Wu Shi Map 08: one catapult remark, then one barricade remark, in the lead monk's voice.
+    for (const auto hero : {int16_t(0), int16_t(1)}) {
+        const uint32_t catapult = hero == 0 ? 0xEB5B5725u : 0xB2DD7840u;
+        const uint32_t barricade = hero == 0 ? 0xA1EB4F84u : 0x8FBD51F0u;
+        auto heard = [&](uint32_t sound) {
+            return std::count_if(sounds.begin(), sounds.end(), [&](const auto& x) { return x[2] == sound; });
+        };
+        reset(); definitions({catapult, barricade}); kernel::W32(0x505970, 103); kernel::W16(0x5D38B6, hero);
+        native_audio(0xF67B4949, true); tick();
+        check(heard(barricade) == 0, "A breakable before any catapult must not trigger the barricade remark");
+        native_audio(0xF5F029C2, true); tick();
+        check(heard(catapult) == 0, "The first catapult is fired by an enemy: no remark yet");
+        native_audio(0xF67B4949, true); tick();
+        check(heard(barricade) == 0, "No barricade remark before the catapult remark");
+        native_audio(0xF5F029C2, true); tick();
+        check(heard(catapult) == 1, "The second catapult launch must trigger the monk's catapult remark");
+        kernel::W32(0x6C03DC, 0); native_audio(0xF5F029C2, true); tick();
+        check(heard(catapult) == 1, "The catapult remark plays once per visit");
+        native_audio(0xF67B4949, true); tick();
+        check(heard(barricade) == 1, "The first broken barricade must trigger the barricade remark");
+        kernel::W32(0x6C03DC, 0); native_audio(0xF67B4949, true); tick();
+        check(heard(barricade) == 1, "The barricade remark plays once per visit");
+        kernel::W32(0x505970, 104); native_audio(0xB91B5BAA, true); tick();
+        kernel::W32(0x505970, 103); kernel::W32(0x6C03DC, 0);
+        native_audio(0xF5F029C2, true); native_audio(0xF5F029C2, true); tick(); tick();
+        check(heard(catapult) == 1, "Coming back to Map 08 must not repeat the catapult remark");
+        ++checkpoint_restores; tick();
+        native_audio(0xF5F029C2, true); native_audio(0xF5F029C2, true); tick(); tick();
+        check(heard(catapult) == 2, "After death or retry the catapult remark plays again");
+        reset(); definitions({catapult}); kernel::W32(0x505970, 104); kernel::W16(0x5D38B6, hero);
+        native_audio(0xF5F029C2, true); tick();
+        check(heard(catapult) == 0, "Catapult remarks belong to Wu Shi Map 08");
+    }
+    // Retail voices can bypass vosound: Liu 16_05 at either native entry becomes the Soul Tombs
+    // alternative for solo Kung (voices baked into films are out of scope).
     for (const bool banked : {false, true}) {
         for (int scenario=0;scenario<6;++scenario) {
             reset(); definitions(scenario == 4 ? std::vector<uint32_t>{} :
@@ -1673,10 +2177,8 @@ int main() {
     native_audio(0x457D44DD); // Different, real Liu projectile comment
     check(sounds.back()[2]==0x457D44DD,
           "Baraka Kung voice fix must never rewrite unrelated Liu dialogue requests");
-    // The original level's typed animation has a different audio lifecycle:
-    // buffer 6935F9CD at frame1300, then PLAY that same TAG at frame1450.
-    // The buffered AUDIO must become Kung, but the guest slot tag must stay
-    // Liu so the original PLAY/DELETE events can find and release its handle.
+    // Typed animation: buffer 6935F9CD at frame 1300, PLAY the same tag at 1450. The audio
+    // becomes Kung, but the slot tag stays Liu so PLAY/DELETE find the handle.
     auto stream_sound = [&](uint32_t sound) {
         kernel::W32(0x1004,sound);
         X86Context ctx{};ctx.esp=0x1000;
@@ -1732,5 +2234,83 @@ int main() {
     kernel::W16(0x5D38B6,0);kernel::W32(0x5D1AB8+0x1E04,12); variation_seed=1;
     native_audio(0xFEDCADEA,true);
     check(sounds.back()[2]==0x213172C8,"Shao Kahn's get-up instruction must require a protagonist hit reaction at an actual taunt cue");
+    for (const bool observed_frame : {false, true}) {
+        reset(); kernel::W32(0x505970, 101); play(0x12344321);
+        activate(101, 0xC1CE6AC6, 0);
+        if (observed_frame) tick();
+        finish(); tick();
+        check(sounds.size() == 1 && sounds[0][2] == 0x7CE0B357,
+              "The current scene's authored continuation must survive completion or a skip before its first update");
+    }
+    reset(); definitions({0x14DC5B86});
+    kernel::W16(0x5D38B6 + 0x3238, 68); kernel::W32(0x5D1AB8 + 0x3238 + 0x68, 0xE123);
+    activate(108, 0x5A3297F2u, 0, 1, 13); play(0x12344321); tick();
+    finish(); kernel::W32(0x6C03DC, 1); tick();
+    play(0x12344321); finish(); kernel::W32(0x6C03DC, 0); tick(); tick();
+    check(sounds.empty(), "A later cinematic must cancel an old Ermac phase request even with the same scene name");
+    activate(108, 0x5A3297F2u, 0, 1, 13); tick();
+    check(sounds.empty(), "Repeating a canceled Ermac activation must not resurrect the stale phase voice");
+
+    reset(); definitions({0x804E23CE, 0x85897096}); kernel::W32(0x505970, 195); three_sisters();
+    forest_caption(45, 0x12345678, 0x5000); tick();
+    play(0x12344321); kernel::G<uint8_t>(0x4E74E0) = 0; finish(); tick();
+    mileena_anim(1764); mileena_anim(1700); tick();
+    check(sounds.empty(), "Canceling Mileena's opening must not count as delivery and enable its follow-up taunts");
+
+    reset(); definitions({0x29314E8B, 0x14DC5B86}); kernel::W32(0x505970, 108);
+    kernel::W16(0x5D38B6 + 0x3238, 68); kernel::W32(0x5D1AB8 + 0x3238 + 0x68, 0xE123);
+    play(0x12344321); activate(108, 0x5A3297F2u, 0, 1, 13);
+    kernel::W32(0x69654C, 0x800DFF7A); kernel::W32(0x696554, 0x5000);
+    native_stream_playing = true; tick();
+    native_stream_playing = false; finish(); kernel::W32(0x6C03DC, 1); tick(); tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(8100)); tick();
+    kernel::W32(0x6C03DC, 0); tick(); kernel::W32(0x6C03DC, 0); tick();
+    check(std::none_of(sounds.begin(), sounds.end(), [](const auto& sound) { return sound[2] == 0x29314E8B; }),
+          "A shrine continuation held outside the queue too long after its scene must expire");
+    check(std::none_of(sounds.begin(), sounds.end(), [](const auto& sound) { return sound[2] == 0x14DC5B86; }),
+          "An Ermac phase request held outside the queue too long after its scene must expire");
+
+    reset(); definitions({0x64DC7FC9}); kernel::W32(0x505970, 96); kernel::W16(0x5D38B6, 1);
+    kernel::W32(0x514508, 0x7922A984); kernel::W32(0x4EF42C, 0);
+    voice(0, 0xF3D35938); voice(0, 0x5873A43A); tick();
+    native_stream_playing = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(8100)); tick();
+    check(sounds.empty(), "A long introduction must let Raiden finish before Kung Lao's response");
+    kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.size() == 1 && sounds[0][2] == 0x5873A43A,
+          "The valid introduction response must survive a long localized recording");
+    kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.size() == 1, "The intro response no longer carries the Wu Shi 2_02 extra");
+
+    reset(); definitions({0x64DC7FC9}); kernel::W32(0x505970, 96); kernel::W16(0x5D38B6, 1);
+    kernel::W32(0x514508, 0x7922A984); voice(0, 0xF3D35938);
+    play(0x18797C6C); finish(); kernel::W32(0x6C03DC, 0); tick();
+    voice(0, 0x65138D8A); native_stream_playing = true;
+    voice(0, 0x5873A43A); tutorial();
+    kernel::W32(0x6C03DC, 0); native_stream_playing = false; tick(); tick();
+    check(messages.size() == 1 && sounds.empty(),
+          "The attack panel must follow only its own line; a late intro response and its extra must be discarded");
+    kernel::W32(0x6C03DC, 0); voice(0, 0x5873A43A); tick();
+    check(last_native_sound == 0 && sounds.empty(),
+          "An intro response emitted after a scene change must not play or arm a new extra");
+
+    reset(); kernel::W32(0x505970, 96); kernel::W16(0x5D38B6, 1); kernel::W32(0x6C03DC, 1);
+    kernel::W32(0x6820A0 + 0xA8C0, 194); kernel::W32(0x6820A0 + 180 * 0xD8 + 0xC, 0x4000);
+    voice(0, 0xD733519A, 0x871111EC, 0xFFFFFFFF, 0x4000);
+    activate(96, 0xACC1E66A, 1, 0, 180); kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.empty(), "The native cancellation of a quake warning must expire its queued voice");
+
+    reset(); definitions({0x2AD7B0C5}); kernel::W32(0x6C03DC, 1);
+    activate(96, 0x30A4AFE0, 1); voice(0, 0x59BC5679);
+    activate(96, 0x7D27A93F, 1, 1, 161); kernel::W32(0x6C03DC, 0); tick();
+    check(sounds.empty(), "Starting the next arena phase must discard pending instructions from before the gate");
+    activate(96, 0x30A4AFE0, 1); voice(0, 0x59BC5679); tick();
+    check(sounds.empty() && last_native_sound == 0,
+          "Late gate-phase requests must not reappear after progression to the next arena");
+
+    reset(); play(); tick(); finish(); kernel::W32(0x6C03DC, 1); tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(8100)); tick();
+    kernel::W32(0x6C03DC, 0); tick();
+    check(messages.empty(), "An unplayed Cage caption must expire instead of starting long after the scene");
     return failures ? 1 : 0;
 }

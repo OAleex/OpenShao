@@ -33,6 +33,8 @@ inline constexpr ContextTake KanoTaunts[]{
 inline constexpr ContextTake ReptileTaunts[]{
     {0xE8D4E56F},{0xAF749FBF},{0xD4A5AA7A, TakeMode::Any, false, true},
     {0x9305D0AA, TakeMode::Any, false, true},{0x1C45250A},
+    // lf_17_05_1/2/3/9/12/13: taunt takes outside the native group (Living Forest bank).
+    {0x8B04D055},{0xCCA4AA85},{0xF1C48335},{0xBB749B94},{0x4FE2748B},{0x72825D3B},
 };
 // These takes address both monks: once each in Ko-op combat, after Mileena's entrance.
 inline constexpr ContextTake MileenaForestKoop[]{
@@ -43,6 +45,8 @@ inline constexpr ContextTake ScorpionTaunts[]{
     {0xBDBB26C9},{0x784BCBC8},
     {0xD32CA20D, TakeMode::Koop},{0x948CD8DD, TakeMode::Koop},
     {0xA9ECF16D},{0x2763861E},{0x60C3FCCE},
+    // nr_04_3/9/10: taunt takes outside the native group (Netherrealm bank).
+    {0x0F9BFAD9},{0x452BE278},{0x9C60D6C1},
 };
 inline constexpr ContextTake LiuProjectile[]{{0x02DD3E0D}};
 inline constexpr ContextTake KungProjectile[]{{0x6FAC5C27}};

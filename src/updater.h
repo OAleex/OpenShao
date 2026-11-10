@@ -13,6 +13,9 @@
 namespace openshao::update {
 inline constexpr const char* kLatestReleaseUrl = "https://api.github.com/repos/OAleex/OpenShao/releases/latest";
 inline constexpr const char* kReleasesPage = "https://github.com/OAleex/OpenShao/releases/latest";
+inline std::string ReleaseNotesUrl(std::string_view version) {
+    return "https://github.com/OAleex/OpenShao/releases/tag/v" + std::string(version);
+}
 
 struct Release {
     std::string version, page, package_name, package_url, checksums_url, sha256;

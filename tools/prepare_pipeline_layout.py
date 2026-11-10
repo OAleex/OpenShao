@@ -45,4 +45,21 @@ bool DescribePipelineLayout(const State& s, uint32_t prim, Assembled& out) {
 }
 
 '''
+    vertex = replace_once(vertex,
+        '    std::vector<uint32_t> seq(d.count);\n'
+        '    for (uint32_t i = 0; i < d.count; i++) seq[i] = DrawVertex(s, d, i);\n'
+        '    bool ranged = uint64_t(d.span) <= uint64_t(d.count) * kRangedSpanPerVertex + kRangedSpanSlack;\n',
+        '    const bool ranged = uint64_t(d.span) <= uint64_t(d.count) * kRangedSpanPerVertex + kRangedSpanSlack;\n'
+        '    // Sparse draws reuse decoded indices across input streams. Dense draws\n'
+        '    // read vertices in range order and only decode indices for topology.\n'
+        '    const uint32_t* seq = nullptr;\n'
+        '    if (!ranged) {\n'
+        '        static thread_local std::vector<uint32_t> sparse_indices;\n'
+        '        sparse_indices.resize(d.count);\n'
+        '        for (uint32_t i = 0; i < d.count; ++i) sparse_indices[i] = DrawVertex(s, d, i);\n'
+        '        seq = sparse_indices.data();\n'
+        '    }\n')
+    vertex = replace_once(vertex,
+        '    auto local = [&](uint32_t i) { return ranged ? seq[i] - d.first_vertex : i; };',
+        '    auto local = [&](uint32_t i) { return ranged ? DrawVertex(s, d, i) - d.first_vertex : i; };')
     return replace_once(vertex, '}  // namespace gpu\n', describe + '}  // namespace gpu\n')

@@ -74,13 +74,18 @@ void Poll(int port, input::Pad& pad) {
     std::lock_guard guard(lock);
     pad.connected = true;
     bindings::Values values{};
+    const bool native_enter_accept=recomp::raw::NativeEnterAccept();
     for(unsigned i=0;i<values.size();++i)for(int key:settings.keys[i]) {
-        if(key<=0 || key>=256)continue;
+        if(key<=0 || key>=256 || (native_enter_accept && key==VK_RETURN))continue;
         bool down=keys[key];
         if(key==VK_SHIFT)down=down || keys[VK_LSHIFT] || keys[VK_RSHIFT];
         if(key==VK_CONTROL)down=down || keys[VK_LCONTROL] || keys[VK_RCONTROL];
         if(key==18)down=down || keys[164] || keys[165];
         if(down)values[i]=1;
+    }
+    // Enter is Start in gameplay but Accept on the medallion pages.
+    if(native_enter_accept && keys[VK_RETURN]){
+        values[0]=1;
     }
     bindings::Apply(pad,values);
     mouse::Poll(pad);

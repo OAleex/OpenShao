@@ -18,8 +18,11 @@ namespace {
 constexpr uint32_t Queue=0x63F5E4,Count=0x63F5E0,Record=0x6C;
 struct MainEntry {bool visible=false;float left=0,top=0;unsigned alpha=0;};
 struct Arrow {uint32_t index;float left;};
-struct Scene {float title_right=0;std::vector<Arrow> arrows;bool main_anchor=false;float main_row_top=0;std::array<MainEntry,3> extras;};
+struct Scene {float title_right=0;std::vector<Arrow> arrows;bool main_anchor=false;float main_row_top=0;std::array<MainEntry,4> extras;std::array<MainEntry,6> main_rows;};
+constexpr std::string_view MainKeys[]={"main.single_player","main.koop","main.versus","main.load_game","main.options","main.kontent"};
 thread_local std::vector<Scene> scenes;
+struct RowOverride {bool active=false;std::string_view text;unsigned max_alpha=0;};
+thread_local std::array<RowOverride,6> row_overrides;
 thread_local std::bitset<512> viewport_arrows;
 float ReadFloat(uint32_t address){return std::bit_cast<float>(kernel::R32(address));}
 void WriteFloat(uint32_t address,float value){kernel::W32(address,std::bit_cast<uint32_t>(value));}
@@ -42,8 +45,7 @@ struct AcuteBounds {
     uint32_t top=0,bottom=0;
     bool changed=false;
     explicit AcuteBounds(bool needed) {
-        // The uppercase acute A ink starts two rows before its authored rectangle.
-        // Shift the sampling window to pixel centers without changing the glyph's size or the label baseline.
+        // The uppercase acute A ink starts two rows early: shift sampling to pixel centers.
         if(needed && kernel::R32(0x66C0E8+0x6424)==256 && kernel::R32(0x66C0E8+0x6428)==512 &&
            ReadFloat(Rect)==147.f/256 && ReadFloat(Rect+4)==127.f/512 &&
            ReadFloat(Rect+8)==165.f/256 && ReadFloat(Rect+12)==147.f/512) {
@@ -139,7 +141,7 @@ unsigned MainHighlight(uint32_t state,unsigned selection) {
     return std::min(selection,5u);
 }
 void MainExtraLabel(X86Context& ctx,uint32_t first,uint32_t end,bool selected,bool anchor_selected,unsigned row) {
-    if(first>=end || end>512 || row<6 || row>8)return;
+    if(first>=end || end>512 || row<6 || row>MainGameModeRow)return;
     float left=INFINITY,top=INFINITY;unsigned alpha=0;
     for(auto index=first;index<end;++index)for(unsigned v=0;v<3;++v) {
         const auto record=Queue+index*Record;
@@ -152,9 +154,10 @@ void MainExtraLabel(X86Context& ctx,uint32_t first,uint32_t end,bool selected,bo
     alpha=std::min(254u,(alpha*target+source/2)/source);
     if(!alpha)return;
     if(!scenes.empty()){scenes.back().extras[row-6]={true,left,top,alpha};return;}
-    constexpr std::string_view labels[]={"recomp.title","recomp.enhancements","main.exit_desktop"};
+    constexpr std::string_view labels[]={"recomp.title","recomp.enhancements","main.exit_desktop","main.game_mode"};
     const auto text=Catalog::Builtin().Get(launcher::Current().language,labels[row-6]);
-    if(!text.empty())NativeLabel(ctx,left+3,top+5+28.f*(row-5),text,1.1f,alpha,false,false,510);
+    if(!text.empty())NativeLabel(ctx,left+3,top+5+28.f*(row==MainGameModeRow?1:row-4)-MainMenuRise+
+        MainListAdjustment(MainVisualRow(row)),text,1.f,alpha,false,false,510);
 }
 void DimMenuLabel(uint32_t first,uint32_t end,bool selected) {
     if(!selected || first>=end || end>512)return;
@@ -165,8 +168,7 @@ void DimMenuLabel(uint32_t first,uint32_t end,bool selected) {
 }
 void NativeButton(X86Context& ctx,int x,int y,Button button) {
     const auto saved=ctx;
-    // Retail Options resolves these tokens through the active language table and icon font.
-    // The native font maps '<' and '>' to its horizontal direction icons (glyphs 136 and 135).
+    // The native font maps '<' and '>' to the direction icons (glyphs 136/135).
     const auto text=button==Button::Adjust?StringAddress("<>"):kernel::CallGuest(ctx,0x16992,{button==Button::Accept?0x5B2u:button==Button::Preview?0x5B5u:0x5B3u});
     ctx=saved;
     if(text)kernel::CallGuest(ctx,0x152960,{uint32_t(x),uint32_t(y),0x60,2,text});
@@ -178,6 +180,7 @@ void MainControllerNotice(X86Context& ctx,uint32_t text,unsigned alpha,float sca
     scale=FitScale(Measure(ctx,text),scale,190);
     if(scale>0)Label(ctx,410,184,text,std::min(254u,alpha*2),scale,false);
 }
+void OverrideMainRow(unsigned row,std::string_view text,unsigned max_alpha){if(row<row_overrides.size())row_overrides[row]={true,text,max_alpha};}
 void TitleWidth(float right){if(!scenes.empty())scenes.back().title_right=right;}
 float NativeLabel(X86Context& ctx,float x,float y,std::string_view text,float scale,unsigned alpha,bool title,bool compact,float available) {
     const auto address=StringAddress(EncodeNative(text,mods::SameLanguage(launcher::Current().language,"pt-BR")));
@@ -196,13 +199,26 @@ void EndScene(X86Context& ctx) {
     if(scenes.empty())return;
     const auto state=std::move(scenes.back());scenes.pop_back();
     for(auto arrow:state.arrows)ResizeArrow(arrow,state.title_right?state.title_right+12:0);
-    constexpr std::string_view labels[]={"recomp.title","recomp.enhancements","main.exit_desktop"};
+    float step=28;
+    if(state.main_anchor && state.extras[0].visible)step=state.extras[0].top-state.main_row_top;
+    else if(state.main_rows[4].visible && state.main_rows[5].visible)step=state.main_rows[5].top-state.main_rows[4].top;
+    const auto overrides=row_overrides;row_overrides={};
+    for(unsigned index=0;index<state.main_rows.size();++index)if(state.main_rows[index].visible) {
+        const auto& row=state.main_rows[index];
+        const auto& custom=overrides[index];
+        const auto text=custom.active?custom.text:Catalog::Builtin().Get(launcher::Current().language,MainKeys[index]);
+        const unsigned alpha=custom.active?std::min(row.alpha,custom.max_alpha):row.alpha;
+        if(!text.empty())NativeLabel(ctx,row.left+3,row.top+5+(index>=3?step:0)-MainMenuRise+
+            MainListAdjustment(index>=3?index+1:index),text,1.f,alpha,false,false,420);
+    }
+    constexpr std::string_view labels[]={"recomp.title","recomp.enhancements","main.exit_desktop","main.game_mode"};
     for(unsigned index=0;index<state.extras.size();++index)if(state.extras[index].visible) {
         // Wait for both captions because the native timeline can draw them in either order.
         const auto& extra=state.extras[index];
-        const float step=state.main_anchor?extra.top-state.main_row_top:28.f;
+        const float extra_step=index==3?step:state.main_anchor?extra.top-state.main_row_top:28.f;
         const auto text=Catalog::Builtin().Get(launcher::Current().language,labels[index]);
-        if(!text.empty())NativeLabel(ctx,extra.left+3,extra.top+5+step*(index+1),text,1.1f,extra.alpha,false,false,510);
+        if(!text.empty())NativeLabel(ctx,extra.left+3,extra.top+5+extra_step*(index==3?1:index+2)-MainMenuRise+
+            MainListAdjustment(MainVisualRow(index+6)),text,1.f,extra.alpha,false,false,510);
     }
 }
 bool ReplaceGraphic(X86Context& ctx,uint32_t crc,uint32_t first,uint32_t end) {
@@ -225,7 +241,12 @@ bool ReplaceGraphic(X86Context& ctx,uint32_t crc,uint32_t first,uint32_t end) {
         alpha=std::max(alpha,kernel::R32(record+0x58+v*4)>>24);
     }
     const bool title=id.ends_with(".title");
+    if(!scenes.empty())for(unsigned row=0;row<std::size(MainKeys);++row)if(id==MainKeys[row]) {
+        scenes.back().main_rows[row]={true,left,top,alpha};kernel::W32(Count,first);return true;
+    }
     float x=left+3,y=top+5,scale=0;
+    for(unsigned row=0;row<std::size(MainKeys);++row)if(id==MainKeys[row])y+=(row>=3?28.f:0)-MainMenuRise+
+        MainListAdjustment(row>=3?row+1:row);
     if(title) {
         const auto layout=LayoutTitle(measured);scale=layout.scale;
         // Retain the original timeline position while sizing the label against the canonical canvas.

@@ -1,0 +1,127 @@
+name: Gameplay or menu bug
+description: Something in the game, its menus or the launcher does not work as in the original game.
+title: "[Bug] "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve OpenShao. Use **Report a bug** on the launcher's **Support** page to fill the environment field automatically.
+        For a crash, freeze or startup failure, use the **Crash, freeze or startup failure** form instead.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version, system, renderer and display settings. The launcher fills this field. Otherwise, copy the version from the launcher's About page.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Story Mode
+        - Survival Mode
+        - Versus Mode
+        - Main menu or Konfigure Recompilation
+        - Pause menu
+        - Save, load or save pages
+        - Kontent, unlockables or secrets
+        - Launcher
+        - Mods or language packs
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: players
+    attributes:
+      label: Players
+      options:
+        - Single Player
+        - Ko-op
+        - Not in gameplay
+    validations:
+      required: true
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Difficulty
+      options:
+        - Easy
+        - Normal
+        - Hard
+        - Monk
+        - Not applicable
+  - type: input
+    id: location
+    attributes:
+      label: Location in the game
+      description: Chapter, area or Survival level, and the characters you were using.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List each action from a save or from the main menu.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What happens in the original Xbox game.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Often
+        - Rarely
+        - Once
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input devices
+      description: Keyboard and mouse, or each controller model. Include how they are connected.
+  - type: textarea
+    id: mods
+    attributes:
+      label: Enabled mods and language packs
+      description: Write "None" if you play without mods.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Diagnostic report, screenshots or video
+      description: Generate a report on the launcher's Support page and drag the ZIP here. Add screenshots or a short video if the problem is visible.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use my own copy of the USA/Europe Xbox release of Mortal Kombat - Shaolin Monks.
+          required: true
+        - label: I use the latest OpenShao release.
+          required: true
+        - label: I searched the existing issues for this problem.
+          required: true

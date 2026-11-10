@@ -2,7 +2,7 @@
 #include <bitset>
 #include <unordered_map>
 namespace openshao::aspect {
-enum class TextLayout {None,Health,Combo,KoopCombo,Tutorial,EnemyLeft,EnemyRight};
+enum class TextLayout {None,Health,Combo,KoopCombo,Tutorial,EnemyLeft,EnemyRight,DangerLeft,DangerRight};
 inline thread_local TextLayout text_layout=TextLayout::None;
 inline thread_local bool tutorial_prompt_layout=false;
 inline thread_local std::unordered_map<uint32_t,std::array<UiAnchor,256>> font_layouts;
@@ -20,25 +20,25 @@ uint32_t GameMode() {
     return preferences?kernel::R32(preferences+0x88):~0u;
 }
 TextLayout SoloComboLayout() {
-    // Solo combo labels follow the health corner. Ko-op draws one combo per
-    // player, each under its own side of the shared bar. Versus is unchanged.
+    // Solo combos follow the health corner; Ko-op draws one per player on its side; Versus unchanged.
     switch(GameMode()) {
     case 0:return TextLayout::Combo;
     case 1:return TextLayout::KoopCombo;
     default:return TextLayout::None;
     }
 }
-UiAnchor HealthSpriteAnchor(uint32_t sprite) {
+UiAnchor HudSpriteAnchor(uint32_t sprite) {
     if(!sprite)return UiAnchor::None;
-    // These retail solo-health callbacks identify the widget independently of
-    // its fill, animation and texture.
+    // These retail solo-health callbacks identify the widget.
     switch(kernel::R32(sprite+0x1FC)) {
     case 0x15321:return UiAnchor::EnemyLeft;
     case 0x13DB4:return UiAnchor::EnemyRight;
+    // Test Your Might: move the frame with its fill, target marker and prompt.
+    case 0x11244:case 0x12E6E:case 0x166BD:case 0x12FA4:case 0x12789:return UiAnchor::EnemyLeft;
+    case 0x158A8:case 0x11D93:case 0x15CE5:return UiAnchor::EnemyRight;
     case 0x12EF5:case 0x14A2A:case 0x12C89:case 0x1534E:
         return UiAnchor::TopLeft;
-    // Ko-op shares one health bar between two medallions. Each player's pieces
-    // follow their own top corner and the shared bar widens to join them.
+    // Ko-op: each player's pieces follow their corner; the shared bar widens between them.
     case 0x12E14:
         return GameMode()==1?UiAnchor::TopStretch:UiAnchor::None;
     case 0x12FFE:case 0x15AFB:case 0x11AB4:case 0x13ED6:case 0x127E3:
@@ -55,6 +55,16 @@ inline thread_local uint32_t animation_scene=0;
 bool ArtworkViewerActive() {
     const uint32_t scene=kernel::R32(0x59847C);
     return scene && kernel::R32(0x5985E4)<2 && kernel::R32(scene+0x2E4)==16;
+}
+Rect ArtworkSource(uint32_t sprite) {
+    const uint32_t definition=kernel::R32(sprite+0x1D8);
+    if(!definition)return {};
+    const uint32_t size=kernel::R32(definition+4),alignment=kernel::R32(sprite+0x78);
+    const float sx=std::bit_cast<float>(kernel::R32(sprite+0xB0)),sy=std::bit_cast<float>(kernel::R32(sprite+0xB4));
+    const float width=int16_t(size)*(sx==0?1:sx),height=int16_t(size>>16)*(sy==0?1:sy);
+    const float y=std::bit_cast<float>(kernel::R32(sprite+0xC4))-height*((alignment&8?1.f:0.f)+(alignment&0x20?.5f:0.f));
+    if(width<=0 || height<=0 || !std::isfinite(y+width+height))return {};
+    return {0,y,width,height};
 }
 uint32_t AnimationTextureKey(uint32_t scene,uint32_t texture) {
     if(!scene || texture==0xFFFFFFFF)return 0;
@@ -89,8 +99,7 @@ bool LayoutGalleryBackdrop(uint32_t first,uint32_t end,bool full_viewport=false)
     const float left=value(0x10),top=value(0x14),right=value(0x30),bottom=value(0x34);
     if(!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom) ||
        right-left<128 || bottom-top<128 || value(0x20)!=left || value(0x24)!=bottom)return false;
-    // Full-screen layers may start a fraction of a pixel inside the edge: the
-    // arena-entry snapshot is authored at y=0.047, for instance.
+    // Full-screen layers may start inside the edge (the arena-entry snapshot at y=0.047).
     if(full_viewport && (left>1 || right<639 || top>1 || bottom<479))return false;
     const uint32_t second=0x63F5E4+(first+1)*0x6C;
     auto native_float=[](uint32_t a){return std::bit_cast<float>(kernel::R32(a));};
@@ -179,8 +188,7 @@ void ExpandModalShade(uint32_t first,uint32_t end) {
         for(unsigned v=0;v<3;++v) {
             const auto address=record+0x10+v*16;
             const float x=std::bit_cast<float>(kernel::R32(address)),y=std::bit_cast<float>(kernel::R32(address+4));
-            // Flash's separate bands can differ by subpixel amounts along one
-            // authored edge. Group points that round to the same source pixel.
+            // Flash bands differ by subpixels along one edge: group points by source pixel.
             if(std::round((x-left)/scale.x)==0)kernel::W32(address,std::bit_cast<uint32_t>(-.5f));
             else if(std::round((x-right)/scale.x)==0)kernel::W32(address,std::bit_cast<uint32_t>(639.5f));
             if(std::round((y-top)/scale.y)==0)kernel::W32(address+4,std::bit_cast<uint32_t>(-.5f));
@@ -190,8 +198,7 @@ void ExpandModalShade(uint32_t first,uint32_t end) {
     }
 }
 void UpdateCamera() {
-    // CEngineRenderer::m_pWorldCamera. The projection (0x100900) divides x by this field, so it holds the
-    // output width/height; keep the original viewport and both FOV fields.
+    // m_pWorldCamera: projection (0x100900) divides x by this width/height; keep viewport and FOV.
     const uint32_t world=kernel::R32(0x639224);
     if(!world)return;
     const uint32_t camera=kernel::R32(world+0x308);
@@ -227,7 +234,7 @@ X86_FUNC(sub_000133A0) {
 X86_EXTERN_FUNC(__imp__sub_000149FD);
 X86_FUNC(sub_000149FD) {
     openshao::aspect::TextScope text(openshao::aspect::SoloComboLayout());
-    __imp__sub_000149FD(ctx,base);
+    openshao::difficulty::KillPanel(ctx,base,__imp__sub_000149FD);
 }
 X86_EXTERN_FUNC(__imp__sub_00011DD4);
 X86_FUNC(sub_00011DD4) {
@@ -240,14 +247,56 @@ X86_FUNC(sub_00016267) {
     openshao::aspect::TextScope text(openshao::aspect::SoloComboLayout());
     __imp__sub_00016267(ctx,base);
 }
+X86_EXTERN_FUNC(__imp__sub_000124C3);
+X86_FUNC(sub_000124C3) {
+    // Danger warning: tag shadow and foreground together for that player's HUD.
+    const uint32_t player=kernel::R32(ctx.esp+16),mode=openshao::aspect::GameMode();
+    const auto layout=(mode==0 || mode==1) && (player==1 || player==2)?
+        (player==1?openshao::aspect::TextLayout::DangerLeft:openshao::aspect::TextLayout::DangerRight):
+        openshao::aspect::TextLayout::None;
+    openshao::aspect::TextScope text(layout);
+    __imp__sub_000124C3(ctx,base);
+}
 X86_EXTERN_FUNC(__imp__sub_00152CE0);
 X86_FUNC(sub_00152CE0) {
-    // The solo combo producer also displays a separate experience reward at
-    // (320,240). Keep that retail call centered while its HUD labels move.
-    // Ko-op also draws the second player's count from this call site, so there
-    // the font queue decides by position: only text centered at x=320 stays.
-    const bool reward=kernel::R32(ctx.esp)==0x7C480 && openshao::aspect::text_layout==openshao::aspect::TextLayout::Combo;
-    openshao::aspect::TextScope text(reward?openshao::aspect::TextLayout::None:openshao::aspect::text_layout);
+    const uint32_t caller=kernel::R32(ctx.esp);
+    if((caller==0x45F0D || caller==0x4F97B) && openshao::survival::SetupPopup()){
+        const uint32_t depth=kernel::R32(0x6C9308);
+        if(depth && depth<16){
+            const uint32_t top=kernel::R32(0x6C9308+depth*4);
+            const uint32_t parent=depth>1?kernel::R32(0x6C9308+(depth-1)*4):0;
+            if(openshao::survival::HideVersusArenaCaption(caller,true,top,parent)){
+                // 0x45F0D wrote ROOFTOPS over the difficulty description; 0x4F97B is the other arena-name call (both cdecl).
+                kernel::Return(ctx,0,0);return;
+            }
+        }
+    }
+    if(openshao::difficulty::SaveListText(ctx,base,openshao::difficulty::TextCall::Centered,__imp__sub_00152CE0))return;
+    using openshao::aspect::TextLayout;
+    if(caller==0x4C8BE && openshao::aspect::ArtworkViewerActive()) {
+        const uint32_t image=kernel::R32(0x5984B0);
+        const auto native=image?openshao::aspect::ArtworkSource(image):openshao::aspect::Rect{};
+        if(native.h>0) {
+            // The button sequence is part of the bitmap. Fit the localized name in that same image space.
+            const auto fit=openshao::aspect::FitArtwork(native.w,native.h,openshao::aspect::CanvasScale(openshao::aspect::Current()));
+            const float scale=fit.h/native.h;
+            const uint32_t y=ctx.esp+8,sx=ctx.esp+24,sy=ctx.esp+28;
+            const uint32_t old_y=kernel::R32(y),old_sx=kernel::R32(sx),old_sy=kernel::R32(sy);
+            kernel::W32(y,uint32_t(std::lround(fit.y+240+(int32_t(old_y)-native.y)*scale)));
+            kernel::W32(sx,std::bit_cast<uint32_t>(std::bit_cast<float>(old_sx)*scale));
+            kernel::W32(sy,std::bit_cast<uint32_t>(std::bit_cast<float>(old_sy)*scale));
+            __imp__sub_00152CE0(ctx,base);
+            kernel::W32(y,old_y);kernel::W32(sx,old_sx);kernel::W32(sy,old_sy);
+            return;
+        }
+    }
+    auto layout=openshao::aspect::text_layout;
+    // Test Your Might timer uses the active meter X; the centered title keeps its place.
+    if(caller==0x8A810)
+        layout=int32_t(kernel::R32(ctx.esp+4))<320?TextLayout::EnemyLeft:TextLayout::EnemyRight;
+    // The solo combo call also draws the centered experience reward (320,240); keep text at x=320 in place.
+    else if(caller==0x7C480 && layout==TextLayout::Combo)layout=TextLayout::None;
+    openshao::aspect::TextScope text(layout);
     __imp__sub_00152CE0(ctx,base);
 }
 X86_EXTERN_FUNC(__imp__sub_000123BA);
@@ -264,6 +313,8 @@ X86_FUNC(sub_001EE580) {
     if(openshao::aspect::tutorial_prompt_layout)anchor=openshao::aspect::UiAnchor::TutorialPrompt;
     else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::EnemyLeft)anchor=openshao::aspect::UiAnchor::EnemyLeft;
     else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::EnemyRight)anchor=openshao::aspect::UiAnchor::EnemyRight;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::DangerLeft)anchor=openshao::aspect::UiAnchor::TopLeft;
+    else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::DangerRight)anchor=openshao::aspect::UiAnchor::TopRight;
     else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Tutorial)anchor=openshao::aspect::UiAnchor::BottomLeft;
     else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Combo)anchor=openshao::aspect::UiAnchor::TopLeft;
     else if(openshao::aspect::text_layout==openshao::aspect::TextLayout::Health && command)
@@ -273,8 +324,7 @@ X86_FUNC(sub_001EE580) {
         if(std::abs(x-320)>=1)anchor=x<320?openshao::aspect::UiAnchor::TopLeft:openshao::aspect::UiAnchor::KoopComboRight;
     }
     __imp__sub_001EE580(ctx,base);
-    // Tag the accepted queue slot, including unanchored text that reuses a slot.
-    // The renderer copies these commands later, after the producer has returned.
+    // Tag the queue slot now; the renderer copies these commands later.
     if(ctx.eax && index<256 && kernel::R32(queue)==index+1)openshao::aspect::font_layouts[queue][index]=anchor;
 }
 X86_EXTERN_FUNC(__imp__sub_001EEC70);
@@ -292,7 +342,10 @@ X86_FUNC(sub_00016866) {
     const bool message=ctx.ecx==0x4E6E20 && kernel::R32(ctx.esp+4)==0xE;
     const uint32_t image=kernel::R32(ctx.esp+8);
     __imp__sub_00016866(ctx,base);
-    if(!message || !ctx.eax || (image!=0xA9 && image!=0x9D && image!=0x9E))return;
+    if(!ctx.eax)return;
+    // A GUI allocation can reuse an address released by the message manager.
+    for(auto& item:openshao::aspect::tutorial_images)if(item.sprite==ctx.eax)item={};
+    if(!message || (image!=0xA9 && image!=0x9D && image!=0x9E))return;
     for(auto& item:openshao::aspect::tutorial_images)if(item.sprite==ctx.eax || !item.sprite) {
         item={ctx.eax,image==0xA9?openshao::aspect::TutorialSprite::Panel:openshao::aspect::TutorialSprite::Portrait};
         break;
@@ -311,9 +364,19 @@ X86_FUNC(sub_000165C3) {
     __imp__sub_000165C3(ctx,base);
     if(message){openshao::aspect::tutorial_images.fill({});openshao::aspect::tutorial_portrait_inset=0;}
 }
+X86_EXTERN_FUNC(__imp__sub_000152A9);
+X86_FUNC(sub_000152A9) {
+    // Pausing a live message destroys its sprites: retire their roles before a menu reuses them.
+    if(ctx.ecx==0x4E6E20) {
+        openshao::aspect::tutorial_images.fill({});
+        openshao::aspect::tutorial_portrait_inset=0;
+    }
+    __imp__sub_000152A9(ctx,base);
+}
 X86_EXTERN_FUNC(__imp__sub_0011B290);
 X86_EXTERN_FUNC(__imp__sub_00152AE0);
 X86_FUNC(sub_00152AE0) {
+    if(openshao::difficulty::SaveListText(ctx,base,openshao::difficulty::TextCall::Left,__imp__sub_00152AE0))return;
     if(kernel::R32(ctx.esp)==0x48F0C) {
         openshao::menu::MainControllerNotice(ctx,kernel::R32(ctx.esp+20),kernel::R32(ctx.esp+12),
             std::bit_cast<float>(kernel::R32(ctx.esp+24)));
@@ -355,8 +418,7 @@ X86_FUNC(sub_001EF210) {
     const uint32_t command=kernel::R32(ctx.esp+4),text=command?kernel::R32(command+0x34):0;
     const auto layout=openshao::aspect::rendered_text;
     if(command && command==layout.command && layout.anchor!=openshao::aspect::UiAnchor::None) {
-        // The retail font clamps X within its old canvas. Translate the emitted
-        // glyph quads after that clamp, keeping native wrapping and queue data.
+        // The font clamps X to its old canvas: translate the emitted quads afterwards.
         openshao::aspect::FontScope font(layout.anchor);
         ++openshao::aspect::viewport_text_depth;
         __imp__sub_001EF210(ctx,base);
@@ -402,7 +464,7 @@ X86_FUNC(sub_0011D000) {
     if(sprite)for(const auto& item:openshao::aspect::tutorial_images)if(item.sprite==sprite)tutorial=item.role;
     // Only fit the separate full-image owner while the concept or photo viewer is active.
     const bool artwork=sprite && sprite==kernel::R32(0x5984B0) && openshao::aspect::ArtworkViewerActive();
-    openshao::aspect::SpriteScope sprite_scope(solid_fill,tutorial,artwork,openshao::aspect::HealthSpriteAnchor(sprite),cinematic);
+    openshao::aspect::SpriteScope sprite_scope(solid_fill,tutorial,artwork,openshao::aspect::HudSpriteAnchor(sprite),cinematic);
     __imp__sub_0011D000(ctx,base);
 }
 X86_EXTERN_FUNC(__imp__sub_00100B44);
@@ -471,12 +533,41 @@ X86_FUNC(sub_0013FFB0) {
     __imp__sub_0013FFB0(ctx,base);
     const uint32_t end=kernel::R32(0x63F5E0);
     if(first>end || end>512)return;
+    // Survival's solo roster on Versus: move only the two gradient halves and the central emblem.
+    const uint32_t depth=kernel::R32(0x6C9308);
+    const uint32_t top=depth && depth<32?kernel::R32(0x6C9308+depth*4):0;
+    const bool character_parent=top==0x598DF0 || (top==0x596810 && depth>1 &&
+        kernel::R32(0x6C9308+(depth-1)*4)==0x598DF0);
+    const bool solo_roster=character_parent && openshao::survival::PlayerMode()==0 &&
+        (openshao::survival::CharacterSelection() || openshao::survival::SetupPopup()) &&
+        openshao::aspect::animation_scene==kernel::R32(0x598DFC);
+    if(solo_roster && end==first+2 && (menu_key==0xE5FF2D39 || menu_key==0x59FB5186)){
+        kernel::W32(0x63F5E0,first);
+        return;
+    }
+    if(solo_roster && end==first+2 && menu_key==0xC7F97ED8)
+        for(uint32_t i=first;i<end;++i){
+            float left=INFINITY,right=-INFINITY;
+            for(unsigned v=0;v<3;++v){
+                const float x=std::bit_cast<float>(kernel::R32(0x63F5E4+i*0x6C+0x10+16*v));
+                left=std::min(left,x);right=std::max(right,x);
+            }
+            // Versus halves stop near x=302/338: meet at the canvas center like the Solo bar.
+            const bool left_half=left<320.f && right>280.f && right<320.f;
+            const bool right_half=left>320.f && left<360.f && right>400.f;
+            for(unsigned v=0;v<3;++v){
+                const uint32_t vertex=0x63F5E4+i*0x6C+0x10+16*v;
+                const uint32_t color=0x63F5E4+i*0x6C+0x58+4*v;
+                const float x=std::bit_cast<float>(kernel::R32(vertex));
+                if((left_half && x==right) || (right_half && x==left))
+                    kernel::W32(vertex,std::bit_cast<uint32_t>(320.f));
+                kernel::W32(color,(kernel::R32(color)&0xFF000000)|0xC8321E);
+            }
+        }
     if(openshao::recomp::Graphic(ctx,openshao::aspect::animation_scene,menu_key,first,end))return;
     if(openshao::menu::ReplaceGraphic(ctx,menu_key,first,end))return;
     if(gallery && openshao::aspect::LayoutGalleryBackdrop(first,end))return;
-    // Accepting an arena zooms a blurred snapshot of the screen from the Level
-    // Select control itself (not its scenery instance). Extend it like the wall
-    // so the zoom fills the viewport instead of a 4:3 box.
+    // Accepting an arena zooms a snapshot of Level Select: extend it like the wall.
     const uint32_t control_depth=kernel::R32(0x6C9308);
     const bool level_select_control=control_depth<32 && kernel::R32(0x6C9308+control_depth*4)==0x598C90;
     if((level_select || level_select_control) && openshao::aspect::LayoutGalleryBackdrop(first,end,true))return;
@@ -488,6 +579,34 @@ X86_FUNC(sub_0013FFB0) {
 }
 X86_EXTERN_FUNC(__imp__sub_001B2C40);
 X86_FUNC(sub_001B2C40) {
+    const auto depth=kernel::R32(0x6C9308);
+    const auto top=depth<32?kernel::R32(0x6C9308+depth*4):0;
+    const bool characters=top==0x598DF0 || (top==0x596810 && depth>1 && depth<32 &&
+        kernel::R32(0x6C9308+(depth-1)*4)==0x598DF0);
+    // Hide the title menu's random extra glint; the selection sparkle is the focus marker.
+    if(ctx.ecx==0x5929D8 && top==0x598430){kernel::Return(ctx,0,6);return;}
+    // Fighter-screen courtyard (0x58E4F0, started by 0x43DE0) can keep running behind Main after Survival.
+    // Stop it like 0x1B29B0: inactive, clip 0, rewound.
+    if(ctx.ecx==0x58E4F0 && top==0x598430){
+        constexpr uint32_t courtyard=0x58E4F0;
+        kernel::W32(courtyard+0xC,0);kernel::W32(courtyard+0x2A0,0);
+        kernel::W32(courtyard+0x33C,kernel::R32(courtyard+0x24));*static_cast<uint8_t*>(kernel::HostPtr(courtyard+0x340))=0;
+        kernel::Return(ctx,0,6);return;
+    }
+    // Re-enable the selector each draw so Main's sparkle never blinks between rows (not in transitions).
+    const bool main=ctx.ecx==0x598430 && top==0x598430;
+    const uint32_t main_scene=main?kernel::R32(0x59843C):0;
+    const uint32_t main_clip=main_scene?kernel::R32(main_scene+0x2A0):0;
+    const bool survival_focus=top==0x598430 && openshao::survival::MedallionMenu() &&
+        !openshao::survival::SetupPopup();
+    if(main && main_clip>=1 && main_clip<=6 &&
+       (!openshao::survival::Transitioning() || survival_focus) && !openshao::survival::SetupPopup())
+        kernel::W32(0x592D20+0xC,1);
+    // No global selector on the fighter screen, its popup, a modal, or Main's Survival transitions.
+    if(ctx.ecx==0x592D20 && (characters || (openshao::survival::Transitioning() && !survival_focus) ||
+       (top==0x598430 && (openshao::survival::SetupPopup() || openshao::survival::CharacterSelection())))){
+        kernel::Return(ctx,0,6);return;
+    }
     // Background instances fill the viewport; titles, selectors and character art use the fitted canvas.
     const bool backdrop=ctx.ecx==0x593A40 || ctx.ecx==0x58E838 || ctx.ecx==0x5912E0 ||
         ctx.ecx==0x58F558 || ctx.ecx==0x593068 || ctx.ecx==0x5929D8 || ctx.ecx==0x591970 ||
@@ -499,13 +618,18 @@ X86_FUNC(sub_001B2C40) {
     openshao::aspect::animation_scene=ctx.ecx;
     if(backdrop)++openshao::aspect::backdrop_depth;
     const bool custom_selector=ctx.ecx==0x592D20 && openshao::recomp::Active();
-    const auto depth=kernel::R32(0x6C9308);
-    const bool extra_selector=ctx.ecx==0x592D20 && !custom_selector && openshao::recomp::ExtraSelected() &&
-        depth<32 && kernel::R32(0x6C9308+depth*4)==0x598430 && kernel::R32(0x598468)>=7 && kernel::R32(0x598468)<9;
+    const bool extra_selector=ctx.ecx==0x592D20 && !custom_selector &&
+        top==0x598430 && kernel::R32(0x598468)<=openshao::menu::MainGameModeRow;
     const auto selector_y=ctx.esp+20,previous_y=kernel::R32(selector_y);
     if(custom_selector)kernel::W32(selector_y,openshao::recomp::SelectorY());
-    // The retail main selector uses selection modulo seven, including the rows added by the port.
-    else if(extra_selector)kernel::W32(selector_y,previous_y+(kernel::R32(0x598468)/7)*7*(kernel::R32(0x4DF4DC)+(kernel::R32(0x5CE864)==1?2:0)));
+    // The retail sparkle wraps every seven semantic rows; Game Mode occupies the fourth visual row.
+    else if(extra_selector) {
+        // Survival's options are Main's own first rows, so they share this placement.
+        const unsigned row=kernel::R32(0x598468),step=kernel::R32(0x4DF4DC)+(kernel::R32(0x5CE864)==1?2:0);
+        const auto visual=openshao::menu::MainVisualRow(row);
+        const int y_adjust=int(-openshao::menu::MainMenuRise+openshao::menu::MainListAdjustment(visual));
+        kernel::W32(selector_y,previous_y+(visual-row%7)*step+y_adjust);
+    }
     openshao::menu::BeginScene();
     __imp__sub_001B2C40(ctx,base);
     if(custom_selector || extra_selector)kernel::W32(selector_y,previous_y);

@@ -5,6 +5,7 @@
 
 namespace openshao::launcher {
 bool Show();
+bool DiscordPresenceEnabled();
 bool ShouldPersist();
 void Load(const void* table);
 void Save(void* table);

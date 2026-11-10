@@ -27,6 +27,7 @@ std::string Utf8(const std::filesystem::path& path){const auto value=path.u8stri
 void GameSource(const std::filesystem::path& value,bool disc){source=std::filesystem::absolute(value);disc_source=disc;}
 std::filesystem::path CurrentGameSource(){return source;}
 void SaveDirectory(const std::filesystem::path& value){save_directory=std::filesystem::absolute(value);}
+const std::filesystem::path& ActiveSaveDirectory(){return save_directory;}
 bool Prepare(const launcher::Settings& settings,std::string& error) {
     const auto& language=settings.language;
     std::lock_guard guard(lock);

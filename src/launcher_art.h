@@ -4,8 +4,7 @@
 #include <string_view>
 #include <imgui.h>
 
-// Drawing primitives for the launcher's visual identity: an ensō brush circle in a soft flame gradient
-// on an inkstone background. Coordinates are logical pixels; Canvas applies the display scale.
+// Coordinates use logical pixels. Canvas applies the display scale.
 namespace openshao::launcher::art {
 namespace color {
 inline constexpr uint32_t Ink = 0x25282C, Slate = 0x30343A, Line = 0x3B4047, Mist = 0x959AA0, Dim = 0x6C7278,
@@ -34,10 +33,8 @@ struct Canvas {
     std::string Fit(Weight weight, float size, float width, const std::string& text) const;
 };
 
-// Background with a soft light behind the given point and a fine paper grain.
 void Background(const Canvas& canvas, float width, float height, ImVec2 light);
-// The brush circle. `drawn` limits how far the stroke has reached. A flame stroke warms from a soft
-// red body to coral and amber tips; otherwise the stroke uses `rgb`.
+// drawn limits the visible stroke. With flame disabled, the stroke uses rgb.
 void Enso(const Canvas& canvas, ImVec2 center, float radius, float width, float drawn, float alpha = 1.f,
           uint32_t seed = 11, int bristles = 44, bool flame = true, uint32_t rgb = color::Paper);
 void Glow(const Canvas& canvas, ImVec2 center, float radius, float strength);

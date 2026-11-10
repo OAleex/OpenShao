@@ -30,6 +30,14 @@ int main() {
     for(bool enabled:{false,true})
         check(Merge({},Read(toml::table{{"enhancements",toml::table{{"cinematic_bars",enabled}}}}))["enhancements"]["cinematic_bars"].value_or(!enabled)==enabled,
               "Both cinematic bar choices must survive a complete configuration round trip");
+    const auto old_shadow_setting=toml::parse("[enhancements]\nvertical_shadows = true\nscorpion_unfiltered = true\n");
+    const auto without_shadow_setting=Merge(old_shadow_setting,Read(old_shadow_setting));
+    check(!without_shadow_setting["enhancements"].as_table()->contains("vertical_shadows") &&
+          without_shadow_setting["enhancements"]["scorpion_unfiltered"].value_or(false),
+          "Saving preferences must remove the retired Vertical Shadows option while keeping other enhancements");
+    check(Read({}).improved_difficulty && Merge({},Read({}))["enhancements"]["improved_difficulty"].value_or(false) &&
+          !Merge({},Read(toml::parse("[enhancements]\nimproved_difficulty = false\n")))["enhancements"]["improved_difficulty"].value_or(true),
+          "Improved difficulty must be enabled by default and survive a configuration round trip");
     check(Merge({}, enhanced)["enhancements"]["scorpion_unfiltered"].value_or(false),
           "The Scorpion enhancement must survive configuration load and save");
     check(Read({}).restore_dialogue && Merge({}, Read({}))["enhancements"]["restore_dialogue"].value_or(false),
@@ -132,6 +140,9 @@ int main() {
           saved_bindings["mouse"]["motion"].value_or(std::string{}) == "left_stick",
           "Mouse wheel, motion target and horizontal inversion must survive saving");
     std::string error;
+    const auto surround=Read(toml::parse("[game]\naudio_output=2\n"));
+    check(Merge({},surround)["game"]["audio_output"].value_or(-1)==2,"The original Audio Output selection must survive saving without a launcher control");
+    check(!Validate(Read(toml::parse("[game]\naudio_output=3\n")),error),"The hidden console digital-encoding mode must not be selectable on the host");
     check(!Validate(Read(toml::parse("[controller.bindings]\na='missing_axis'\n")),error),"Unknown controller sources must be rejected before launch");
     check(!Validate(Read(toml::parse("[keyboard.bindings]\na=[120,0]\n")),error),"Reserved overlay keys cannot be assigned to gameplay");
     check(!Validate(Read(toml::parse("[keyboard.bindings]\na=[-1,0]\n")),error),"Invalid keyboard codes must be rejected");
@@ -139,20 +150,23 @@ int main() {
     auto overlap=openshao::bindings::Keyboard{};overlap.keys[0]={163,0};
     check(!openshao::bindings::KeyboardConflicts(overlap,0,0,163).empty(),"A side-specific modifier conflicts with a generic modifier binding");
     check(Merge({},Settings{})["fps_cap"].value_or(0)==60,"New settings must default to 60 FPS");
-    for (const int fps : {60,120}) {
+    for (const int fps : {60,120,144,165,240}) {
         for (const bool vsync : {false,true}) {
             const auto loaded=Read(toml::table{{"fps_cap",fps},{"vsync",vsync}});
             const auto saved=Merge({},loaded);
             check(saved["fps_cap"].value_or(0)==fps && saved["vsync"].value_or(!vsync)==vsync,
                   "Supported frame rates must persist independently of VSync");
             check(Read(saved)==loaded,"A supported frame rate must survive a complete round trip");
+            check(Validate(loaded,error),"Each supported frame rate must pass launcher validation");
         }
     }
-    for(const int fps:{-1,0,29,30,45,61,144,240,1000}) {
+    for(const int fps:{-1,0,29,30,45,61,121,166,241,1000}) {
         const toml::table legacy{{"fps_cap",fps}};
         const auto loaded=Read(legacy);
         check(loaded==Settings{},"Legacy frame-rate preferences must not change launcher settings");
         check(Merge(legacy,loaded)["fps_cap"].value_or(0)==60,"Saving legacy settings must use 60 FPS");
+        auto unsupported=Settings{};unsupported.fps_cap=fps;
+        check(!Validate(unsupported,error),"Unsupported frame-rate limits must fail direct validation");
     }
     check(Validate(config, error), "Valid settings must be accepted");
     config.width = 1920; config.height = 0;

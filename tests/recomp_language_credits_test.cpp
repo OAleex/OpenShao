@@ -1,4 +1,6 @@
 #include "cpu/x86_ops.h"
+#include "difficulty.h"
+namespace openshao::difficulty { void PopupFooter(X86Context&) {} }
 #include <array>
 #include <cstdio>
 #include <cstdlib>

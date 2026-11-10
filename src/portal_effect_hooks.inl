@@ -56,7 +56,9 @@ X86_FUNC(sub_001ED400) {
 
 X86_EXTERN_FUNC(__imp__sub_001282F0);
 X86_FUNC(sub_001282F0) {
-    bool repair=kernel::R32(0x505970)==0xA3;
+    // Every arena exit (rooms 0xA1..0xBF) uses (s)fx_s_ray105i (bank 2, effect 105) with the same rotation bug.
+    const uint32_t room=kernel::R32(0x505970);
+    bool repair=room>=0xA1 && room<=0xBF;
     const uint32_t renderer=ctx.ecx;
     uint32_t cursor=0;
     if(repair && PortalGuestRange(renderer,0xC0)) {
@@ -89,5 +91,5 @@ X86_FUNC(sub_001282F0) {
     auto vertices=std::span<uint8_t>(static_cast<uint8_t*>(kernel::HostPtr(cursor)),80);
     if(!openshao::RestorePortalWorldAxes(vertices,matrix)) return;
     openshao::FacePortalQuad(vertices,eye);
-    LOG_FIRST(4,"openshao graphics: restored Survival 4 exit portal billboard orientation");
+    LOG_FIRST(4,"openshao graphics: restored arena %02X exit portal billboard orientation",room);
 }

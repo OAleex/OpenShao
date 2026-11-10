@@ -16,29 +16,43 @@ def main():
     parser.add_argument("--shadow-diagnostics", action="store_true", help="Include optional D3D12 shadow diagnostics")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    from prepare_static_runtime import adapt_dispatch
+    dispatch = (args.sdk / "runtime/cpu/dispatch.cpp").read_text(encoding="utf-8")
+    (args.out / "dispatch.cpp").write_text(adapt_dispatch(dispatch, replace_once), encoding="utf-8")
     log = (args.sdk / "runtime/core/log.cpp").read_text(encoding="utf-8")
     log = '#include "diagnostic_privacy.h"\n' + log
     log = replace_once(log, '    va_end(ap);', '    va_end(ap);\n    const auto safe = openshao::privacy::Redact(msg);')
     log = log.replace('size_t(tid), msg)', 'size_t(tid), safe.c_str())').replace(' : "", msg)', ' : "", safe.c_str())')
     (args.out / "log.cpp").write_text(log, encoding="utf-8")
     text = (args.sdk / "runtime/app/main.cpp").read_text(encoding="utf-8")
-    text = '#include "support_report.h"\n#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
+    text = '#include "discord_presence.h"\n#include "support_report.h"\n#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
     text = replace_once(text, '#include <windows.h>', '#include <windows.h>\n#include <shobjidl.h>')
-    text = replace_once(text, 'auto dir = ExeDir() / "CrashDumps";', 'auto dir = openshao::paths::Crashes();')
+    text = replace_once(text, '    auto dir = ExeDir() / "CrashDumps";',
+        '    logx::Flush();\n'
+        '    if (openshao::support::NotifyCrash(e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0,\n'
+        '            e && e->ExceptionRecord ? reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress) : 0, e))\n'
+        '        return EXCEPTION_EXECUTE_HANDLER;\n'
+        '    auto dir = openshao::paths::Crashes();')
     text = replace_once(text, 'logx::Init((app::ExeDir() / "logs").string(), log, relaunched);',
         'logx::Init(openshao::paths::Logs().string(), log, relaunched);')
     text = replace_once(text, '    else app::LogSystem();', '')
     text = replace_once(text, '    // the dump holds no guest memory: the guest registers and return addresses go to the log\n',
-        '    if (openshao::support::NotifyCrash(e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0,\n'
-        '            e && e->ExceptionRecord ? reinterpret_cast<uintptr_t>(e->ExceptionRecord->ExceptionAddress) : 0, e))\n'
-        '        return EXCEPTION_EXECUTE_HANDLER;\n'
-        '    // Native launcher failures have no guest thread yet. Log them independently.\n'
+        '    // Flush native and guest diagnostics before the worker snapshots the session log.\n'
         '    if (e && e->ExceptionRecord) {\n'
         '        const auto* record = e->ExceptionRecord;\n'
         '        LOGE("Native exception %08lX at %p (Windows thread %lu)", record->ExceptionCode, record->ExceptionAddress, GetCurrentThreadId());\n'
-        '        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2)\n'
-        '            LOGE("Access violation: operation=%llu address=%p", static_cast<unsigned long long>(record->ExceptionInformation[0]), reinterpret_cast<void*>(record->ExceptionInformation[1]));\n'
+        '        if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {\n'
+        '            const auto* address = reinterpret_cast<void*>(record->ExceptionInformation[1]);\n'
+        '            LOGE("Access violation: operation=%llu address=%p", static_cast<unsigned long long>(record->ExceptionInformation[0]), address);\n'
+        '            MEMORY_BASIC_INFORMATION region{};\n'
+        '            if (VirtualQuery(address, &region, sizeof(region)))\n'
+        '                LOGE("Memory region: base=%p size=%llu state=%08lX protection=%08lX type=%08lX",\n'
+        '                     region.BaseAddress, static_cast<unsigned long long>(region.RegionSize), region.State, region.Protect, region.Type);\n'
+        '        }\n'
         '    }\n')
+    text = replace_once(text, 'MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory)',
+        'MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory |\n'
+        '                                    MiniDumpWithFullMemoryInfo | MiniDumpFilterModulePaths)')
     text = replace_once(text, '    CloseHandle(f);\n    logx::Flush();',
         '    CloseHandle(f);\n    logx::Flush();\n'
         '    openshao::paths::ReportError(L"OpenShao stopped because of an unexpected error.", dir / name);')
@@ -67,12 +81,15 @@ def main():
         '        LOGE("Automatic crash report worker is unavailable; using the local error handler.");\n'
         '    LOGR("Startup stage: settings");\n'
         '    app::Load();\n    app::LogSystem();\n'
+        '    openshao::discord::SetState(openshao::discord::State::Launcher, openshao::options, openshao::launcher::DiscordPresenceEnabled());\n'
         '    LOGR("Startup stage: launcher");\n'
         '    if (openshao::options.background) {\n        app::Get().display_mode = app::DisplayMode::Windowed;\n        app::Get().width = 640; app::Get().height = 480;\n    }\n    openshao::StartWatchdog();')
     text = replace_once(text, '    openshao::StartWatchdog();',
         '    if (openshao::options.configure_only || (!openshao::options.background && !openshao::options.validate_disc && !openshao::options.validate_language_pack && !openshao::options.setup && !openshao::options.no_launcher)) {\n'
         '        if (!openshao::launcher::Show()) return 0;\n'
-        '    }\n    openshao::StartWatchdog();')
+        '    }\n'
+        '    openshao::discord::SetState(openshao::discord::State::Playing, openshao::options, openshao::launcher::DiscordPresenceEnabled());\n'
+        '    openshao::StartWatchdog();')
     text = replace_once(text, '        app::Get().width = 640; app::Get().height = 480;',
         '        app::Get().width = 640; app::Get().height = 480;\n'
         '        if (std::getenv("XBE_CAPTURE_DIR")) if (const char* v = std::getenv("OPENSHAO_CAPTURE_RENDER_PERCENT")) {\n'
@@ -112,16 +129,19 @@ def main():
         '    app::Load();\n    { std::string error; if (!openshao::restart::ContinueStartup(error)) { LOGE("Language restart: %s", error.c_str()); return 8; } }')
     text = replace_once(text, 'bool splash = !openshao::options.background && app::OpenSplash();',
         'bool splash = !openshao::options.background && !openshao::options.resume_main_menu && app::OpenSplash();')
+    text = replace_once(text, '    if (!app::PrepareGameCode(game)) return 1;\n', '')
     (args.out / "main.cpp").write_text(text, encoding="utf-8")
     settings = (args.sdk / "runtime/app/settings.cpp").read_text(encoding="utf-8")
     settings = '#include "launcher.h"\n#include "runtime_paths.h"\n' + settings
     settings = replace_once(settings, 'return ExeDir() / kGame.settings;', 'return openshao::paths::Config();')
     wide_begin = settings.index('bool Widescreen() {')
-    wide_end = settings.index('\nfloat RenderScale(', wide_begin)
+    wide_end = settings.index('\n}', wide_begin) + 2
     settings = settings[:wide_begin] + 'bool Widescreen() {\n    return openshao::aspect::Current() > openshao::aspect::Original + .0001f;\n}\n' + settings[wide_end:]
     # Linux: the desktop size comes from the SDL platform layer.
     settings = replace_once(settings, '#include <windows.h>\n', '#ifdef _WIN32\n#include <windows.h>\n#endif\n')
     settings = replace_once(settings, 'Mode Desktop() {\n', 'Mode PlatformDesktop();\nMode Desktop() {\n#ifndef _WIN32\n    return PlatformDesktop();\n#else\n')
+    settings = replace_once(settings, 'Mode CachedOutput() {\n', 'Mode CachedOutput() {\n#ifndef _WIN32\n    return Output();\n#else\n')
+    settings = replace_once(settings, '    return mode;\n}', '    return mode;\n#endif\n}')
     settings = replace_once(settings, '    return {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))};\n}',
         '    return {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))};\n#endif\n}')
     settings = replace_once(settings, '    std::ofstream f(File());\n    f << Table() << "\\n";',
@@ -330,9 +350,30 @@ uint32_t OpenOnDisc(''')
     files = replace_once(files, '    if (t.disc) FillNetworkInfo(a[1], *t.entry);',
         '    if (t.virtual_file) FillNetworkInfo(a[1], 0, t.virtual_file->Size(), false);\n'
         '    else if (t.disc) FillNetworkInfo(a[1], *t.entry);')
+    # Missing guest files are logged in a form the diagnostic path filter keeps ("game:sound/x.adx"):
+    # guest names never contain host folders, and a drive letter or leading slash would be redacted.
+    files = replace_once(files, 'uint32_t OpenOnDisc(const Disc::Entry* e,',
+        'static std::string SafeGuestName(std::string name) {\n'
+        '    for (char& c : name) if (c == \'\\\\\') c = \'/\';\n'
+        '    for (const char* prefix : {"/?" "?/", "/Device/CdRom0/", "/Device/Harddisk0/"})\n'
+        '        if (name.rfind(prefix, 0) == 0) { name.erase(0, std::char_traits<char>::length(prefix)); break; }\n'
+        '    if (name.size() >= 2 && name[1] == \':\') name.erase(0, 2);\n'
+        '    while (!name.empty() && name.front() == \'/\') name.erase(0, 1);\n'
+        '    return "game:" + name;\n'
+        '}\n\n'
+        'uint32_t OpenOnDisc(const Disc::Entry* e,')
+    missing = 'LOG_FIRST(200, "missing %s", name.c_str());'
+    if files.count(missing) != 4:
+        raise SystemExit("prepare_recomp_runtime: expected four missing-file logs in files.cpp")
+    files = files.replace(missing, 'LOG_FIRST(200, "missing guest file %s", SafeGuestName(name).c_str());')
+    # Opened guest files use the same form, so a report shows which music or sound was loaded.
+    opened = 'LOG_FIRST(400, "open %s", name.c_str());'
+    if files.count(opened) != 2:
+        raise SystemExit("prepare_recomp_runtime: expected two open-file logs in files.cpp")
+    files = files.replace(opened, 'LOG_FIRST(3000, "open guest file %s", SafeGuestName(name).c_str());')
     (args.out / "files.cpp").write_text(files, encoding="utf-8")
     boot = (args.sdk / "runtime/kernel/boot.cpp").read_text(encoding="utf-8")
-    boot = '#include "support_report.h"\n#include "host.h"\n#include "runtime_paths.h"\n#include "language_pack.h"\n#include "mods/runtime.h"\n' + boot
+    boot = '#include "discord_presence.h"\n#include "support_report.h"\n#include "host.h"\n#include "runtime_paths.h"\n#include "language_pack.h"\n#include "mods/runtime.h"\n' + boot
     boot = replace_once(boot, '    if (app::kGame.loaded) app::kGame.loaded();',
         '    std::string language_error;\n'
         '    if (!openshao::language::ApplyFonts(std::span<uint8_t>(g_base, X86ImageEnd), language_error)) {\n'
@@ -352,6 +393,7 @@ uint32_t OpenOnDisc(''')
     boot = replace_once(boot, 'return g_launch_file.substr(0, g_launch_file.find_last_of("/\\\\") + 1) + "display.bin";',
         'return (openshao::paths::Cache() / "display.bin").string();')
     boot = replace_once(boot, '    std::_Exit(code);',
+        '    openshao::discord::Shutdown();\n'
         '    if (code) openshao::paths::ReportError(L"The game stopped with error code " + std::to_wstring(code) + L".");\n    openshao::support::StopMonitor();\n    std::_Exit(code);')
     boot = replace_once(boot, "void Relaunch(const char* exe) {", "void Relaunch(const char* exe) {\n    if (openshao::options.background) { LOGE(\"Relaunch refused during isolated background test\"); Shutdown(50); }")
     (args.out / "boot.cpp").write_text(boot, encoding="utf-8")
@@ -361,15 +403,18 @@ uint32_t OpenOnDisc(''')
     pads = replace_once(pads, "void Rumble(int port, uint16_t left, uint16_t right) {", "void Rumble(int port, uint16_t left, uint16_t right) {\n    if (openshao::options.background) return;")
     (args.out / "input.cpp").write_text(pads, encoding="utf-8")
     xapi = (args.sdk / "runtime/xdk/xapi.cpp").read_text(encoding="utf-8")
-    # Publish initial insertion through the asynchronous device poller. Immediate
-    # publication is consumed by this title's startup XGetDevices before it opens
-    # handles; subsequent XGetDeviceChanges then never reports an insertion.
+    # Publish the initial insertion via the async poller: startup XGetDevices consumes an
+    # immediate one, and XGetDeviceChanges then never reports it.
     xapi = replace_once(xapi, "    UpdatePorts();\n    if (!g_poller)", "    if (!g_poller)")
-    # The original main-menu callback stops when the character selector opens.
-    # XInputGetState remains active on the guest thread. Switch ports before
-    # the first state is returned to the new player, not on menu highlighting.
+    # The main-menu callback stops when the character selector opens; switch ports before
+    # XInputGetState returns the first state to the new player.
     xapi = replace_once(xapi, "HLE_STDCALL(XInputGetState, 2) {",
         "void SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {\n    SyncRetailFrontendMode();")
+    # The save-list delete question answers with A and B; the game must not see them meanwhile.
+    xapi = replace_once(xapi, "void SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {",
+        "namespace openshao::save_pages { void HoldAnswer(input::Pad& pad); }\nvoid SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {")
+    xapi = replace_once(xapi, "    input::Pad p = input::Poll(int(port));\n    if (!p.connected) return 1167;",
+        "    input::Pad p = input::Poll(int(port));\n    openshao::save_pages::HoldAnswer(p);\n    if (!p.connected) return 1167;")
     xapi = replace_once(xapi, "    g_handles[h] = {port, 0, {}};", "    g_handles[h] = {port, 0, {}};\n    LOGI(\"openshao input: open port=%u handle=%08X caller=%08X\", port, h, R32(ctx.esp));")
     xapi = replace_once(xapi, "    h.last = p;", """    if (!h.last.connected || h.last.buttons != p.buttons ||
         std::memcmp(h.last.analog, p.analog, sizeof(p.analog)) ||
@@ -391,16 +436,16 @@ uint32_t OpenOnDisc(''')
     (args.out / "input_state_test.inl").write_text(state_body + '\n', encoding="utf-8")
     xapi += '\n#include "controller_mode.inl"\n'
     (args.out / "xapi.cpp").write_text(xapi, encoding="utf-8")
-    audio = (args.sdk / "runtime/audio/xaudio2.cpp").read_text(encoding="utf-8")
-    audio = '#include "host.h"\n#include "launcher.h"\n#include "scorpion_preview_audio.h"\n' + audio
-    audio = replace_once(audio, "        voice->Start();", "        master->SetVolume(openshao::options.background ? 0.0f : openshao::launcher::AudioGain());\n        voice->Start();")
-    audio = replace_once(audio, "            render(b, kFrames);", "            master->SetVolume(openshao::options.background ? 0.0f : openshao::launcher::AudioGain());\n            render(b, kFrames);")
-    audio = replace_once(audio, "            render(b, kFrames);", "            render(b, kFrames);\n            openshao::scorpion::audio_preview::Mix(b, kFrames);")
+    audio = (Path(__file__).resolve().parents[1] / "src/audio_xaudio2.cpp").read_text(encoding="utf-8")
     (args.out / "xaudio2.cpp").write_text(audio, encoding="utf-8")
     d3d = (args.sdk / "runtime/xdk/d3d8.cpp").read_text(encoding="utf-8")
+    d3d = replace_once(d3d, '#include <windows.h>\n', '')
+    begin = d3d.index('            // no owner window:')
+    end = d3d.index('            kernel::Shutdown(1);', begin)
+    d3d = d3d[:begin] + '            openshao::paths::ReportError(L"The game renderer could not be started.");\n' + d3d[end:]
     d3d = '#include "aspect_ratio.h"\n#include "sfd_lock_compat.h"\n#include "sfd_filter_compat.h"\n#include "vblank_compat.h"\n#include <array>\nstatic std::array<uint32_t, 13> g_openshao_present{};\n' + d3d
     # cstdint must precede the snapshot declaration when this TU is compiled alone.
-    d3d = '#include "platform_compat.h"\n#include <cstdint>\n#include "core/diag.h"\n' + d3d
+    d3d = '#include "platform_compat.h"\n#include <cstdint>\n#include "core/diag.h"\n#include "runtime_paths.h"\n' + d3d
     d3d = replace_once(d3d, '    if (!h) h = 480;\n', '    if (!h) h = 480;\n    std::memcpy(g_openshao_present.data(), HostPtr(pp), sizeof(g_openshao_present));\n    g_openshao_present[0] = w; g_openshao_present[1] = h; g_openshao_present[3] = count;\n')
     d3d = replace_once(d3d, 'HLE_WRAP(Lock2DSurface, 6) {\n    uint32_t res = a[0];',
         'HLE_WRAP(Lock2DSurface, 6) {\n    uint32_t res = a[0];\n'
@@ -444,15 +489,23 @@ uint32_t OpenOnDisc(''')
     d3d = replace_once(d3d, '    for (uint32_t i = 0; i < g_state.scissor_count * 4; i++) g_state.scissors[i] = R32(a[2] + i * 4);',
         '    for (uint32_t i = 0; i < g_state.scissor_count * 4; i++) g_state.scissors[i] = R32(a[2] + i * 4);\n'
         '    if (g_state.scissor_count) LOG_FIRST(64, "openshao scissor: count=%u exclusive=%u rect=%d,%d,%d,%d caller=%08X", g_state.scissor_count, a[1], int32_t(g_state.scissors[0]), int32_t(g_state.scissors[1]), int32_t(g_state.scissors[2]), int32_t(g_state.scissors[3]), R32(ctx.esp));')
-    d3d += '\n#include "d3d_reset.inl"\n'
+    # Keep the audited same-layout reset and its resource-ownership checks.
+    begin = d3d.index('HLE_STDCALL(D3DDevice_Reset, 1) {')
+    end = d3d.index('\nHLE_STDCALL(D3DDevice_CopyRects', begin)
+    d3d = d3d[:begin] + '#include "d3d_reset.inl"\n' + d3d[end:]
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
     # Compile the actual adapted API body in the state regression, with synthetic
     # surface/refcount services. Keep this fixture tied to the pinned SDK source.
+    helper_begin = d3d.index('void ApplyRenderTarget(')
+    helper_end = d3d.index('\n}', helper_begin) + 2
     begin = d3d.index('HLE_STDCALL(D3DDevice_SetRenderTarget, 2) {')
     end = d3d.index('\nHLE_STDCALL(D3DDevice_GetBackBuffer2', begin)
-    (args.out / "set_render_target_test.inl").write_text(d3d[begin:end], encoding="utf-8")
+    (args.out / "set_render_target_test.inl").write_text(
+        d3d[helper_begin:helper_end] + '\n' + d3d[begin:end], encoding="utf-8")
     dsound = (args.sdk / "runtime/xdk/dsound.cpp").read_text(encoding="utf-8")
-    dsound += '\n#include "audio_compat.inl"\n'
+    from prepare_audio_runtime import adapt as adapt_audio
+    dsound = adapt_audio(dsound)
+    dsound += '\n#include "audio_compat.inl"\n#include "audio_audit.inl"\n'
     (args.out / "dsound.cpp").write_text(dsound, encoding="utf-8")
     for call in (
         'if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);',
@@ -473,6 +526,8 @@ uint32_t OpenOnDisc(''')
     d3d = adapt_pipeline_programs(d3d, replace_once)
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
     backend = (args.sdk / "runtime/gpu/d3d12.cpp").read_text(encoding="utf-8")
+    from prepare_depth_compat import adapt_backend as adapt_depth
+    backend = adapt_depth(backend, replace_once)
     backend = '#include "aspect_ratio.h"\n#include "host.h"\n#include "launcher.h"\n#include "bloom_effect_runtime.h"\n#include "runtime_paths.h"\n#include "raster_compat.h"\n#include "sfd_filter_compat.h"\n#include "shadow_depth_format.h"\n' + backend
     backend = replace_once(backend,
         '    bool wide = app::Widescreen();\n    float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;',
@@ -599,8 +654,8 @@ uint32_t OpenOnDisc(''')
         '            guarded &= !stages.rt[i] && stages.info[i].kind == kTex2D && !stages.info[i].rect;\n'
         '        if (guarded) return true;\n'
         '    }')
-    backend = replace_once(backend, 'EnsureStageSamplers(s, stages, UnitTexcoords(a))',
-        'EnsureStageSamplers(s, stages, UnitTexcoords(a, stages))')
+    backend = replace_once(backend, 'EnsureStageSamplers(s, stages, AnyStageWraps(s) && UnitTexcoords(a))',
+        'EnsureStageSamplers(s, stages, AnyStageWraps(s) && UnitTexcoords(a, stages))')
     backend = replace_once(backend, '    Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_});',
         '    Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_, .taps = openshao::sfd::PresentationTaps()});')
     backend = replace_once(backend, 'struct PsoKey {', 'struct PsoKey {\n    uint32_t atlas_guard;')
@@ -612,8 +667,8 @@ uint32_t OpenOnDisc(''')
         '        atlas |= !stages.rt[i] && stages.info[i].kind == kTex2D;\n'
         '    }\n'
         '    k.atlas_guard = sh.quad && a.topology == Topology::Triangles && atlas && !target_texture;')
-    backend = replace_once(backend, '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d);',
-        '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d);\n'
+    backend = replace_once(backend, '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d, k.sprite);',
+        '    if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d, k.sprite);\n'
         '    if (k.atlas_guard) {\n'
         '        uint64_t hash;\n'
         '        ID3DBlob* gs = Compile(openshao::AtlasBoundsHlsl(), "main", "gs_5_0", hash);\n'
@@ -780,13 +835,12 @@ uint32_t OpenOnDisc(''')
         from prepare_shadow_diagnostics import adapt_shaders
         shaders = adapt_shaders(shaders, replace_once)
     quad_begin = shaders.index('std::string QuadHlsl(std::string s) {')
-    quad_end = shaders.index('// a point covers', quad_begin)
+    quad_end = shaders.index('    return s;\n}', quad_begin) + len('    return s;\n}')
     quad = replace_once(shaders[quad_begin:quad_end], '    return s;',
         '    return openshao::AtlasQuadHlsl(std::move(s));')
     shaders = shaders[:quad_begin] + quad + shaders[quad_end:]
-    # Guest screen coordinates place pixel centers at integers. D3D12 places
-    # them at n+0.5. Translate raster positions, preserving the title's UVs.
-    # This epilogue serves programmable shaders and fixed XYZRHW vertices.
+    # Guest pixel centers are integers, D3D12's are n+0.5: translate raster positions,
+    # keeping UVs (programmable shaders and XYZRHW vertices).
     shaders = replace_once(shaders, '    q.x = p.x * 2 / surf.x - 1;',
         '    q.x = (p.x + 0.5) * 2 / surf.x - 1;')
     shaders = replace_once(shaders, '    q.y = 1 - p.y * 2 / surf.y;',

@@ -14,6 +14,8 @@ void Check(bool value,const char* text) { if(!value) {std::fprintf(stderr,"FAIL:
 unsigned opens=0,sounds=0,updates=0,builds=0,native_pause_events=0;
 unsigned toggles=0,desktop_exits=0;
 unsigned original_cheats=0;
+unsigned refills=0;
+bool player2_live=false;
 namespace mem {uint32_t AllocSystem(uint32_t size){static uint32_t next=0x8000;Check(size<=2048,"pause menus use bounded guest allocations");const auto result=next;next+=0x1000;return result;}}
 namespace openshao::pause_recomp {
 Page current=Page::Categories;
@@ -27,6 +29,12 @@ std::string Localized(std::string_view id) {
     if(id=="debug.menu")return "Debug Menu";
     if(id=="debug.unlock_kontent")return "Unlock All Kontent";
     if(id=="debug.kontent_unlocked")return "Kontent Unlocked";
+    if(id=="debug.player_damage")return "Player Damage";
+    if(id=="debug.restore_health")return "Restore Health";
+    if(id=="debug.player2")return "Player 2";
+    if(id=="debug.next_map")return "next map";
+    if(id=="value.on")return "Yes";
+    if(id=="value.off")return "No";
     Check(false,"every debug caption uses a known localized catalog key");
     return {};
 }
@@ -95,7 +103,7 @@ uint32_t CallGuest(X86Context& ctx,uint32_t target,std::initializer_list<uint32_
 }
 static std::string GuestText(uint32_t address) {
     std::string result;
-    for(unsigned i=0;i<24;++i) {
+    for(unsigned i=0;i<64;++i) {
         const uint32_t value=memory[(address+i)&~uint32_t(3)];
         const char glyph=char(value >> ((i%4)*8));
         if(!glyph)return result;
@@ -281,11 +289,42 @@ X86_FUNC(__imp__sub_00012BA8) {
         Check(builds==1 && back.esp==0x1004,"returning from Nexus retains the original cancel handler");
         update.ecx=0x4ef3c8;sub_000142EB(update,nullptr);
         Check(opens==2,"Nexus can be opened again after returning to the normal pause");
-        Check(memory[0x6064]==8 && memory[0x6054]!=0x4f1f00,
-              "unlocked Nexus appends one Kontent action in an owned list");
+        Check(memory[0x6064]==11 && memory[0x6054]!=0x4f1f00,
+              "unlocked Nexus appends the Kontent and player damage actions in an owned list");
         const uint32_t list=memory[0x6054];
         for(unsigned i=0;i<14;++i)Check(memory[list+i*4]==memory[0x4f1f00+i*4],"all seven retail Nexus actions remain intact");
-        Check(memory[list+64]==0xffffffff && memory[0x4f1f38]==0xffffffff,"owned list and original definition keep separate terminators");
+        Check(memory[list+88]==0xffffffff && memory[0x4f1f38]==0xffffffff,"owned list and original definition keep separate terminators");
+        {
+            auto player2=[&]{X86Context l;memory[l.esp+4]=memory[list+80];sub_00016992(l,nullptr);return GuestText(l.eax);};
+            Check(player2()=="Player 2: No","the player 2 row shows the live mode");
+            auto toggle=[&]{memory[0x606c]=10;X86Context t;memory[t.esp+4]=0x6000;memory[t.esp+8]=4;sub_00013B4D(t,nullptr);
+                            Check(t.eax==1 && t.esp==0x1004,"the player 2 row handles accept itself");};
+            toggle();Check(player2()=="Player 2: Yes (next map)","turning player 2 on waits for the next map");
+            toggle();Check(player2()=="Player 2: No","a second accept cancels the pending change");
+            player2_live=true;openshao::ed_nexus::EnsureMenuStorage();
+            toggle();Check(player2()=="Player 2: No (next map)","player 2 can be turned off for the next map");
+            toggle();player2_live=false;openshao::ed_nexus::EnsureMenuStorage();
+            Check(player2()=="Player 2: No","the row follows the live mode again");
+        }
+        X86Context health_label;memory[health_label.esp+4]=memory[list+72];sub_00016992(health_label,nullptr);
+        Check(GuestText(health_label.eax)=="Restore Health","the health row shows its localized caption");
+        {
+            memory[0x606c]=9;X86Context heal;memory[heal.esp+4]=0x6000;memory[heal.esp+8]=4;
+            const auto before=builds;sub_00013B4D(heal,nullptr);
+            Check(heal.eax==1 && heal.esp==0x1004 && builds==before && refills==1,"accepting the health row refills the heroes");
+        }
+        X86Context damage_label;memory[damage_label.esp+4]=memory[list+64];sub_00016992(damage_label,nullptr);
+        Check(GuestText(damage_label.eax)=="Player Damage: x1" && openshao::ed_nexus::PlayerDamage()==1.f,
+              "the damage action starts at the original damage");
+        for(uint32_t expected:{2u,4u,8u,1u}) {
+            memory[0x606c]=8;X86Context cycle;memory[cycle.esp+4]=0x6000;memory[cycle.esp+8]=4;
+            const auto before=builds;sub_00013B4D(cycle,nullptr);
+            Check(cycle.eax==1 && cycle.esp==0x1004 && builds==before,"the damage action handles accept itself");
+            Check(openshao::ed_nexus::PlayerDamage()==float(expected),"accept cycles x1, x2, x4, x8");
+            damage_label={};memory[damage_label.esp+4]=memory[list+64];sub_00016992(damage_label,nullptr);
+            Check(GuestText(damage_label.eax)==std::string("Player Damage: x")+std::to_string(expected),
+                  "the damage row shows the current multiplier");
+        }
         X86Context label;memory[label.esp+4]=memory[list+56];sub_00016992(label,nullptr);
         Check(GuestText(label.eax)=="Unlock All Kontent" && label.esp==0x1004,
               "the appended action displays localized text and preserves the native lookup ABI");
@@ -311,6 +350,10 @@ X86_FUNC(__imp__sub_00012BA8) {
     }
     ctx.eax=0xabcd;ctx.esp+=4;
 }
+#include "difficulty.h"
+namespace openshao::difficulty { uint32_t Label(uint32_t, uint32_t) { return 0; } unsigned RefillHeroes(X86Context&) { return ++refills, 2; } }
+namespace openshao::survival { uint32_t Label(uint32_t) { return 0; } }
+namespace openshao::ed_nexus { bool Player2Active() { return player2_live; } }
 #include "ed_nexus_hooks.inl"
 
 int main() {

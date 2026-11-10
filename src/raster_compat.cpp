@@ -36,8 +36,7 @@ bool UnitSpriteTexcoords(const gpu::Assembled& a) {
             for (int i=0;i<2;++i) { uvlo[i]=std::min(uvlo[i],uv[i]); uvhi[i]=std::max(uvhi[i],uv[i]); }
         }
         for (int i=0;i<2;++i) {
-            // A retail animation frame reaches -1.9998126 from -3.0. Keep
-            // the same guard across that sub-texel endpoint error.
+            // A retail frame reaches -1.9998126 from -3.0: tolerate that sub-texel error.
             constexpr float tolerance=1.f/4096;
             const float tile=std::floor(uvlo[i]+tolerance);
             if (uvlo[i]<tile-tolerance || uvhi[i]>tile+1+tolerance) return false;
@@ -63,8 +62,7 @@ std::string AtlasQuadHlsl(std::string s) {
     const std::string anchor="    noperspective float4 e : TEXCOORD5;\n";
     Replace(s,anchor,anchor+fields);
     if (s.find("    return o;\n")!=std::string::npos) {
-        // Keep screen-space sprite coverage on the NV2A's 1/16-pixel grid
-        // before host scaling; otherwise tiny retail tile gaps become columns.
+        // Snap sprites to the NV2A 1/16-pixel grid before scaling, or tile gaps become columns.
         const std::string screen="    o.e.xy = p.xy;\n";
         if (s.find(screen)!=std::string::npos)
             Replace(s,screen,"    p.xy = trunc(p.xy * 16) / 16;\n"+screen);
@@ -147,10 +145,8 @@ void main(triangle VOut v[3],inout TriangleStream<VOut> output) {
     for (int i=0;i<3;++i) {
         VOut o=v[i]; o.atlas0=b0; o.atlas1=b1; o.atlas2=b2; o.atlas3=b3;
         if (all(abs(b0)<1e10) && all(sprite_surface.xy>0) && abs(o.pos.w-1)<1e-5) {
-            // The console covers integer samples ceil(left)..ceil(right)-1.
-            // Preserve their complete host pixel cells when upscaling. This
-            // also closes joins where the preceding tile ends in transparent
-            // texels. e.zw tracks the changed edge so unstretch preserves UVs.
+            // Cover samples ceil(left)..ceil(right)-1 with whole host pixels (closes transparent joins);
+            // e.zw tracks the changed edge so unstretch keeps UVs.
             float2 edge=ceil(o.e.zw-1e-4)-0.5;
             o.pos.xy+=(edge-o.e.zw)*float2(2/sprite_surface.x,-2/sprite_surface.y)*o.pos.w;
             o.e.zw=edge;
