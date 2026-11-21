@@ -509,8 +509,8 @@ struct Session {
         if (developer_folder.empty() || !fs::is_directory(developer_folder, ec)) return;
         developer_status.exists = true;
         developer_status.manifest = fs::is_regular_file(developer_folder / "manifest.json", ec);
-        for (const auto& item : fs::directory_iterator(developer_folder, ec)) {
-            auto ext = item.path().extension().string();
+        for (fs::recursive_directory_iterator it(developer_folder, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+            auto ext = it->path().extension().string();
             for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
             if (ext == ".png") ++developer_status.pictures;
         }

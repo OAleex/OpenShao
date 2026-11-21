@@ -97,7 +97,10 @@ int main() try {
     {
         sign(0xa, 8, 8, 1);
         Write(FileName(0xa, 8, 8), pngtest::Png(8, 8, Pixels(8, 8, 90)));
-        Write(Hex16(0xa) + "_A8R8G8B8_8x8.png", pngtest::Png(8, 8, Pixels(8, 8, 91)));  // sorts before the DXT5 one
+        Write(Hex16(0xa) + "_A8R8G8B8_8x8.png", pngtest::Png(8, 8, Pixels(8, 8, 91)));  // other pixels under the same hash: neither is used
+        sign(0xb, 8, 8, 1);
+        Write(FileName(0xb, 8, 8), pngtest::Png(8, 8, Pixels(8, 8, 92)));
+        Write(Hex16(0xb) + "_A8R8G8B8_8x8.png", pngtest::Png(8, 8, Pixels(8, 8, 92)));  // the same pixels twice: the name that sorts first is used
     }
     manifest += "}";
     {
@@ -108,11 +111,12 @@ int main() try {
     DevFolderReport report;
     const auto source = OpenDevFolder(root, report, 1);
     Check(source != nullptr, "A folder with edits gives a source");
-    Check(report.manifest && report.files == 10, "Ten files are named as textures, and the manifest was read: " + std::to_string(report.files));
+    Check(report.manifest && report.files == 12, "Twelve files are named as textures, and the manifest was read: " + std::to_string(report.files));
     Check(report.unchanged == 2, "The unchanged one, and the one saved again with other metadata, are left out");
-    Check(report.edited == 4 && report.unsigned_files == 1, "Edited: one pixel, four times larger, no signature, and the duplicate hash");
-    Check(report.refused == 3, "Refused: corrupted, wrong proportion, too small");
+    Check(report.edited == 4 && report.unsigned_files == 1, "Edited: one pixel, four times larger, no signature, and the hash that came twice with the same pixels");
+    Check(report.refused == 5, "Refused: corrupted, wrong proportion, too small, and the two pictures of one hash with other pixels");
     Check(report.duplicates == 1 && report.ignored == 2, "One duplicate, and two names that do not fit");
+    Check(!source->Find(0xa), "Two pictures of one hash with other pixels: neither is a replacement");
     Check(source->Count() == 4, "The source holds the four");
     Check(!source->Find(0x1) && !source->Find(0x4), "An unchanged texture is not a replacement");
     Check(!source->Find(0x5) && !source->Find(0x6) && !source->Find(0x8), "A refused texture is not a replacement");
@@ -154,12 +158,12 @@ int main() try {
         Check(out.size() == (4096 + 1024 + 256 + 64 + 16 + 4 + 1) * 4, "The levels go down to one pixel");
     }
 
-    // The same hash twice: the file with the smaller name is the one that counts
+    // The same hash twice with the same pixels: the file with the smaller name is the one that counts
     {
-        const auto e = source->Find(0xa);
+        const auto e = source->Find(0xb);
         std::vector<uint8_t> out;
-        const Bytes first = Pixels(8, 8, 91);
-        Check(e && source->ReadLevels(*e, 0, out) && std::equal(first.begin(), first.end(), out.begin()), "Of two files with one hash, the name that sorts first is used");
+        const Bytes first = Pixels(8, 8, 92);
+        Check(e && source->ReadLevels(*e, 0, out) && std::equal(first.begin(), first.end(), out.begin()), "Of two files with one hash and the same pixels, one is used");
     }
     Check(!report.problems.empty() && report.seconds >= 0, "The report says what it found");
 
@@ -207,6 +211,45 @@ int main() try {
         Check(a && b && one.edited == 5 && many.edited == 5 && one.unchanged == 145 && many.unchanged == 145 && a->Count() == b->Count(),
               "Five edits among 150 pictures, found the same by one thread and by eight");
         for (uint64_t i = 30; i <= 150; i += 30) Check(a->Find(i) && b->Find(i), "Each edited one is found");
+    }
+
+    // Subfolders: where a picture sits does not matter, and the same hash in two places follows the same rules as in one folder
+    {
+        fs::remove_all(root);
+        fs::create_directories(root / "Levels" / "Room 001");
+        fs::create_directories(root / "Characters" / "Character 000" / "extra");
+        fs::create_directories(root / "Empty");
+        std::string m = "{";
+        for (uint64_t i = 1; i <= 6; ++i) {
+            if (i > 1) m += ",";
+            m += "\"" + Hex16(i) + "\":{\"pixels\":\"" + PixelSignature(16, 16, Pixels(16, 16, int(i)).data()) + "\"}";
+        }
+        m += "}";
+        std::ofstream(root / "manifest.json") << m;
+        Bytes edited = Pixels(16, 16, 1);
+        edited[8] ^= 4;
+        Write(FileName(0x1, 16, 16), pngtest::Png(16, 16, edited));                                              // at the top level
+        Write("Levels/Room 001/" + FileName(0x2, 16, 16), pngtest::Png(16, 16, Pixels(16, 16, 2)));             // unchanged, in a subfolder
+        Bytes three = Pixels(16, 16, 3);
+        three[1] ^= 1;
+        Write("Characters/Character 000/extra/" + FileName(0x3, 16, 16), pngtest::Png(16, 16, three));          // edited, two levels down
+        Write("Levels/Room 001/" + FileName(0x4, 16, 16), pngtest::Png(16, 16, edited));                         // the same pixels twice (hash 4)
+        Write("Characters/Character 000/" + FileName(0x4, 16, 16), pngtest::Png(16, 16, edited));
+        Write("Levels/Room 001/" + FileName(0x5, 16, 16), pngtest::Png(16, 16, Pixels(16, 16, 50)));            // other pixels under one hash (hash 5)
+        Write("Characters/Character 000/" + FileName(0x5, 16, 16), pngtest::Png(16, 16, Pixels(16, 16, 51)));
+        Write("Levels/Room 001/notes.txt", Bytes{1});
+        DevFolderReport r;
+        const auto s = OpenDevFolder(root, r, 1);
+        Check(s != nullptr && r.files == 7 && r.folders == 6, "Seven pictures in six subfolders: " + std::to_string(r.files) + " pictures, " + std::to_string(r.folders) + " folders");
+        Check(r.unchanged == 1 && r.edited == 3 && r.duplicates == 1 && r.refused == 2 && r.ignored == 1, "Unchanged, edited, duplicate, refused and ignored are counted across subfolders");
+        Check(s->Count() == 3 && s->Find(0x1) && s->Find(0x3) && s->Find(0x4) && !s->Find(0x2) && !s->Find(0x5), "The edited pictures are found wherever they sit");
+        std::vector<uint8_t> out;
+        Check(s->Find(0x3) && s->ReadLevels(*s->Find(0x3), 0, out) && std::equal(three.begin(), three.end(), out.begin()), "A picture two folders down is read");
+        DevFolderReport r2;
+        const auto s2 = OpenDevFolder(root, r2, 8);
+        Check(s2 && s2->Count() == 3 && r2.problems == r.problems, "The same answer, in the same order, with eight threads");
+        for (const auto& line : r.problems)
+            if (line.find("duplicate:") == 0) Check(line.find("Characters/Character 000/") != std::string::npos && line.find("Levels/Room 001/") != std::string::npos, "A message names the paths");
     }
 
     fs::remove_all(root);

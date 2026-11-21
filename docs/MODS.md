@@ -137,6 +137,8 @@ Keep it short: each listed texture takes video memory from the start.
 
 Turn on **Developer** on the Files page to try textures without building a pack, then choose a folder on the Developer page.
 The folder holds PNG files named `<hash>_<format>_<width>x<height>.png` and the `manifest.json` that the ModKit's extraction writes.
+The pictures may be directly in the folder or in subfolders, at any depth; where a picture sits does not matter, and the `manifest.json` stays at the top.
+If the same hash appears in two places, identical pictures use the first path in sorted order and different pictures are both refused; the log names the paths.
 The game reads the folder when it starts, before every texture mod.
 It uses only the pictures whose pixels differ from the signature in the manifest. Nothing is compressed in this mode.
 Restart the game to see a change.

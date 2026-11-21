@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -219,22 +220,28 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
         Name name;
     };
     std::vector<Work> work;
-    std::vector<std::string> files;
-    for (const auto& item : std::filesystem::directory_iterator(folder, ec)) {
-        if (!item.is_regular_file(ec)) continue;
-        files.push_back(item.path().filename().string());
+    // every file of the folder and its subfolders, by relative path: where a picture sits does not matter, its name says what it is
+    std::vector<std::pair<std::string, std::filesystem::path>> found;
+    for (std::filesystem::recursive_directory_iterator it(folder, std::filesystem::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code entry_ec;
+        if (it->is_directory(entry_ec)) {
+            ++report.folders;
+            continue;
+        }
+        if (!it->is_regular_file(entry_ec)) continue;
+        found.emplace_back(std::filesystem::relative(it->path(), folder, entry_ec).generic_string(), it->path());
     }
-    std::sort(files.begin(), files.end());  // the same result whatever the order the system lists them in
-    for (const auto& file : files) {
+    std::sort(found.begin(), found.end());  // the same result whatever the order the system lists them in
+    for (const auto& [file, path] : found) {
         Name name;
-        if (!ParseName(file, name)) {
+        if (!ParseName(path.filename().string(), name)) {
             if (file != "manifest.json" && file.find(".before-signatures") == std::string::npos) {
                 ++report.ignored;
                 problem("ignored: " + file + " is not named <hash>_<format>_<width>x<height>.png");
             }
             continue;
         }
-        work.push_back({folder / file, file, name});
+        work.push_back({path, file, name});
     }
     report.files = work.size();
 
@@ -243,6 +250,7 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
         Result result = Result::Refused;
         Entry entry;
         bool has_signature = true;
+        std::string pixels;  // the signature of the picture's pixels, to tell two pictures of one hash apart
         std::string why;
     };
     std::vector<Outcome> outcomes(work.size());
@@ -276,7 +284,8 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
             const auto sig = signatures.find(w.name.hash);
             o.has_signature = sig != signatures.end();
             o.entry = {w.path, pw, ph, w.name.width, w.name.height, w.file};
-            o.result = o.has_signature && PixelSignature(pw, ph, pic.pixels.get()) == sig->second ? Result::Unchanged : Result::Edited;
+            o.pixels = PixelSignature(pw, ph, pic.pixels.get());
+            o.result = o.has_signature && o.pixels == sig->second ? Result::Unchanged : Result::Edited;
         }
     };
     unsigned count = threads ? threads : std::max(1u, std::thread::hardware_concurrency());
@@ -287,6 +296,8 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
     for (auto& t : pool) t.join();
 
     std::unordered_map<uint64_t, Entry> edited;
+    std::unordered_map<uint64_t, size_t> first;  // the first edited picture of a hash, by position in `work`
+    std::unordered_set<uint64_t> clashing;       // hashes with different pixels in two places: no picture of them is used
     for (size_t i = 0; i < work.size(); ++i) {
         const Outcome& o = outcomes[i];
         if (o.result == Result::Refused) {
@@ -295,13 +306,31 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
         } else if (o.result == Result::Unchanged) {
             ++report.unchanged;
         } else {
-            auto [it, added] = edited.emplace(work[i].name.hash, o.entry);  // the files are in name order: the first one stays
-            if (!added) {
+            const uint64_t hash = work[i].name.hash;
+            if (clashing.count(hash)) {
+                ++report.refused;
+                problem("refused: " + work[i].file + " has the hash of " + work[first[hash]].file + " but other pixels; keep one of them");
+                continue;
+            }
+            auto [it, added] = edited.emplace(hash, o.entry);  // the files are in path order: the first one stays
+            if (added) {
+                ++report.edited;
+                if (!o.has_signature) ++report.unsigned_files;
+                first[hash] = i;
+                continue;
+            }
+            const size_t f = first[hash];
+            if (outcomes[f].pixels == o.pixels) {
                 ++report.duplicates;
                 problem("duplicate: " + work[i].file + " has the hash of " + it->second.file + ", which is used");
             } else {
-                ++report.edited;
-                if (!o.has_signature) ++report.unsigned_files;
+                clashing.insert(hash);
+                edited.erase(it);
+                --report.edited;
+                if (!outcomes[f].has_signature) --report.unsigned_files;
+                report.refused += 2;
+                problem("refused: " + work[f].file + " has the hash of " + work[i].file + " but other pixels; keep one of them");
+                problem("refused: " + work[i].file + " has the hash of " + work[f].file + " but other pixels; keep one of them");
             }
         }
     }

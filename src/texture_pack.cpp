@@ -190,9 +190,9 @@ void SetPacks(const std::vector<PackSpec>& packs) {
             auto source = OpenDevFolder(path, report);
             // the path goes last: the log replaces a path, and what follows it, with a mark
             LOGI("Texture pack: developer folder: %zu pictures, %zu edited (%zu without a signature), %zu as extracted, %zu refused, "
-                 "%zu ignored, %zu duplicates, looked at in %.2f s, folder %s",
+                 "%zu ignored, %zu duplicates, %zu subfolders, looked at in %.2f s, folder %s",
                  report.files, report.edited, report.unsigned_files, report.unchanged, report.refused, report.ignored,
-                 report.duplicates, report.seconds, path.string().c_str());
+                 report.duplicates, report.folders, report.seconds, path.string().c_str());
             for (const auto& line : report.problems) LOGI("Texture pack: developer folder: %s", line.c_str());
             if (source) members.push_back(std::move(source));
         } else if (std::filesystem::is_directory(path, ec)) {

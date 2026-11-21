@@ -6,7 +6,8 @@
 #include <vector>
 #include "texture_pack_source.h"
 
-// The developer mode's texture folder: PNG files named <hash>_<format>_<width>x<height>.png, as the extraction tool writes them,
+// The developer mode's texture folder: PNG files named <hash>_<format>_<width>x<height>.png, as the extraction tool writes them, directly in
+// it or in subfolders,
 // with a manifest.json that holds the signature of each picture's pixels. Only the pictures whose pixels differ from their
 // signature count as replacements; the others are the game's own textures as they were extracted. docs/MODS.md describes the mode.
 namespace openshao::texpack {
@@ -20,7 +21,8 @@ struct DevFolderReport {
     size_t unsigned_files = 0;  // no signature in the manifest: counted as edited
     size_t refused = 0;       // would not decode, or too small or large, or not in the proportion of the original
     size_t ignored = 0;       // a name that is not <hash>_<format>_<width>x<height>.png
-    size_t duplicates = 0;    // a hash that came twice: the file with the smaller name is used
+    size_t duplicates = 0;    // a hash that came twice with the same pixels: the file with the smaller path is used
+    size_t folders = 0;       // subfolders read
     double seconds = 0;
     bool manifest = false;    // manifest.json was there and could be read
     std::vector<std::string> problems;  // what was refused or odd, with the file name; the first ones only
