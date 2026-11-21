@@ -33,14 +33,17 @@ unsigned damage_step = 0;
 constexpr uint32_t KontentListBytes = (DebugRows+1)*8;
 constexpr uint32_t DebugTextBytes = 24;
 constexpr uint32_t PauseLabelBase = 0xFFFFFF00;
-constexpr uint32_t PauseRootBytes = 9*8;
+// Retail Continue and Options, Save Game, Settings, Enhancements, Photo Mode, retail Quit, Exit, optional Nexus, and sentinel.
+constexpr uint32_t PauseRootBytes = 10*8;
 // Reserve room for the settings rows and the native list terminator.
 constexpr uint32_t PauseSettingsBytes = (pause_recomp::MaxRows+1)*8;
 constexpr uint32_t PauseExitBytes = 3*8;
 constexpr uint32_t PauseListBytes = PauseRootBytes + PauseSettingsBytes + PauseExitBytes;
 constexpr uint32_t PauseTextCount = uint32_t(pause_recomp::Item::Count)+pause_recomp::MaxRows;
-constexpr uint32_t PauseSettingsRow = 2, PauseEnhancementsRow = 3, PausePhotoRow = 4;
+constexpr uint32_t PauseSaveRow = 2, PauseSettingsRow = 3, PauseEnhancementsRow = 4, PausePhotoRow = 5;
+constexpr uint32_t SaveMenuOpener = 0x13E0E, SaveMenuPlayerIndex = 0x4EFA60;
 uint32_t pause_storage = 0;
+bool save_after_pause = false;
 uint32_t pause_text_storage = 0, pause_text_stride = 0;
 bool EnsureMenuStorage();
 enum class PausePage { Root, Settings, Exit };
@@ -54,7 +57,7 @@ struct PauseMenuState {
     uint32_t initial_selection = 0;
     uint32_t panel_padding = 0, footer_text = 0;
     // Photo Mode follows Enhancements where the mode offers it; the rows after it move down.
-    uint32_t photo_row = ~0u, exit_row = 5;
+    uint32_t photo_row = ~0u, exit_row = 6;
 };
 PauseMenuState pause_menu;
 void WriteGuestText(uint32_t address, const char* text, unsigned bytes) {
@@ -157,6 +160,14 @@ void ShowPausePage(X86Context& ctx,PausePage page,pause_recomp::Page initial=pau
         FitPauseList(ctx);
     }
 }
+void OpenSaveMenu(X86Context& ctx) {
+    const auto saved=ctx;
+    // The save statue selects the acting player before opening the same menu.
+    kernel::W32(SaveMenuPlayerIndex,0);
+    kernel::CallGuest(ctx,SaveMenuOpener,{});
+    ctx=saved;
+    LOGI("Save menu opened from gameplay pause");
+}
 bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
     if (!pause_menu.list || !pause_storage || list!=pause_menu.list) return false;
     const auto rows=kernel::R32(list+0x54);
@@ -204,6 +215,12 @@ bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
         else if (row==PauseEnhancementsRow) ShowPausePage(ctx,PausePage::Settings,pause_recomp::Page::Enhancements);
         else if (row==pause_menu.photo_row) openshao::photo_mode::OpenFromMenu();
         else if (row==pause_menu.exit_row) ShowPausePage(ctx,PausePage::Exit);
+        else if (row==PauseSaveRow) {
+            // Close the pause exactly like Continue; the save menu opens once the pause has ended.
+            save_after_pause=true;
+            kernel::W32(list+0x6C,0);
+            return false;
+        }
         else return false;
     } else if (pause_menu.page==PausePage::Settings) {
         if(!pause_recomp::CanChoose(row)) {
@@ -251,13 +268,14 @@ bool InstallPauseList(X86Context& ctx) {
     const auto initial_selection=pause_menu.initial_selection;
     const auto back_release=pause_menu.back_release;
     const bool photo=openshao::photo_mode::Available();
-    pause_menu={list,original_rows,original_count,6+unsigned(photo)+unsigned(Unlocked()),PausePage::Root,
+    pause_menu={list,original_rows,original_count,7+unsigned(photo)+unsigned(Unlocked()),PausePage::Root,
                 PauseSettingsRow,kernel::R32(list+0x84),kernel::R32(list+0x88),back_release};
     pause_menu.photo_row=photo?PausePhotoRow:~0u;
     const uint32_t exit_game_row=photo?PausePhotoRow+1:PausePhotoRow;
     pause_menu.exit_row=exit_game_row+1;
     pause_menu.panel_padding=kernel::R32(list+0x40);
     for (unsigned i=0;i<4;++i) kernel::W32(pause_storage+i*4,kernel::R32(original_rows+i*4));
+    PausePair(pause_storage+PauseSaveRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::SaveGame));
     PausePair(pause_storage+PauseSettingsRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenSettings));
     PausePair(pause_storage+PauseEnhancementsRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenEnhancements));
     if (photo) PausePair(pause_storage+PausePhotoRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenPhotoMode));
@@ -377,7 +395,7 @@ struct PauseScope {
             LOGI("Gameplay pause scope reached (sub_00012BA8)");
             first_entry = false;
         }
-        in_pause = true; in_nexus = false; pause_menu={};
+        in_pause = true; in_nexus = false; pause_menu={}; save_after_pause = false;
     }
     ~PauseScope() {
         pause_recomp::Close();
@@ -479,6 +497,10 @@ X86_FUNC(sub_00012BA8) {
         ctx=result;
     }
     openshao::ed_nexus::deferred_hud=previous_hud;
+    if (openshao::ed_nexus::save_after_pause) {
+        openshao::ed_nexus::save_after_pause = false;
+        openshao::ed_nexus::OpenSaveMenu(ctx);
+    }
 }
 X86_EXTERN_FUNC(__imp__sub_00015060);
 X86_FUNC(sub_00015060) {

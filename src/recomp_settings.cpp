@@ -27,7 +27,7 @@ unsigned return_row=6;
 struct MainGoldAnchor {unsigned row=MainRows;float top=0;};
 MainGoldAnchor main_gold_anchor;
 unsigned selection=0;
-std::array<unsigned,size_t(Page::Interface)+1> selections{};
+std::array<unsigned,size_t(Page::Cheats)+1> selections{};
 uint32_t pending_directions=0;
 std::string notice;
 launcher::Settings trial_previous;
@@ -425,8 +425,11 @@ void Draw(X86Context& ctx) {
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
         else if(selection==3)message="settings.enhanced_camera_hint";
+        else if(selection==4)message="settings.statue_heal_hint";
     } else if(!exit_prompt && page==Page::Interface && message.empty()) {
         message=selection==0?"settings.fps_hint":"settings.notifications_hint";
+    } else if(!exit_prompt && page==Page::Cheats && message.empty()) {
+        message=selection==0?"settings.cheats_hint":"settings.cheat_key_hint";
     }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }

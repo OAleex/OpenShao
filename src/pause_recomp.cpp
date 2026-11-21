@@ -83,7 +83,7 @@ bool ValueRow(unsigned row) {
     switch(page) {
     case Page::Controls:return row==3 || row==4;
     case Page::Graphics:return row<5;
-    case Page::Interface:return row<2;
+    case Page::Interface:case Page::Cheats:return row<2;
     case Page::Display:case Page::EnhancedCamera:return row<3;
     case Page::Enhancements:return row<3;
     case Page::Audio:return row==0;
@@ -117,7 +117,7 @@ void BeginCapture(unsigned row) {
 constexpr std::array<std::string_view,uint32_t(Item::Count)> ItemKeys{
     "recomp.title","main.exit_desktop","settings.fps","settings.vsync",
     "settings.bloom_effect","settings.back_hint","pause.unsaved",
-    "pause.exit_no","pause.exit_yes","recomp.enhancements","photo.mode"
+    "pause.exit_no","pause.exit_yes","recomp.enhancements","photo.mode","pause.save_game"
 };
 }
 std::string Localized(std::string_view id) {
@@ -179,7 +179,7 @@ std::string PageIndicator() {
 }
 unsigned RowCount() {
     switch(page) {
-    case Page::Categories:return 5;
+    case Page::Categories:return 6;
     case Page::Controls:case Page::Display:return 5;
     case Page::Enhancements:return 4;
     case Page::Controller:case Page::Keyboard:case Page::KeyboardAlternate:return BindingRows();
@@ -187,6 +187,7 @@ unsigned RowCount() {
     case Page::Graphics:return 5;
     case Page::Interface:return 2;
     case Page::EnhancedCamera:return 3;
+    case Page::Cheats:return 2;
     case Page::Audio:return 1;
     case Page::DisplayConfirm:return 2;
     }
@@ -205,8 +206,8 @@ std::string RowText(unsigned row) {
     if(!status.empty() && BindingPage() && capture_row==BindingIndex(row))return status;
     switch(page) {
     case Page::Categories: {
-        static constexpr std::array<std::string_view,5> keys{
-            "recomp.display","recomp.graphics","recomp.controls","recomp.audio","recomp.interface"};
+        static constexpr std::array<std::string_view,6> keys{
+            "recomp.display","recomp.graphics","recomp.controls","recomp.audio","recomp.interface","recomp.cheats"};
         return Local(keys[row]);
     }
     case Page::Controls:
@@ -257,6 +258,10 @@ std::string RowText(unsigned row) {
         if(row==1)return pair(Local("settings.camera_speed"),std::to_string(s.camera_speed)+"%");
         if(row==2)return pair(Local("settings.camera_smoothing"),on(s.smooth_camera_framing));
         break;
+    case Page::Cheats:
+        if(row==0)return pair(Local("settings.cheats"),on(s.cheats_enabled));
+        if(row==1)return pair(Local("pause.cheat_key"),bindings::KeyLabel(s.cheat_menu_key));
+        break;
     case Page::Controller:case Page::Keyboard:case Page::KeyboardAlternate: {
         const auto action=BindingIndex(row);
         if(capturing && capture_row==action)return Local("pause.capture");
@@ -295,7 +300,7 @@ bool Back() {
 void Choose(unsigned row) {
     if(!CanChoose(row))return;
     if(page==Page::Categories) {
-        page=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Interface}[row];mapping_page=0;
+        page=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Interface,Page::Cheats}[row];mapping_page=0;
         if(page==Page::Display)original_display=proposed_display=launcher::Current();
         return;
     }
@@ -374,6 +379,10 @@ bool Adjust(unsigned row,int direction) {
         if(row==0)next.scorpion_unfiltered=!next.scorpion_unfiltered;
         if(row==1)next.restore_dialogue=!next.restore_dialogue;
         if(row==2)next.cinematic_bars=!next.cinematic_bars;
+        break;
+    case Page::Cheats:
+        if(row==0)next.cheats_enabled=!next.cheats_enabled;
+        if(row==1)Cycle(next.cheat_menu_key,std::array{0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7A},step);
         break;
     case Page::Mouse:
         if(mapping_page==0) {

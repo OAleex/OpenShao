@@ -22,6 +22,7 @@ std::string Model::Title()const {
     case Page::Enhancements:return "recomp.enhancements";
     case Page::EnhancedCamera:return "settings.enhanced_camera";
     case Page::Interface:return "recomp.interface";
+    case Page::Cheats:return "recomp.cheats";
     }
     return "recomp.title";
 }
@@ -37,7 +38,7 @@ std::vector<Row> Model::Rows()const {
     const auto& s=draft_;
     switch(page_) {
     case Page::Home:
-        for(const auto* id:{"recomp.display","recomp.graphics","recomp.controls","recomp.audio","settings.language","recomp.interface"})add(id,{},true);
+        for(const auto* id:{"recomp.display","recomp.graphics","recomp.controls","recomp.audio","settings.language","recomp.interface","recomp.cheats"})add(id,{},true);
         break;
     case Page::Display:
         add("settings.mode","value."+s.display_mode);add("settings.width",s.width?std::to_string(s.width):"value.desktop");
@@ -73,7 +74,8 @@ std::vector<Row> Model::Rows()const {
         add("settings.scorpion_unfiltered",Toggle(s.scorpion_unfiltered));
         add("settings.restore_dialogue",Toggle(s.restore_dialogue));
         add("settings.cinematic_bars",Toggle(s.cinematic_bars));
-        add("settings.enhanced_camera",">",true);break;
+        add("settings.enhanced_camera",">",true);
+        add("settings.statue_heal",Toggle(s.statue_full_heal));break;
     case Page::EnhancedCamera:
         add("settings.camera_enabled",Toggle(s.hold_camera_angle));
         add("settings.camera_speed",std::to_string(s.camera_speed)+"%");
@@ -81,13 +83,16 @@ std::vector<Row> Model::Rows()const {
     case Page::Interface:
         add("settings.fps",Toggle(s.show_fps));
         add("settings.notifications",Toggle(s.screenshot_notifications));break;
+    case Page::Cheats:
+        add("settings.cheats",Toggle(s.cheats_enabled));
+        add("settings.cheat_key","key."+std::to_string(s.cheat_menu_key));break;
     }
     return rows;
 }
 void Model::Enter(size_t row) {
     if(page_==Page::Enhancements && row==3){page_=Page::EnhancedCamera;return;}
     if(page_==Page::Home) {
-        constexpr enum Page pages[]={Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Language,Page::Interface};
+        constexpr enum Page pages[]={Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Language,Page::Interface,Page::Cheats};
         if(row<std::size(pages))page_=pages[row];return;
     }
     if(page_==Page::Controls) {
@@ -165,6 +170,11 @@ void Model::Change(size_t row,int direction) {
         if(row==0)s.scorpion_unfiltered=!s.scorpion_unfiltered;
         if(row==1)s.restore_dialogue=!s.restore_dialogue;
         if(row==2)s.cinematic_bars=!s.cinematic_bars;
+        if(row==4)s.statue_full_heal=!s.statue_full_heal;
+        break;
+    case Page::Cheats:
+        if(row==0)s.cheats_enabled=!s.cheats_enabled;
+        if(row==1){constexpr std::array keys{0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7A};Cycle(s.cheat_menu_key,keys,delta);}
         break;
     case Page::EnhancedCamera:
         if(row==0)s.hold_camera_angle=!s.hold_camera_angle;

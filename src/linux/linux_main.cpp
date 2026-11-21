@@ -33,6 +33,7 @@
 #include "linux/virtual_keys.h"
 #include "performance_overlay.h"
 #include "photo_mode.h"
+#include "cheat_menu.h"
 #include "runtime_paths.h"
 #include "support_report.h"
 #include "restart.h"
@@ -258,6 +259,10 @@ void HandleEvent(const SDL_Event& e, bool& running) {
             photo_mode::Message(down ? 0x100 : 0x101, 0x7B, e.key.repeat ? intptr_t(1) << 30 : 0);
             return;
         }
+        if (cheat::Message(down ? 0x100 : 0x101, key, e.key.repeat ? intptr_t(1) << 30 : 0))
+            return;
+        if (cheat::HandleKey(key, down))
+            return;
         if (key == VK_F10) {
             if (down && !e.key.repeat) linux_input::ToggleCapture();
             return;

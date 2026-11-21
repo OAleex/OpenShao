@@ -34,6 +34,10 @@ struct Settings {
     bool hold_camera_angle = false;
     bool smooth_camera_framing = false;
     int camera_speed = 100;
+    bool cheats_enabled = false;
+    int cheat_menu_key = 0x77; // VK_F8
+    bool statue_full_heal = false;
+    int cheat_menu_x = 100, cheat_menu_y = 5; // percent of the free screen space
     mouse::Settings mouse;
     bool original_override = false, camera_reverse = false;
     int music_volume = 90, effects_volume = 90, speech_volume = 90;
