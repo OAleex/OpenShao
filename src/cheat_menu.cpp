@@ -2,6 +2,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -35,8 +38,28 @@ constexpr uint32_t kFatalityP2       = 0x817982A4;
 // Fatality, Multality and Brutality share one meter of three 400-point bars.
 constexpr float    kFatalityFull     = 1200.0f;
 
+// Progress is a bitset at 0x5A375C. The game's complete-unlock routine (0xB67A0) sets these bit ranges and the three
+// flag bytes at 0x5A378D.
+struct BitRange { uint32_t first, last; };
+constexpr BitRange kUnlockBits[] = {{82, 84}, {88, 90}, {92, 99}, {101, 164}, {166, 341}, {343, 358}, {366, 374}};
+
+void UnlockAll() {
+    constexpr uint32_t kBitset = 0x005A375C, kFlags = 0x005A378D;
+    if (!mem::IsCommitted(kBitset) || !mem::IsCommitted(kFlags + 2)) return;
+    for (const BitRange& range : kUnlockBits) {
+        for (uint32_t bit = range.first; bit <= range.last; ++bit) {
+            const uint32_t address = kBitset + bit / 32 * 4, mask = 1u << (bit % 32);
+            const uint32_t word = kernel::R32(address);
+            if (!(word & mask)) kernel::W32(address, word | mask);
+        }
+    }
+    for (uint32_t i = 0; i < 3; ++i) kernel::G<uint8_t>(kFlags + i) = 1;
+}
+
 void Apply(const CheatState& st) {
     if (!mem::Base()) return;
+
+    if (st.unlock_all) UnlockAll();
 
     if (st.infinite_health) FillPlayerHealth();
 
@@ -110,6 +133,8 @@ struct Page {
 
 const Entry root_entries[] = {
     {"cheat.infinite_health", Kind::Toggle,  &state.infinite_health, Screen::Root,     0},
+    {"cheat.coop_paths",      Kind::Toggle,  &state.coop_paths,      Screen::Root,     0},
+    {"cheat.unlock_all",      Kind::Toggle,  &state.unlock_all,      Screen::Root,     0},
     {"cheat.player1",         Kind::Submenu, nullptr,                Screen::Player1,  0},
     {"cheat.player2",         Kind::Submenu, nullptr,                Screen::Player2,  0},
     {"cheat.settings",        Kind::Submenu, nullptr,                Screen::Settings, 0},
@@ -208,8 +233,8 @@ bool PlayerHealthAddress(uint32_t& address) {
 void SetStatueFullHeal(bool enabled) { statue_full_heal.store(enabled, std::memory_order_relaxed); }
 bool StatueFullHeal() { return statue_full_heal.load(std::memory_order_relaxed); }
 
-// The loading screen briefly reports bogus values (1280 was seen for ~2 s), so a
-// value only counts as the maximum after it has stayed unchanged for a few seconds.
+// The loading screen reports bogus values, so a value only counts as the maximum after it has stayed
+// unchanged for a few seconds.
 void TrackPlayerHealth() {
     uint32_t address;
     if (!PlayerHealthAddress(address)) return;
@@ -268,6 +293,122 @@ void TickStatueHeal() {
         });
     }
 }
+}
+
+// Ko-op paths. The level scripts and the map triggers ask the game for its mode through script commands: istwoplayer,
+// isoneplayer and stonecolor answer only for a character reference (a tag "char" at its start). In single player these
+// answers are given as the game would give them in Ko-op, except isoneplayer asked from a map trigger's conditions,
+// which keeps the real answer. A door that needs two plates is opened by one: with event flags, when one flag of the
+// door was just set by a plate; with stone power, when half of what the door asks for is there.
+namespace {
+std::atomic<bool> coop_active{false};
+std::mutex coop_lock;
+std::unordered_map<uint32_t, uint32_t> coop_pressed;  // event id -> game tick of its last change to set
+std::unordered_set<uint32_t> coop_logged;
+constexpr uint32_t kGameManager = 0x005ACEBC, kGameTicks = 0x005CE878, kModeOffset = 0x88, kEventFlags = 0x4874;
+constexpr uint32_t kTriggerManager = 0x00682020, kCommandTable = 0x11C00, kCommandStride = 24, kCommandCount = 0x1254C;
+constexpr uint32_t kTriggerConditions = 0x58, kTriggerSlots = 0x5C, kTriggerArguments = 0x60;
+constexpr uint32_t kStonePower = 0x00581B48;
+constexpr uint32_t kEventLimit = 200;                          // the gameevent command ignores ids from 200 up
+constexpr uint32_t kEventCompleteCommand = 0x00016A4B;
+constexpr uint32_t kTriggerCondition = 0x0016F51A;             // return address of a trigger's condition call
+constexpr uint32_t kCharTag = 0x72616863;                      // "char"
+constexpr uint32_t kPressWindow = 1800;                        // game ticks: 30 s
+
+bool Readable(uint32_t p) {
+    const bool range = p >= 0x10000 && (p < 0x7FFE0000 || (p >= 0x80000000 && p < 0x84000000) ||
+                                        (p >= 0xB0000000 && p < 0xC0000000) || (p >= 0xD0000000 && p < 0xE0000000));
+    return range && mem::IsCommitted(p) && mem::IsCommitted(p + 4);
+}
+bool Read(uint32_t p, uint32_t& value) {
+    if (!Readable(p)) return false;
+    value = kernel::R32(p);
+    return true;
+}
+bool SinglePlayer() {
+    uint32_t manager, mode;
+    return Read(kGameManager, manager) && Read(manager + kModeOffset, mode) && mode == 0;
+}
+bool CharReference(uint32_t reference) {
+    uint32_t tag;
+    return Read(reference, tag) && tag == kCharTag && kernel::G<uint8_t>(reference + 4) == 0;
+}
+bool CoopAnswers(uint32_t esp) {
+    uint32_t reference;
+    return coop_active.load(std::memory_order_relaxed) && SinglePlayer() && Read(esp + 4, reference) && CharReference(reference);
+}
+bool FlagSet(uint32_t id) {
+    uint32_t manager;
+    return id < kEventLimit && Read(kGameManager, manager) && mem::IsCommitted(manager + kEventFlags + id) &&
+           kernel::G<uint8_t>(manager + kEventFlags + id) != 0;
+}
+// True when this event flag was set by a plate, and is still set, within the last kPressWindow game ticks.
+bool Pressed(uint32_t id, uint32_t tick) {
+    std::lock_guard<std::mutex> guard(coop_lock);
+    const auto it = coop_pressed.find(id);
+    return it != coop_pressed.end() && tick - it->second <= kPressWindow && FlagSet(id);
+}
+}
+
+bool CoopForceTwoPlayer(uint32_t esp) {
+    return CoopAnswers(esp);
+}
+bool CoopForceOnePlayer(uint32_t esp) {
+    uint32_t caller;
+    return CoopAnswers(esp) && !(Read(esp, caller) && caller == kTriggerCondition);
+}
+bool CoopForceStone(uint32_t esp) {
+    uint32_t reference, character;
+    // Players are characters 0 and 1. A plate takes either one's color.
+    return CoopAnswers(esp) && Read(esp + 4, reference) && Read(reference + 0x10, character) && character <= 1;
+}
+// stonepowatleast: one plate gives half of what a door built for two plates asks for.
+bool CoopForceStonePower(uint32_t esp, uint32_t condition) {
+    uint32_t power, needed;
+    return CoopAnswers(esp) && Read(kStonePower, power) && Read(condition + 4, needed) && int32_t(power) > 0 &&
+           int64_t(int32_t(power)) * 2 >= int32_t(needed);
+}
+// eventcomplete, asked as a condition of a door whose conditions are all event flags: true when another flag of the door
+// was just set by a plate.
+bool CoopForceEventFlag(uint32_t condition) {
+    uint32_t record, count, slots, arguments, manager, own, tick;
+    if (!coop_active.load(std::memory_order_relaxed) || !SinglePlayer()) return false;
+    if (!Read(condition + 8, record) || !Read(condition + 4, own) || !Read(record + kTriggerConditions, count) || count < 2 ||
+        count > 8 || !Read(record + kTriggerSlots, slots) || !Read(record + kTriggerArguments, arguments) ||
+        !Read(kTriggerManager, manager) || !Read(kGameTicks, tick)) return false;
+    uint32_t commands;
+    if (!Read(manager + kCommandCount, commands)) return false;
+    uint32_t pressed = UINT32_MAX;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t slot, object, table, execute, id;
+        if (!Read(slots + i * 4, slot) || slot > commands || !Read(manager + slot * kCommandStride + kCommandTable, object) ||
+            !Read(object, table) || !Read(table, execute) || execute != kEventCompleteCommand || !Read(arguments + i * 4, id))
+            return false;
+        if (id != own && Pressed(id, tick)) pressed = id;
+    }
+    if (pressed == UINT32_MAX) return false;
+    if (coop_logged.size() < 16 && coop_logged.insert(record).second)
+        LOGI("Ko-op paths: a door of %u event flags opened by flag %u alone", count, pressed);
+    return true;
+}
+CoopEvent CoopEventBefore(uint32_t esp) {
+    CoopEvent event;
+    if (!coop_active.load(std::memory_order_relaxed) || !SinglePlayer()) return event;
+    uint32_t command, arguments, id, value;
+    if (!Read(esp + 4, command) || !Read(command + 8, arguments) || !Read(arguments, id) || id >= kEventLimit ||
+        !Read(arguments + 4, value)) return event;
+    event.pending = true;
+    event.id = id;
+    event.value = value;
+    return event;
+}
+void CoopEventAfter(const CoopEvent& event) {
+    if (!event.pending) return;
+    uint32_t tick;
+    if (!Read(kGameTicks, tick)) return;
+    std::lock_guard<std::mutex> guard(coop_lock);
+    if (event.value != 0) coop_pressed[event.id] = tick;
+    else coop_pressed.erase(event.id);
 }
 
 bool Message(uint32_t message, uintptr_t key, intptr_t flags) {
@@ -447,6 +588,7 @@ void DrawMenu() {
 
 void Draw(double) {
     TickStatueHeal();
+    coop_active.store(Enabled() && state.coop_paths, std::memory_order_relaxed);
     if (!Enabled()) return;
     guest::Apply(state);
     if (!Visible()) { screen = Screen::Root; return; }
@@ -470,4 +612,52 @@ X86_FUNC(sub_0014F4A0) {
     __imp__sub_0014F4A0(ctx, base);
     if (statue && openshao::cheat::StatueFullHeal())
         openshao::cheat::OnStatueUsed();
+}
+
+X86_EXTERN_FUNC(__imp__sub_00012E55);
+X86_FUNC(sub_00012E55) {
+    // istwoplayer
+    const bool force = openshao::cheat::CoopForceTwoPlayer(ctx.esp);
+    __imp__sub_00012E55(ctx, base);
+    if (force) ctx.eax = (ctx.eax & 0xFFFFFF00u) | 1u;
+}
+
+X86_EXTERN_FUNC(__imp__sub_000156CD);
+X86_FUNC(sub_000156CD) {
+    // isoneplayer
+    const bool force = openshao::cheat::CoopForceOnePlayer(ctx.esp);
+    __imp__sub_000156CD(ctx, base);
+    if (force) ctx.eax &= 0xFFFFFF00u;
+}
+
+X86_EXTERN_FUNC(__imp__sub_00015574);
+X86_FUNC(sub_00015574) {
+    // stonecolor
+    const bool force = openshao::cheat::CoopForceStone(ctx.esp);
+    __imp__sub_00015574(ctx, base);
+    if (force) ctx.eax = (ctx.eax & 0xFFFFFF00u) | 1u;
+}
+
+X86_EXTERN_FUNC(__imp__sub_00013134);
+X86_FUNC(sub_00013134) {
+    // gameevent
+    const auto event = openshao::cheat::CoopEventBefore(ctx.esp);
+    __imp__sub_00013134(ctx, base);
+    openshao::cheat::CoopEventAfter(event);
+}
+
+X86_EXTERN_FUNC(__imp__sub_00013F94);
+X86_FUNC(sub_00013F94) {
+    // stonepowatleast
+    const bool force = openshao::cheat::CoopForceStonePower(ctx.esp, ctx.ecx);
+    __imp__sub_00013F94(ctx, base);
+    if (force) ctx.eax = (ctx.eax & 0xFFFFFF00u) | 1u;
+}
+
+X86_EXTERN_FUNC(__imp__sub_00016A4B);
+X86_FUNC(sub_00016A4B) {
+    // eventcomplete
+    const uint32_t condition = ctx.ecx;
+    __imp__sub_00016A4B(ctx, base);
+    if ((ctx.eax & 0xFF) == 0 && openshao::cheat::CoopForceEventFlag(condition)) ctx.eax = (ctx.eax & 0xFFFFFF00u) | 1u;
 }

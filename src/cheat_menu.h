@@ -25,6 +25,15 @@ void SetStatueFullHeal(bool enabled);
 bool StatueFullHeal();
 // Called from guest hooks on the game thread.
 void TrackPlayerHealth();
+// Ko-op paths. Called from guest hooks on the game thread with the stack pointer at the hooked call.
+struct CoopEvent { bool pending = false; uint32_t id = 0, value = 0; };
+bool CoopForceTwoPlayer(uint32_t esp);
+bool CoopForceOnePlayer(uint32_t esp);
+bool CoopForceStone(uint32_t esp);
+bool CoopForceStonePower(uint32_t esp, uint32_t condition);
+bool CoopForceEventFlag(uint32_t condition);
+CoopEvent CoopEventBefore(uint32_t esp);
+void CoopEventAfter(const CoopEvent& event);
 // Starts a one second burst of the Infinite Health routine when the save statue is used.
 void OnStatueUsed();
 
@@ -36,6 +45,8 @@ struct CheatState {
     bool infinite_xp_p2 = false;
     bool infinite_energy_p1 = false;
     bool infinite_energy_p2 = false;
+    bool coop_paths = false;
+    bool unlock_all = false;
 };
 const CheatState& State();
 }
