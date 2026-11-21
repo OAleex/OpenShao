@@ -13,7 +13,7 @@ struct X86Context { uint32_t esp=0x1000,eax=0,ecx=0; };
 namespace openshao::ed_nexus { namespace { bool EnsureMenuStorage(); } }
 std::unordered_map<uint32_t,uint32_t> memory;
 void Check(bool value,const char* text) { if(!value) {std::fprintf(stderr,"FAIL: %s\n",text);std::exit(1);} }
-unsigned opens=0,sounds=0,updates=0,builds=0,native_pause_events=0;
+unsigned opens=0,sounds=0,updates=0,builds=0,native_pause_events=0,save_opens=0;
 unsigned toggles=0,desktop_exits=0;
 unsigned original_cheats=0;
 unsigned refills=0;
@@ -140,6 +140,11 @@ uint32_t CallGuest(X86Context& ctx,uint32_t target,std::initializer_list<uint32_
         Check(ctx.ecx==0x4ef3c8 && args.size()==1,"menu lookup retains the original GUI ABI");
         if(*args.begin()==0x49f924) result=0x4000;
         else {Check(*args.begin()==0x49f8fc,"Nexus lookup uses the native native list");result=0x6000;}
+    }
+    else if(target==0x13E0E) {
+        ++save_opens;
+        Check(args.size()==0,"save menu opener keeps its no-argument ABI");
+        Check(memory[0x4EFA60]==0,"save menu opens for the first player");
     }
     else if(target==0x151560) {
         ++sounds;
@@ -404,7 +409,7 @@ X86_FUNC(__imp__sub_00012BA8) {
         sub_00015687(cancel,nullptr);
         Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==5,
               "cancel leaves desktop confirmation and returns to pause");
-        event(2,4);event(2,4);
+        event(3,4);event(2,4);
         Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,"Back fixture starts inside controls");
         release_input();cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
@@ -413,7 +418,7 @@ X86_FUNC(__imp__sub_00012BA8) {
         release_input();cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
         Check(memory[0x4054]==rows,"second Back event restores the native pause root");
-        event(2,4);event(2,4);
+        event(3,4);event(2,4);
         const auto before_b=native_pause_events;
         X86Context submenu_b;memory[submenu_b.esp+4]=0x4000;memory[submenu_b.esp+8]=8;
         sub_00015687(submenu_b,nullptr);
@@ -590,6 +595,7 @@ int main() {
     Check(opens==0 && updates==1,"unlocked gameplay X remains unchanged outside pause");
     exercise_pause=true;X86Context pause;sub_00012BA8(pause,nullptr);
     Check(pause.esp==0x1004 && pause.eax==0xabcd,"pause wrapper preserves original result and stack");
+    Check(save_opens==1,"the save menu opens once, after the pause has ended");
     Check(memory[0x4f1cd8]==0xffffffff,"leaving pause preserves the native source terminator");
     Check(memory[0x4054]==0x5000 && memory[0x4064]==3,
           "leaving pause returns native menu pointers and counts to their original values");

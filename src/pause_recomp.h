@@ -5,7 +5,7 @@
 
 namespace openshao::pause_recomp {
 enum class Item : uint32_t {
-    OpenSettings, OpenExit, ShowFps, Vsync, Bloom, Return, Warning, No, Yes, OpenEnhancements, OpenPhotoMode, Count
+    OpenSettings, OpenExit, ShowFps, Vsync, Bloom, Return, Warning, No, Yes, OpenEnhancements, OpenPhotoMode, SaveGame, Count
 };
 enum class Page : uint8_t {
     Categories, Controls, Graphics, Display, Audio,

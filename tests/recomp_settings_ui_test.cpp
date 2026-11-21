@@ -426,7 +426,7 @@ int main() {
     ctx.esp=0x3000;ctx.ecx=0x598430;kernel::W32(0x4000,0);kernel::W32(0x4004,0x40);
     kernel::W32(0x598468,7);kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     check(MainInput(ctx,memory.data()) && Active() && model.CurrentPage()==Page::Enhancements &&
-          Snapshot().rows.size()==4 && !exit_prompt,
+          Snapshot().rows.size()==7 && !exit_prompt,
           "The new main-menu Enhancements row must open its standalone list rather than Exit");
     ctx.esp=0x3000;ctx.ecx=0x5985E8;release=false;Process(ctx,0,0x20);
     check(closing && MainReturning(),"Leaving unchanged Enhancements must close native Options and preserve Main's return anchor");

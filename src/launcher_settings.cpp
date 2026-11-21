@@ -40,6 +40,11 @@ Settings Read(const toml::table& table) {
     s.hold_camera_angle = table["enhancements"]["hold_camera_angle"].value_or(s.hold_camera_angle);
     s.smooth_camera_framing = table["enhancements"]["smooth_camera_framing"].value_or(s.smooth_camera_framing);
     s.camera_speed = std::clamp(table["enhancements"]["camera_speed"].value_or(s.camera_speed), CameraSpeedMin, CameraSpeedMax);
+    s.cheats_enabled = table["enhancements"]["cheats_enabled"].value_or(s.cheats_enabled);
+    s.cheat_menu_key = table["enhancements"]["cheat_menu_key"].value_or(s.cheat_menu_key);
+    s.statue_full_heal = table["enhancements"]["statue_full_heal"].value_or(s.statue_full_heal);
+    s.cheat_menu_x = std::clamp(table["enhancements"]["cheat_menu_x"].value_or(s.cheat_menu_x), 0, 100);
+    s.cheat_menu_y = std::clamp(table["enhancements"]["cheat_menu_y"].value_or(s.cheat_menu_y), 0, 100);
     const auto g = table["game"];
     s.original_override = g["override_original"].value_or(s.original_override);
     s.camera_reverse = g["camera_reverse"].value_or(s.camera_reverse);
@@ -97,6 +102,11 @@ toml::table Merge(toml::table table, const Settings& s) {
     enhancements.insert_or_assign("smooth_camera_framing", s.smooth_camera_framing);
     enhancements.insert_or_assign("camera_speed", s.camera_speed);
     enhancements.erase("vertical_shadows");
+    enhancements.insert_or_assign("cheats_enabled", s.cheats_enabled);
+    enhancements.insert_or_assign("cheat_menu_key", s.cheat_menu_key);
+    enhancements.insert_or_assign("statue_full_heal", s.statue_full_heal);
+    enhancements.insert_or_assign("cheat_menu_x", std::clamp(s.cheat_menu_x, 0, 100));
+    enhancements.insert_or_assign("cheat_menu_y", std::clamp(s.cheat_menu_y, 0, 100));
     table.insert_or_assign("enhancements", enhancements);
     toml::table c, b;
     for (size_t i = 0; i < s.bindings.size(); ++i) b.insert_or_assign(binding_keys[i], s.bindings[i]);
