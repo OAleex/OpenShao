@@ -1,0 +1,280 @@
+diff --git a/runtime/gpu/d3d12.cpp b/runtime/gpu/d3d12.cpp
+index 16395fa..3a5d26e 100644
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -13,9 +13,11 @@
+ #include <wrl/client.h>
+ 
+ #include <algorithm>
++#include <array>
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <deque>
+ #include <filesystem>
+@@ -312,6 +314,8 @@ bool LatchCpuWrite(Target& t) {
+     return true;
+ }
+ 
++struct Replacement;
++
+ struct Tex {
+     ComPtr<ID3D12Resource> res;
+     TextureDesc d;
+@@ -321,6 +325,7 @@ struct Tex {
+     uint64_t frame = 0;
+     uint64_t palette = 0;  // hash of the colours a P8 texture was decoded with
+     uint8_t flags = 0;  // Extension::Decoded's
++    const void* repl = nullptr;  // the host replacement drawn instead of the guest bytes, when one matched
+ };
+ 
+ struct PsoKey {
+@@ -505,6 +510,8 @@ private:
+     void UploadTexture(Tex& tx, const TextureDesc& d, const FormatInfo& fi, const uint8_t* p, const uint32_t* colours,
+                        bool same);
+     void UploadTextureLevel(Tex& tx, uint32_t f, uint32_t l, const std::vector<uint8_t>& px, uint32_t pitch);
++    bool UploadReplacement(Tex& tx, const TextureDesc& d, const FormatInfo& fi, const Replacement& r,
++                           const uint8_t* p);
+     void EnsurePixelShader(const PixelKey& pk, DrawShaders& sh);
+     void BuildPipelineKey(const State& s, const Assembled& a, uint64_t vh, uint64_t ph, PsoKey& k);
+     void KeyDepthStencil(const State& s, const Assembled& a, PsoKey& k);
+@@ -1715,6 +1722,212 @@ void ReadStagePalette(const State& s, int stage, const TextureDesc& d, StagePale
+     palette.hash = Hash(palette.colours, sizeof(palette.colours));
+ }
+ 
++// Optional texture usage dump for texture modding: with OPENSHAO_TEXDUMP=<file>, every distinct guest texture uploaded
++// for drawing adds one line: frame, guest address, format, width, height, levels, level 0 bytes, CRC-32 (zlib) of
++// level 0. The CRC is taken over the swizzled guest bytes, so tools can find the same texture in the game's XPR files.
++static void TexDump(const TextureDesc& d, const uint8_t* p, uint64_t frame) {
++    static const char* path = std::getenv("OPENSHAO_TEXDUMP");
++    if (!path || !*path || !p) return;
++    static const auto table = [] {
++        std::array<uint32_t, 256> t{};
++        for (uint32_t i = 0; i < 256; ++i) {
++            uint32_t c = i;
++            for (int k = 0; k < 8; ++k) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
++            t[i] = c;
++        }
++        return t;
++    }();
++    static std::mutex m;
++    static std::unordered_set<uint64_t> seen;
++    static FILE* f = nullptr;
++    constexpr size_t kMaxLines = 50000;
++    const uint32_t n = LevelSize(d, 0);
++    uint32_t crc = 0xFFFFFFFFu;
++    for (uint32_t i = 0; i < n; ++i) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
++    crc ^= 0xFFFFFFFFu;
++    const uint64_t key = uint64_t(d.format) << 56 | uint64_t(d.width & 0xFFF) << 44 | uint64_t(d.height & 0xFFF) << 32 | crc;
++    std::lock_guard<std::mutex> lock(m);
++    if (seen.size() >= kMaxLines || !seen.insert(key).second) return;
++    if (!f) f = std::fopen(path, "a");
++    if (!f) return;
++    std::fprintf(f, "%llu\t%08X\t%02X\t%u\t%u\t%u\t%u\t%08X\n", static_cast<unsigned long long>(frame), d.data, d.format,
++                 d.width, d.height, d.levels, n, crc);
++    std::fflush(f);
++}
++
++static uint32_t GuestCrc32(const uint8_t* p, size_t n) {
++    static const auto table = [] {
++        std::array<uint32_t, 256> t{};
++        for (uint32_t i = 0; i < 256; ++i) {
++            uint32_t c = i;
++            for (int k = 0; k < 8; ++k) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
++            t[i] = c;
++        }
++        return t;
++    }();
++    uint32_t crc = 0xFFFFFFFFu;
++    for (size_t i = 0; i < n; ++i) crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
++    return crc ^ 0xFFFFFFFFu;
++}
++
++// Optional host texture replacement for texture modding: OPENSHAO_TEXREPLACE=<folder> holding DDS files named
++// <CRC>_<FMT>_<W>x<H>.dds (CRC-32 of the guest level 0 bytes, format and size as TexDump writes them). A guest texture
++// that matches is drawn from the DDS (any size, its own mip chain) while the game keeps the original in its memory.
++struct Replacement {
++    std::filesystem::path path;
++    DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
++    uint32_t w = 0, h = 0, levels = 0;
++    std::vector<std::vector<uint8_t>> px;
++    std::vector<uint32_t> pitch;
++    bool loaded = false, bad = false;
++};
++
++static uint64_t ReplacementKey(uint32_t fmt, uint32_t w, uint32_t h, uint32_t crc) {
++    return uint64_t(fmt & 0xFF) << 56 | uint64_t(w & 0xFFF) << 44 | uint64_t(h & 0xFFF) << 32 | crc;
++}
++
++static bool LoadDds(Replacement& r) {
++    FILE* f = _wfopen(r.path.c_str(), L"rb");
++    if (!f) return false;
++    std::vector<uint8_t> b;
++    std::fseek(f, 0, SEEK_END);
++    long size = std::ftell(f);
++    std::fseek(f, 0, SEEK_SET);
++    if (size > 128) {
++        b.resize(size_t(size));
++        if (std::fread(b.data(), 1, b.size(), f) != b.size()) b.clear();
++    }
++    std::fclose(f);
++    auto u32 = [&](size_t o) {
++        uint32_t v;
++        std::memcpy(&v, &b[o], 4);
++        return v;
++    };
++    if (b.size() <= 128 || std::memcmp(b.data(), "DDS ", 4) != 0 || u32(4) != 124) return false;
++    r.h = u32(12);
++    r.w = u32(16);
++    r.levels = std::max(1u, u32(28));
++    uint32_t pf_flags = u32(80), fourcc = u32(84), bits = u32(88), rmask = u32(92);
++    uint32_t block = 0;
++    if ((pf_flags & 4) && fourcc == 0x35545844u) {  // DXT5
++        r.fmt = DXGI_FORMAT_BC3_UNORM;
++        block = 16;
++    } else if ((pf_flags & 4) && fourcc == 0x31545844u) {  // DXT1
++        r.fmt = DXGI_FORMAT_BC1_UNORM;
++        block = 8;
++    } else if ((pf_flags & 0x40) && bits == 32 && rmask == 0x00FF0000u) {
++        r.fmt = DXGI_FORMAT_B8G8R8A8_UNORM;
++    } else {
++        return false;
++    }
++    if (!r.w || !r.h || r.w > 16384 || r.h > 16384 || (block && ((r.w & 3) || (r.h & 3)))) return false;
++    uint32_t full = 1;
++    while ((std::max(r.w, r.h) >> full) != 0) full++;
++    r.levels = std::min(r.levels, full);
++    size_t off = 128;
++    for (uint32_t l = 0; l < r.levels; ++l) {
++        uint32_t lw = std::max(1u, r.w >> l), lh = std::max(1u, r.h >> l);
++        uint32_t pitch = block ? std::max(1u, (lw + 3) / 4) * block : lw * 4;
++        uint32_t rows = block ? std::max(1u, (lh + 3) / 4) : lh;
++        size_t n = size_t(pitch) * rows;
++        if (off + n > b.size()) {
++            r.levels = l;
++            break;
++        }
++        r.px.emplace_back(b.begin() + off, b.begin() + off + n);
++        r.pitch.push_back(pitch);
++        off += n;
++    }
++    return r.levels > 0;
++}
++
++class Replacements {
++public:
++    static Replacements& Get() {
++        static Replacements r;
++        return r;
++    }
++    // the replacement for these guest bytes, nullptr without one
++    const Replacement* Find(const TextureDesc& d, const uint8_t* p) {
++        if (files_.empty() || !p || d.linear || d.cube || d.depth != 1) return nullptr;
++        if (!dims_.count(ReplacementKey(d.format, d.width, d.height, 0))) return nullptr;
++        uint32_t crc = GuestCrc32(p, LevelSize(d, 0));
++        auto it = files_.find(ReplacementKey(d.format, d.width, d.height, crc));
++        if (it == files_.end()) return nullptr;
++        Replacement& r = it->second;
++        if (!r.loaded) {
++            r.loaded = true;
++            r.bad = !LoadDds(r);
++            Log("%s %08X %02X %ux%u -> %ux%u levels %u (%s)\n", r.bad ? "BAD" : "use", crc, d.format, d.width,
++                d.height, r.w, r.h, r.levels, r.path.filename().string().c_str());
++        }
++        return r.bad ? nullptr : &r;
++    }
++
++private:
++    Replacements() {
++        const char* dir = std::getenv("OPENSHAO_TEXREPLACE");
++        if (!dir || !*dir) return;
++        std::error_code ec;
++        for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path(dir), ec)) {
++            unsigned crc, fmt, w, h;
++            char tail[8] = {};
++            std::string name = e.path().filename().string();
++            if (std::sscanf(name.c_str(), "%8x_%2x_%ux%u.%4s", &crc, &fmt, &w, &h, tail) != 5) continue;
++            if (_stricmp(tail, "dds") != 0) continue;
++            files_[ReplacementKey(fmt, w, h, crc)].path = e.path();
++            dims_.insert(ReplacementKey(fmt, w, h, 0));
++        }
++        log_ = _wfopen((std::filesystem::path(dir) / "texreplace.log").c_str(), L"w");
++        Log("texture replacement: %zu files in %s\n", files_.size(), dir);
++    }
++    template <typename... A>
++    void Log(const char* f, A... a) {
++        if (!log_) return;
++        std::fprintf(log_, f, a...);
++        std::fflush(log_);
++    }
++    std::unordered_map<uint64_t, Replacement> files_;
++    std::unordered_set<uint64_t> dims_;
++    FILE* log_ = nullptr;
++};
++
++// the replacement in place of the guest texture; the flags still come from the original's decode
++bool D3D12Backend::UploadReplacement(Tex& tx, const TextureDesc& d, const FormatInfo& fi, const Replacement& r,
++                                     const uint8_t* p) {
++    if (ext_) {
++        uint8_t flags = 0;
++        std::vector<uint8_t> px;
++        uint32_t pitch;
++        DecodeLevel(d, 0, 0, p, nullptr, px, pitch);
++        ext_->Decoded(d, fi, 0, 0, px, pitch, flags);
++        tx.flags = flags;
++    }
++    if (tx.repl == &r) return true;  // the same bytes again: the host copy is already there
++    if (tx.res) CurrentFrame().garbage.push_back(tx.res);
++    tx.res.Reset();
++    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
++    D3D12_RESOURCE_DESC td{};
++    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++    td.Width = r.w;
++    td.Height = r.h;
++    td.DepthOrArraySize = 1;
++    td.MipLevels = UINT16(r.levels);
++    td.Format = r.fmt;
++    td.SampleDesc.Count = 1;
++    if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
++                                             IID_PPV_ARGS(&tx.res)))) {
++        return false;
++    }
++    tx.fmt = r.fmt;
++    tx.levels = r.levels;
++    tx.repl = &r;
++    for (uint32_t l = 0; l < r.levels; ++l) UploadTextureLevel(tx, 0, l, r.px[l], r.pitch[l]);
++    D3D12_RESOURCE_STATES st = D3D12_RESOURCE_STATE_COPY_DEST;
++    Transition(tx.res.Get(), st, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
++    return true;
++}
++
+ // a texture in guest memory: made again when its layout changed, uploaded again when its bytes did
+ ID3D12Resource* D3D12Backend::BindGuestTexture(const State& s, int stage, const TextureDesc& d, const FormatInfo& fi,
+                                                DrawTextures& stages) {
+@@ -1739,7 +1952,23 @@ ID3D12Resource* D3D12Backend::BindGuestTexture(const State& s, int stage, const
+             g_perf.texups++;
+             g_perf.texup_bytes += total;
+             tx.sig = sig;
+-            UploadTexture(tx, d, fi, p, palette.va ? palette.colours : nullptr, same);
++            const Replacement* r = palette.va ? nullptr : Replacements::Get().Find(d, p);
++            if (r) {
++                if (!UploadReplacement(tx, d, fi, *r, p)) {
++                    textures_.erase(key);
++                    return nullptr;
++                }
++            } else {
++                if (tx.repl) {  // was drawn from a replacement: back to a texture of the guest's own layout
++                    if (!CreateTexture(tx, d, fi, key)) return nullptr;
++                    tx.sig = sig;
++                    tx.frame = presents_ + 1;
++                    tx.palette = palette.hash;
++                    same = false;
++                }
++                UploadTexture(tx, d, fi, p, palette.va ? palette.colours : nullptr, same);
++            }
++            TexDump(d, p, presents_);
+         }
+     }
+     FillTextureView(tx, d, stages.sv[stage]);
