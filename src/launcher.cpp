@@ -408,14 +408,9 @@ struct Session {
         if (!view.asking || popup) return;
         const auto& ask = *view.asking;
         const int order = mods::CompareVersions(ask.installed, ask.incoming);
-        std::string text;
-        if (order == 0) {
-            text = ask.name + " v" + ask.installed + " is already installed.\n\nInstall it again? The installed files are replaced.";
-        } else {
-            text = ask.name + " is already installed.\n\nInstalled: v" + ask.installed + "  ->  To install: v" + ask.incoming +
-                   "\n\n" + (order > 0 ? "The version to install is older than the installed one. " : "") + "The installed version is replaced.";
-        }
-        Confirm("Mod already installed", text, "Install", [this] { mods->Answer(true); }, [this] { mods->Answer(false); });
+        const std::string text = F(order == 0 ? "mods.replace_same" : order > 0 ? "mods.replace_older" : "mods.replace_other",
+                                   {{"name", ask.name}, {"installed", ask.installed}, {"incoming", ask.incoming}});
+        Confirm(T("mods.replace_title"), text, T("mods.install"), [this] { mods->Answer(true); }, [this] { mods->Answer(false); });
     }
     void RemoveMod(const mods::Mod& mod) {
         const auto id = mod.id;
@@ -501,7 +496,7 @@ struct Session {
             table.insert_or_assign("launcher", launcher);
             std::string error;
             if (!Write(paths::Config(), table, error)) throw std::runtime_error(error);
-        } catch (const std::exception& e) { Message("Cannot save the developer settings", e.what()); }
+        } catch (const std::exception& e) { Message(T("dev.save_error"), e.what()); }
     }
     void RefreshDeveloperStatus() {
         developer_status = {};
@@ -523,7 +518,7 @@ struct Session {
     }
     void ChooseDeveloperFolder() {
         fs::path selected;
-        if (!ChooseFolder(selected, "Choose the folder of texture pictures")) return;
+        if (!ChooseFolder(selected, T("dev.choose_dialog"))) return;
         developer_folder = selected;
         RefreshDeveloperStatus();
         SaveDeveloper();
@@ -695,7 +690,7 @@ void TopBar(Session& s, const Canvas& c, float W) {
     // The Developer page is there only while developer mode is on (the switch is on the Files page)
     std::vector<Page> pages{Page::Play, Page::Mods, Page::Files};
     std::vector<const char*> labels{T("nav.play"), T("nav.mods"), T("nav.files")};
-    if (s.developer_mode) { pages.push_back(Page::Developer); labels.push_back("Developer"); }
+    if (s.developer_mode) { pages.push_back(Page::Developer); labels.push_back(T("nav.developer")); }
     pages.push_back(Page::Support); labels.push_back(T("nav.support"));
     pages.push_back(Page::About); labels.push_back(T("nav.about"));
     const int count = int(pages.size());
@@ -869,9 +864,9 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         std::vector<std::pair<const char*, const std::string*>> facts;
         if (details) {
             if (!details->description.empty()) facts.push_back({"", &details->description});
-            if (!details->credits.empty()) facts.push_back({"Credits", &details->credits});
-            if (!details->website.empty()) facts.push_back({"Website", &details->website});
-            if (!details->license.empty()) facts.push_back({"License", &details->license});
+            if (!details->credits.empty()) facts.push_back({T("mods.credits"), &details->credits});
+            if (!details->website.empty()) facts.push_back({T("mods.website"), &details->website});
+            if (!details->license.empty()) facts.push_back({T("mods.license"), &details->license});
         }
         const bool open = !facts.empty() && s.details_open.count(mod.id);
         const float fact_x = text_x + 84, fact_wrap = right - fact_x - 24;
@@ -913,11 +908,11 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             ImGui::EndDisabled();
             list.Text(Weight::Medium, 18, remove_x, meta_y, Rgb(remove.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), T("mods.remove"));
             if (remove.clicked) s.RemoveMod(mod);
-            float link_x = remove_x + list.Measure(Weight::Medium, 18, "Remove").x + 18;
+            float link_x = remove_x + list.Measure(Weight::Medium, 18, T("mods.remove")).x + 18;
             if (const auto quality = view.quality.find(mod.id); quality != view.quality.end()) {
                 // A texture pack file: High uses every level of its textures, Low leaves them at twice the game's size
                 const bool low = quality->second == texpack::Quality::Low;
-                const std::string label = std::string("Quality: ") + (low ? "Low" : "High");
+                const std::string label = T(low ? "mods.quality_low" : "mods.quality_high");
                 const float quality_x = link_x, quality_w = list.Measure(Weight::Medium, 18, label.c_str()).x;
                 ImGui::BeginDisabled(view.busy);
                 const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + quality_w, meta_y + 17);
@@ -927,7 +922,7 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
                 link_x += quality_w + 18;
             }
             if (!facts.empty()) {
-                const char* label = open ? "Hide details" : "Details";
+                const char* label = T(open ? "mods.hide_details" : "mods.details");
                 const float label_w = list.Measure(Weight::Medium, 18, label).x;
                 const auto show = Item("##details", list, link_x, meta_y - 1, link_x + label_w, meta_y + 17);
                 list.Text(Weight::Medium, 18, link_x, meta_y, Rgb(show.hovered ? color::Paper : color::Mist), label);
@@ -952,20 +947,20 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             if (const auto at = std::find(view.order.begin(), view.order.end(), mod.id); view.order.size() > 1 && at != view.order.end()) {
                 // Several texture mods can be on at once: the first in this order is the one whose texture is used
                 const size_t place = size_t(at - view.order.begin());
-                const float line = ty + 44, down_w = list.Measure(Weight::Medium, 18, "Down").x, up_w = list.Measure(Weight::Medium, 18, "Up").x;
-                const std::string label = "Priority " + std::to_string(place + 1) + " of " + std::to_string(view.order.size());
+                const float line = ty + 44, down_w = list.Measure(Weight::Medium, 18, T("mods.down")).x, up_w = list.Measure(Weight::Medium, 18, T("mods.up")).x;
+                const std::string label = F("mods.priority", {{"place", std::to_string(place + 1)}, {"count", std::to_string(view.order.size())}});
                 const float down_x = right - down_w, up_x = down_x - 16 - up_w, label_x = up_x - 16 - list.Measure(Weight::Regular, 18, label.c_str()).x;
                 list.Text(Weight::Regular, 18, label_x, line, Rgb(color::Dim), label.c_str());
                 const bool can_up = place > 0 && !view.busy, can_down = place + 1 < view.order.size() && !view.busy;
                 ImGui::BeginDisabled(!can_up);
                 const auto up = Item("##up", list, up_x, line - 1, up_x + up_w, line + 17);
                 ImGui::EndDisabled();
-                list.Text(Weight::Medium, 18, up_x, line, Rgb(up.hovered && can_up ? color::Paper : color::Mist, can_up ? 1.f : 0.4f), "Up");
+                list.Text(Weight::Medium, 18, up_x, line, Rgb(up.hovered && can_up ? color::Paper : color::Mist, can_up ? 1.f : 0.4f), T("mods.up"));
                 if (up.clicked && can_up) s.mods->MoveTexture(mod.id, true);
                 ImGui::BeginDisabled(!can_down);
                 const auto down = Item("##down", list, down_x, line - 1, down_x + down_w, line + 17);
                 ImGui::EndDisabled();
-                list.Text(Weight::Medium, 18, down_x, line, Rgb(down.hovered && can_down ? color::Paper : color::Mist, can_down ? 1.f : 0.4f), "Down");
+                list.Text(Weight::Medium, 18, down_x, line, Rgb(down.hovered && can_down ? color::Paper : color::Mist, can_down ? 1.f : 0.4f), T("mods.down"));
                 if (down.clicked && can_down) s.mods->MoveTexture(mod.id, false);
             }
             if (update && Button("##update", list, right - 38 - 24 - update_w, ty, right - 38 - 24, ty + 34, update_label.c_str(), false, !view.busy))
@@ -983,10 +978,10 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             for (const auto& i : view.installed) if (i.mod.id == id) return i.mod.name;
             return id;
         };
-        list.Text(Weight::SemiBold, 18.5f, 48, y + 20, Rgb(color::Paper), "Textures that more than one mod has");
+        list.Text(Weight::SemiBold, 18.5f, 48, y + 20, Rgb(color::Paper), T("mods.overlaps_title"));
         y += 48;
         for (const auto& o : view.overlaps) {
-            const std::string line = name(o.winner) + " is used for " + std::to_string(o.count) + " textures that " + name(o.loser) + " also has.";
+            const std::string line = F("mods.overlap_line", {{"winner", name(o.winner)}, {"count", std::to_string(o.count)}, {"loser", name(o.loser)}});
             list.Text(Weight::Regular, 18, 48, y, Rgb(color::Mist), line.c_str(), right - 48);
             y += 28;
         }
@@ -1076,8 +1071,8 @@ void FilesPage(Session& s, const Canvas& parent, float W, float H) {
     if (discord_toggle.clicked) s.SetDiscordPresence(!s.discord_presence);
     y += 60;
     c.Rule(48, right, y);
-    c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), "Developer");
-    c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), "Test texture pictures from a folder (adds a Developer page)");
+    c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), T("dev.title"));
+    c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), T("dev.toggle_hint"));
     const auto developer = Item("##developer-mode", c, right - 38, y + 22, right, y + 44);
     art::Toggle(c, right - 38, y + 22, s.developer_mode, developer.hovered);
     if (developer.clicked) s.SetDeveloperMode(!s.developer_mode);
@@ -1087,35 +1082,29 @@ void FilesPage(Session& s, const Canvas& parent, float W, float H) {
 }
 
 void DeveloperPage(Session& s, const Canvas& c, float W, float) {
-    Header(c, "Developer", "Test texture pictures from a folder, without building a pack.", W);
+    Header(c, T("dev.title"), T("dev.subtitle"), W);
     const float right = W - 48, wrap = right - 48;
     c.Rule(48, right, 200);
-    c.Text(Weight::SemiBold, 20, 48, 225, Rgb(color::Paper), "Texture folder");
+    c.Text(Weight::SemiBold, 20, 48, 225, Rgb(color::Paper), T("dev.folder"));
     const bool has_folder = !s.developer_folder.empty();
-    const std::string value = has_folder ? files::Utf8(s.developer_folder) : std::string("No folder chosen");
+    const std::string value = has_folder ? files::Utf8(s.developer_folder) : std::string(T("dev.no_folder"));
     c.Text(Weight::Regular, 19, 190, 225, Rgb(has_folder ? color::Mist : color::Dim), c.Fit(Weight::Regular, 19, right - 190 - 200, value).c_str());
-    if (Button("Choose##developer", c, right - 84, 216, right, 250, "Choose", false)) s.ChooseDeveloperFolder();
-    if (Button("Clear##developer", c, right - 180, 216, right - 96, 250, "Clear", false, has_folder)) s.ClearDeveloperFolder();
+    if (Button("Choose##developer", c, right - 84, 216, right, 250, T("dev.choose"), false)) s.ChooseDeveloperFolder();
+    if (Button("Clear##developer", c, right - 180, 216, right - 96, 250, T("dev.clear"), false, has_folder)) s.ClearDeveloperFolder();
     float y = 276;
     std::string line;
     uint32_t tone = color::Mist;
-    if (!has_folder) line = "Choose the folder where the extraction tool put the pictures.";
-    else if (!s.developer_status.exists) { line = "This folder cannot be read."; tone = color::Warning; }
+    if (!has_folder) line = T("dev.hint");
+    else if (!s.developer_status.exists) { line = T("dev.unreadable"); tone = color::Warning; }
     else {
-        line = std::to_string(s.developer_status.pictures) + " pictures";
-        line += s.developer_status.manifest ? ", with a manifest." : ", and no manifest: every picture will count as edited.";
+        line = F(s.developer_status.manifest ? "dev.pictures_manifest" : "dev.pictures_no_manifest", {{"count", std::to_string(s.developer_status.pictures)}});
         if (!s.developer_status.manifest) tone = color::Warning;
     }
     c.Text(Weight::Medium, 19, 48, y, Rgb(tone), line.c_str(), wrap);
-    if (has_folder && Link("Refresh##developer", c, right, y, "Refresh", true)) s.RefreshDeveloperStatus();
+    if (has_folder && Link("Refresh##developer", c, right, y, T("dev.refresh"), true)) s.RefreshDeveloperStatus();
     y += 44;
     c.Rule(48, right, y);
-    const char* paragraphs[] = {
-        "The game reads the pictures in this folder when it starts, before the texture mods you turned on. Only a picture whose pixels differ from "
-        "the extraction counts, so a single changed pixel is enough and the ones you did not touch are left alone.",
-        "Nothing is compressed in this mode. When the textures are ready, build the pack in the mods tool.",
-        "Restart the game to see a change. The game's log says how many pictures it found and how many it uses.",
-    };
+    const char* paragraphs[] = {T("dev.p1"), T("dev.p2"), T("dev.p3")};
     y += 24;
     for (const char* text : paragraphs) {
         c.Text(Weight::Regular, 19, 48, y, Rgb(color::Mist), text, wrap);

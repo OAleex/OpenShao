@@ -103,6 +103,7 @@ openshao_linux_test(recomp_performance_overlay SOURCES tests/recomp_performance_
 target_include_directories(recomp_performance_overlay_test SYSTEM PRIVATE "${imgui_SOURCE_DIR}")
 openshao_linux_test(recomp_input_capture SOURCES tests/recomp_input_capture_test.cpp)
 add_test(NAME menu_text_catalog COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/menu_text_catalog_test.py")
+add_test(NAME launcher_keys COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_launcher_keys_test.py" "${CMAKE_CURRENT_SOURCE_DIR}")
 openshao_linux_test(recomp_ed_nexus_sequence SOURCES tests/recomp_ed_nexus_sequence_test.cpp)
 openshao_linux_test(recomp_ed_nexus_hooks SOURCES tests/recomp_ed_nexus_hooks_test.cpp)
 openshao_linux_test(recomp_strip_orientation SOURCES tests/recomp_strip_orientation_test.cpp src/strip_orientation.cpp)
