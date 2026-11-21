@@ -26,6 +26,7 @@ constexpr uint32_t kFailuresAllowed = 3;
 constexpr uint64_t kWantedFrames = 120;  // a texture drawn this recently counts as wanted
 constexpr uint64_t kMaxWaitingBytes = 256ull << 20;  // read and not yet copied to the GPU, at most
 constexpr uint64_t kLimitsEvery = 60;    // frames between workings out of the video memory budget
+constexpr uint64_t kTrimAfterFrames = 600;  // frames a texture heap stays empty before it is given back to the driver
 constexpr uint32_t kNoLimitOnImages = UINT32_MAX;  // a heap holds any number of textures
 constexpr uint32_t kLoggedEvictions = 300;
 constexpr uint32_t kLoggedNoRoom = 50;
@@ -227,6 +228,29 @@ size_t D3D12HdTextures::AddHeap(ID3D12Device* device, uint64_t size) {
     heaps_.push_back(std::move(entry));
     LOGI("Texture pack (Direct3D 12): texture heap %zu of %.0f MiB", heaps_.size() - 1, double(size) / 1048576.0);
     return heaps_.size() - 1;
+}
+
+// A texture heap that stays empty goes back to the driver, so video memory the replacements no longer use is not held for the rest of the
+// game. Only the last heap, and never the only one: placements and deferred frees name a heap by its place in the list.
+void D3D12HdTextures::TrimHeaps() {
+    if (heaps_.size() < 2) {
+        empty_since_ = 0;
+        return;
+    }
+    const size_t last = heaps_.size() - 1;
+    const auto& heap = heaps_[last];
+    bool used = heap->ranges.free_bytes() != heap->ranges.capacity();
+    for (const auto& free : deferred_) used = used || free.heap == last;
+    if (used) {
+        empty_since_ = 0;
+        return;
+    }
+    if (!empty_since_) empty_since_ = presents_ + 1;
+    if (presents_ + 1 - empty_since_ < kTrimAfterFrames) return;
+    LOGI("Texture pack (Direct3D 12): texture heap %zu of %.0f MiB given back, empty for %llu frames", last,
+         double(heap->ranges.capacity()) / 1048576.0, static_cast<unsigned long long>(presents_ + 1 - empty_since_));
+    heaps_.pop_back();
+    empty_since_ = 0;
 }
 
 void D3D12HdTextures::PrefetchHeap(ID3D12Device* device) {
@@ -479,6 +503,7 @@ void D3D12HdTextures::Pump(gpu::Context& context) {
             ++i;
         }
     }
+    TrimHeaps();
     PrefetchHeap(context.Device());
     const texpack::ResidencyLimits limits = Limits(context.Device());
     // The budget fell, or an earlier frame left the replacements over it.
