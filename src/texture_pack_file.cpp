@@ -373,6 +373,7 @@ public:
         return e && pack_->ReadLevels(*e, first_level, out);
     }
     std::vector<uint64_t> Preload() const override { return pack_->info().preload; }
+    size_t Count() const override { return pack_->entries().size(); }
 
 private:
     std::shared_ptr<const PackFile> pack_;

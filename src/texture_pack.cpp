@@ -1,4 +1,5 @@
 #include "texture_pack.h"
+#include "texture_pack_file.h"
 #include "core/log.h"
 #include <algorithm>
 #include <atomic>
@@ -25,7 +26,7 @@ struct Set {
 };
 
 std::mutex lock;
-std::shared_ptr<const Set> current;
+std::shared_ptr<const PackSource> current;  // the packs in use, in the order they were given
 std::atomic<uint64_t> generation{0};
 
 bool SafeName(const std::string& name) {
@@ -77,35 +78,6 @@ void ReadPreload(const std::filesystem::path& folder, Set& set) {
         if (std::find(set.preload.begin(), set.preload.end(), key) == set.preload.end()) set.preload.push_back(key);
     }
 }
-}
-
-void SetPacks(const std::vector<std::filesystem::path>& folders) {
-    auto set = std::make_shared<Set>();
-    for (const auto& folder : folders) ReadIndex(folder, set->index);
-    for (const auto& folder : folders) ReadPreload(folder, *set);
-    if (!folders.empty())
-        LOGI("Texture packs: %zu replacements from %zu folders, %zu to load ahead", set->index.size(), folders.size(),
-             set->preload.size());
-    std::lock_guard<std::mutex> guard(lock);
-    current = set->index.empty() ? nullptr : std::move(set);
-    ++generation;
-}
-
-namespace {
-std::shared_ptr<const Set> Current() {
-    std::lock_guard<std::mutex> guard(lock);
-    return current;
-}
-}
-
-bool Enabled() { return Current() != nullptr; }
-
-std::optional<Entry> Find(uint64_t hash) {
-    const auto set = Current();
-    if (!set) return std::nullopt;
-    const auto it = set->index.find(hash);
-    if (it == set->index.end()) return std::nullopt;
-    return it->second.entry;
 }
 
 uint32_t LevelBytes(uint32_t w, uint32_t h, uint32_t level) {
@@ -160,23 +132,103 @@ public:
         return it != set_->index.end() && ReadItem(it->second, first_level, out);
     }
     std::vector<uint64_t> Preload() const override { return set_->preload; }
+    size_t Count() const override { return set_->index.size(); }
 
 private:
     std::shared_ptr<const Set> set_;
 };
 }
 
-std::shared_ptr<const PackSource> Source() {
-    auto set = Current();
-    return set ? std::make_shared<FolderSource>(std::move(set)) : nullptr;
+namespace {
+// Several packs as one: the first to have a texture gives it
+class MergedSource final : public PackSource {
+public:
+    explicit MergedSource(std::vector<std::shared_ptr<const PackSource>> members) : members_(std::move(members)) {}
+    std::optional<SourceEntry> Find(uint64_t hash) const override {
+        for (size_t i = 0; i < members_.size(); ++i)
+            if (auto entry = members_[i]->Find(hash)) {
+                entry->origin = uint32_t(i);
+                return entry;
+            }
+        return std::nullopt;
+    }
+    bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
+        return entry.origin < members_.size() && members_[entry.origin]->ReadLevels(entry, first_level, out);
+    }
+    std::vector<uint64_t> Preload() const override {
+        std::vector<uint64_t> all;
+        for (const auto& member : members_)
+            for (uint64_t hash : member->Preload())
+                if (std::find(all.begin(), all.end(), hash) == all.end()) all.push_back(hash);
+        return all;
+    }
+    size_t Count() const override {
+        size_t n = 0;
+        for (const auto& member : members_) n += member->Count();
+        return n;
+    }
+
+private:
+    std::vector<std::shared_ptr<const PackSource>> members_;
+};
+
+std::shared_ptr<const PackSource> Current() {
+    std::lock_guard<std::mutex> guard(lock);
+    return current;
 }
+}
+
+void SetPacks(const std::vector<std::filesystem::path>& packs) {
+    std::vector<std::shared_ptr<const PackSource>> members;
+    for (const auto& path : packs) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(path, ec)) {
+            auto set = std::make_shared<Set>();
+            ReadIndex(path, set->index);
+            ReadPreload(path, *set);
+            if (set->index.empty()) continue;
+            LOGI("Texture pack: folder %s: %zu replacements, %zu to load ahead", path.string().c_str(), set->index.size(),
+                 set->preload.size());
+            members.push_back(std::make_shared<FolderSource>(std::move(set)));
+        } else if (std::filesystem::is_regular_file(path, ec)) {
+            std::string error;
+            std::shared_ptr<const PackFile> file = PackFile::Open(path, error);
+            if (!file) {
+                LOGE("Texture pack: %s is not a valid pack file: %s", path.string().c_str(), error.c_str());
+                continue;
+            }
+            LOGI("Texture pack: file %s: %zu replacements, %zu to load ahead", path.string().c_str(), file->entries().size(),
+                 file->info().preload.size());
+            members.push_back(AsSource(std::move(file)));
+        } else {
+            LOGE("Texture pack: %s is neither a folder nor a file", path.string().c_str());
+        }
+    }
+    std::shared_ptr<const PackSource> source;
+    if (members.size() == 1) source = members.front();
+    else if (members.size() > 1) source = std::make_shared<MergedSource>(std::move(members));
+    if (source) LOGI("Texture packs: %zu replacements in %zu packs, %zu to load ahead", source->Count(), packs.size(), source->Preload().size());
+    std::lock_guard<std::mutex> guard(lock);
+    current = std::move(source);
+    ++generation;
+}
+
+bool Enabled() { return Current() != nullptr; }
+
+std::optional<Entry> Find(uint64_t hash) {
+    const auto source = Current();
+    const auto entry = source ? source->Find(hash) : std::nullopt;
+    if (!entry) return std::nullopt;
+    return Entry{entry->width, entry->height, entry->levels};
+}
+
+std::shared_ptr<const PackSource> Source() { return Current(); }
 
 uint64_t Generation() { return generation.load(); }
 
 bool Load(uint64_t hash, std::vector<uint8_t>& blocks) {
-    const auto set = Current();
-    if (!set) return false;
-    const auto it = set->index.find(hash);
-    return it != set->index.end() && ReadItem(it->second, 0, blocks);
+    const auto source = Current();
+    const auto entry = source ? source->Find(hash) : std::nullopt;
+    return entry && source->ReadLevels(*entry, 0, blocks);
 }
 }
