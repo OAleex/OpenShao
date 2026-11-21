@@ -105,14 +105,14 @@ int main() try {
     // The quality sets where the blocks start
     {
         texpack::Loader loader(NoThreads());
-        loader.SetPack(Open("medium.ostp", 8, texpack::Quality::Medium));
+        loader.SetPack(Open("low.ostp", 8, texpack::Quality::Low));
         loader.Request(0x101);
         loader.ProcessOne();
         const auto out = TakeAll(loader);
         const auto* entry = pack->Find(0x101);
         Check(out.size() == 1 && out[0].first_level == 1 && out[0].blocks.size() == entry->data_size - texpack::LevelSize(64, 64, 0, entry->format) &&
                   out[0].blocks.front() == uint8_t(3 + 1),
-              "Medium starts at the second level");
+              "Low starts at the second level");
     }
 
     // Asking again does not read again
@@ -213,7 +213,7 @@ int main() try {
         loader.Request(0x100);
         loader.Request(0x101);
         loader.ProcessOne();  // 0x101 is ready, 0x100 is pending
-        const auto other = Open("b.ostp", 4, texpack::Quality::Medium);
+        const auto other = Open("b.ostp", 4, texpack::Quality::Low);
         loader.SetPack(other);
         Check(loader.GetStats().pending == 0 && loader.GetStats().ready == 0 && loader.GetStats().dropped == 2 &&
                   TakeAll(loader).empty() && !loader.ProcessOne(),

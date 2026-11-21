@@ -219,11 +219,11 @@ int main() try {
         e = source->Find(0xa1);
         Check(e && e->width == 64 && source->ReadLevels(*e, 0, out) && out.front() == 0x77,
               "The file before the folder gives its own texture when both have it");
-        // The quality is the pack's own: Medium starts a 4x texture at the second level, High at the first
-        texpack::SetPacks({{root / "c.ostp", texpack::Quality::Medium}, root / "a"});
+        // The quality is the pack's own: Low starts a 4x texture at the second level, High at the first
+        texpack::SetPacks({{root / "c.ostp", texpack::Quality::Low}, root / "a"});
         source = texpack::Source();
         e = source->Find(0xf1);
-        Check(e && e->first_level == 1, "A pack file in Medium starts its textures at the second level");
+        Check(e && e->first_level == 1, "A pack file in Low starts its textures at the second level");
         texpack::SetPacks({{root / "c.ostp", texpack::Quality::High}});
         Check(texpack::Source()->Find(0xf1)->first_level == 0, "A pack file in High starts at the first level");
         // A folder of pictures, the developer mode's: only the edited one counts, and it comes before the pack file

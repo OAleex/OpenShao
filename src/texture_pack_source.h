@@ -8,7 +8,7 @@
 // What the loader needs of a texture pack, whatever the way it is stored on disk.
 namespace openshao::texpack {
 enum class BcFormat : uint8_t { Bc1 = 1, Bc3 = 2, Rgba8 = 3 };  // Rgba8: not compressed, 4 bytes a pixel; only the developer mode's folder gives it
-enum class Quality { High, Medium };
+enum class Quality { High, Low };
 
 struct SourceEntry {
     uint64_t hash = 0;  // of the level 0 bytes of the game's own texture

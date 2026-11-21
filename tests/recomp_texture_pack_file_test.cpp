@@ -77,9 +77,9 @@ int main() try {
 
     // The quality picks the level
     Check(texpack::FirstLevel(*a, texpack::Quality::High) == 0, "High reads every level");
-    Check(texpack::FirstLevel(*a, texpack::Quality::Medium) == 1, "Medium leaves 4x at 2x");
-    Check(texpack::FirstLevel(*pack->Find(0x20), texpack::Quality::Medium) == 0, "A texture as large as the game's is not reduced");
-    Check(texpack::FirstLevel(*pack->Find(0x30), texpack::Quality::Medium) == 1 &&
+    Check(texpack::FirstLevel(*a, texpack::Quality::Low) == 1, "Low leaves 4x at 2x");
+    Check(texpack::FirstLevel(*pack->Find(0x20), texpack::Quality::Low) == 0, "A texture as large as the game's is not reduced");
+    Check(texpack::FirstLevel(*pack->Find(0x30), texpack::Quality::Low) == 1 &&
               texpack::FirstLevel(*pack->Find(0x30), texpack::Quality::High) == 0,
           "Another 4x texture");
 
