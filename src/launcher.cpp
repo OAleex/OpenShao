@@ -181,7 +181,7 @@ bool ChooseFolder(fs::path& path, const std::string& title) {
 bool ChooseModArchive(fs::path& path) {
 #ifdef _WIN32
     const auto label = Wide(T("mods.dialog_filter"));
-    const COMDLG_FILTERSPEC filter[] = {{label.c_str(), L"*.tar.xz"}};
+    const COMDLG_FILTERSPEC filter[] = {{label.c_str(), L"*.tar.xz;*.ostp"}};
     return ChooseWithDialog(path, false, Wide(T("mods.dialog_title")).c_str(), filter, 1);
 #else
     return linux_platform::ChooseFile(path, false, T("mods.dialog_title"));

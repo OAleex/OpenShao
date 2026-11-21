@@ -52,10 +52,10 @@
     "mods.remove": "Rimuovi",
     "mods.update_to": "Aggiorna alla {version}",
     "mods.install": "Installa",
-    "mods.catalog_unavailable": "Il catalogo non è disponibile al momento. Per installare un pacchetto .tar.xz scaricato, usa Installa da file.",
+    "mods.catalog_unavailable": "Il catalogo non è disponibile al momento. Per installare un pacchetto .tar.xz o un pacchetto di texture .ostp scaricato, usa Installa da file.",
     "mods.more_soon": "Le nuove mod ufficiali appaiono qui quando vengono pubblicate.",
     "mods.dialog_title": "Installa una mod da file",
-    "mods.dialog_filter": "Archivi delle mod (*.tar.xz)",
+    "mods.dialog_filter": "Archivi delle mod e pacchetti di texture (*.tar.xz, *.ostp)",
 
     "files.title": "File",
     "files.subtitle": "Dove OpenShao trova il gioco e conserva i salvataggi.",

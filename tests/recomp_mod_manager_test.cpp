@@ -1,6 +1,8 @@
 #include "mods/manager.h"
 #include "mods/sha256.h"
 #include "file_ops.h"
+#include "texture_pack_builder.h"
+#include "texture_pack_file.h"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -127,5 +129,63 @@ int main(int argc,char** argv){try{
     mods::Uninstall(root,"LanguagePack_PT-BR");
     Require(mods::ReadInstalled(root).empty()&&!fs::exists(live),"Uninstall must remove only the selected mod");
     Require(mods::CompareVersions("1.0.0-beta.2","1.0.0-beta.11")<0&&mods::CompareVersions("1.0.0","1.0.0-beta.11")>0,"Version comparison must follow numeric prerelease order");
+    // A texture pack in one file: checked where it is, copied once and kept as pack.ostp
+    {
+        uint64_t last=0;
+        const mods::Progress steady=[&](auto,uint64_t done,uint64_t total){
+            Require(total>0&&done<=total&&done*10000/total>=last,"A texture pack's progress must stay bounded and never go back");
+            last=done*10000/total;return true;
+        };
+        const auto textures=std::vector<Tex>{{0x10,64,64,16,16,7,2,0,0x20},{0x20,32,16,32,16,6,1,0,0x40}};
+        const auto info=[](const std::string& version,const std::string& id="AiTextures",const std::string& recomp="0.1.0"){
+            return R"({"id":")"+id+R"(","name":"AI \"textures\"","version":")"+version+R"(","authors":["Someone","Another"],)"
+                   R"("summary":"Textures for the tests.","min_recomp":")"+recomp+R"(","features":["hdtextures"],"type":"texture","texture_count":2})";};
+        const auto write=[&](const std::string& name,const Bytes& bytes){
+            std::ofstream out(base/name,std::ios::binary);out.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));return base/name;};
+        const auto file=write("ai-1.ostp",Build(textures,info("1.0.0")));
+        const auto pack=mods::InspectPackage(file,root,mods::ProgressSlice(steady,0,5000));
+        Require(pack->mod.id=="AiTextures"&&pack->mod.name=="AI \"textures\""&&pack->mod.schema==3&&pack->mod.type=="texture"&&pack->mod.authors.size()==2&&
+                pack->mod.install_dir=="packages/AiTextures"&&pack->mod.version=="1.0.0"&&pack->mod.features==std::vector<std::string>{"hdtextures"}&&pack->folder.empty(),
+                "A texture pack file gives the mod system its metadata without unpacking anything");
+        Require(pack->mod.ostp&&pack->mod.ostp->path=="pack.ostp"&&pack->mod.ostp->size==fs::file_size(file)&&pack->mod.ostp->sha256==mods::Sha256File(file),
+                "The whole file is hashed once, at inspection");
+        mods::InstallPackage(root,*pack,original,mods::ProgressSlice(steady,5000,mods::ProgressTotal));
+        const auto live_pack=root/"packages/AiTextures";
+        Require(Read(live_pack/"pack.ostp")==Read(file)&&Read(live_pack/"mod.json")==pack->mod.raw,"The file is copied as pack.ostp, with its metadata beside it");
+        std::string error;
+        const auto opened=texpack::PackFile::Open(live_pack/"pack.ostp",error);
+        Require(opened&&opened->entries().size()==2,"The installed copy opens as a texture pack");
+        const auto rows=mods::ReadInstalled(root);
+        Require(rows.size()==1&&rows[0].enabled&&rows[0].mod.ostp&&rows[0].mod.ostp->sha256==pack->mod.ostp->sha256,"The registry keeps the texture pack file of the mod");
+        // an update, then going back
+        mods::InstallPackage(root,*mods::InspectPackage(write("ai-2.ostp",Build(textures,info("1.1.0"))),root),original);
+        Require(mods::ReadInstalled(root)[0].mod.version=="1.1.0"&&mods::ReadInstalled(root).size()==1,"A newer version replaces the installed one");
+        mods::InstallPackage(root,*mods::InspectPackage(file,root),original);
+        Require(mods::ReadInstalled(root)[0].mod.version=="1.0.0"&&Read(live_pack/"pack.ostp")==Read(file),"An older version replaces it too");
+        // what is refused
+        const auto refused=[&](const fs::path& f,const char* word){
+            try{mods::InspectPackage(f,root);}catch(const std::exception& e){return std::string(e.what()).find(word)!=std::string::npos;}return false;};
+        Bytes cut=Build(textures,info("1.2.0"));cut.resize(cut.size()-64);
+        Require(refused(write("cut.ostp",cut),"texture pack"),"A texture pack file cut short is refused");
+        Bytes junk={'O','S','T','P','A','C','K',0,1,2,3};
+        Require(refused(write("junk.ostp",junk),"texture pack"),"A file that only starts like a texture pack is refused");
+        Require(refused(write("future.ostp",Build(textures,info("1.2.0","Future","9.9.9"))),"Update OpenShao"),"A pack that needs a newer OpenShao is refused");
+        Require(refused(write("dotted.ostp",Build(textures,info("1.2.0","has.dot"))),"texture pack"),"An id the mod system does not accept is refused");
+        Require(mods::ReadInstalled(root).size()==1&&mods::ReadInstalled(root)[0].mod.version=="1.0.0","Nothing refused changes what is installed");
+        // the manifest says what a texture pack file may be
+        const std::string base_manifest=R"({"schema":3,"game":{"xbe_sha256":")"+std::string(mods::GameSha256)+R"("},"id":"P","name":"P","summary":"s","authors":["a"],"type":"texture","install_dir":"packages/P",)"
+            R"("features":["hdtextures"],"version":"1.0.0","recomp":"0.1.0","ostp":{"path":"pack.ostp","size":10,"sha256":")"+std::string(64,'a')+R"("})";
+        const auto parses=[&](const std::string& tail,const std::string& swap_from={},const std::string& swap_to={}){
+            std::string text=base_manifest+tail+"}";if(!swap_from.empty())text.replace(text.find(swap_from),swap_from.size(),swap_to);
+            try{mods::ParseManifest(text);return true;}catch(...){return false;}};
+        Require(parses(",\"files\":[],\"patches\":[]"),"A manifest with a texture pack file parses");
+        Require(!parses(",\"files\":[],\"patches\":[]","\"schema\":3","\"schema\":2"),"A texture pack file needs schema 3");
+        Require(!parses(",\"files\":[],\"patches\":[]","\"path\":\"pack.ostp\"","\"path\":\"other.ostp\""),"The texture pack file has one name");
+        Require(!parses(",\"files\":[],\"patches\":[]","\"features\":[\"hdtextures\"]","\"features\":[]"),"A texture pack file needs the hdtextures feature");
+        Require(!parses(",\"files\":[{\"path\":\"a.txt\",\"size\":1,\"sha256\":\""+std::string(64,'b')+"\"}],\"patches\":[]"),"A texture pack file holds nothing else");
+        Require(!parses(",\"files\":[],\"patches\":[]","\"size\":10","\"size\":0"),"A texture pack file has a size");
+        mods::Uninstall(root,"AiTextures");
+        Require(mods::ReadInstalled(root).empty()&&!fs::exists(live_pack),"Uninstalling removes the texture pack file");
+    }
     std::cout<<"Mod manager checks passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
