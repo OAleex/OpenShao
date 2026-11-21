@@ -188,10 +188,11 @@ void SetPacks(const std::vector<PackSpec>& packs) {
             // no index: a folder of pictures, as the developer mode reads it; only what was edited counts
             DevFolderReport report;
             auto source = OpenDevFolder(path, report);
-            LOGI("Texture pack: developer folder %s: %zu pictures, %zu edited (%zu without a signature), %zu as extracted, %zu refused, "
-                 "%zu ignored, %zu duplicates, looked at in %.2f s",
-                 path.string().c_str(), report.files, report.edited, report.unsigned_files, report.unchanged, report.refused, report.ignored,
-                 report.duplicates, report.seconds);
+            // the path goes last: the log replaces a path, and what follows it, with a mark
+            LOGI("Texture pack: developer folder: %zu pictures, %zu edited (%zu without a signature), %zu as extracted, %zu refused, "
+                 "%zu ignored, %zu duplicates, looked at in %.2f s, folder %s",
+                 report.files, report.edited, report.unsigned_files, report.unchanged, report.refused, report.ignored,
+                 report.duplicates, report.seconds, path.string().c_str());
             for (const auto& line : report.problems) LOGI("Texture pack: developer folder: %s", line.c_str());
             if (source) members.push_back(std::move(source));
         } else if (std::filesystem::is_directory(path, ec)) {
@@ -209,8 +210,8 @@ void SetPacks(const std::vector<PackSpec>& packs) {
                 LOGE("Texture pack: %s is not a valid pack file: %s", path.string().c_str(), error.c_str());
                 continue;
             }
-            LOGI("Texture pack: file %s: %zu replacements, %zu to load ahead, %s quality", path.string().c_str(),
-                 file->entries().size(), file->info().preload.size(), spec.quality == Quality::Medium ? "medium" : "high");
+            LOGI("Texture pack: file: %zu replacements, %zu to load ahead, %s quality, file %s", file->entries().size(),
+                 file->info().preload.size(), spec.quality == Quality::Medium ? "medium" : "high", path.string().c_str());
             members.push_back(AsSource(std::move(file), spec.quality));
         } else {
             LOGE("Texture pack: %s is neither a folder nor a file", path.string().c_str());
