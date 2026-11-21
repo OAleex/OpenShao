@@ -82,3 +82,7 @@ RapidJSON (https://github.com/Tencent/rapidjson)
 Revision: 24b5e7a8b27f42fa16b96fc70aade9106cf7102f
 Copyright (C) 2015 THL A29 Limited, a Tencent company, and Milo Yip.
 The executable uses only the MIT-licensed headers. See RapidJSON.txt for the upstream notices.
+
+stb_image v2.30 (https://github.com/nothings/stb)
+Sean Barrett and contributors.
+Available under the MIT license or the public domain. See stb_image-LICENSE.txt for the complete license.

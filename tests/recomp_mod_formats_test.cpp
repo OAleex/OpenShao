@@ -18,6 +18,19 @@ int main() { try {
         const auto mod = openshao::mods::ParseManifest(Manifest("NewMod", type));
         Require(mod.type == type && mod.install_dir == "packages/NewMod", "General mod types must be installable");
     }
+    {
+        const auto with_feature=[](const std::string& feature) {
+            auto json=Manifest("HdPack","texture");
+            const auto at=json.find(R"("version":"1.0.0")");
+            Require(at!=std::string::npos,"Feature fixture must contain a version");
+            json.insert(at,R"("features":[")"+feature+R"("],)");
+            return openshao::mods::ParseManifest(json);
+        };
+        Require(with_feature("hdtextures").unsupported_reason.empty(),"High resolution texture packs must be supported");
+        bool rejected=false;
+        try{with_feature("future-feature");}catch(...){rejected=true;}
+        Require(rejected,"Unknown mod features must stay unavailable");
+    }
     const auto translated = openshao::mods::ParseManifest(Manifest("Japanese", "language", "ja"));
     for(const auto* reserved:{"mod.json","MOD.JSON","manifest.json"}) {
         auto json=Manifest("Reserved","data");

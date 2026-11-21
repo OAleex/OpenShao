@@ -60,7 +60,7 @@ Mod ReadMod(const Json& j) {
     }
     if(j.Has("features"))for(const auto& feature:j.At("features").Items()) {
         const auto& name=feature.Text();m.features.push_back(name);
-        if(name!="files"&&name!="gamedata"&&name!="voices"&&name!="fonts"&&name!="movies"&&name!="lua")
+        if(name!="files"&&name!="gamedata"&&name!="voices"&&name!="fonts"&&name!="movies"&&name!="lua"&&name!="hdtextures")
             m.unsupported_reason="Update OpenShao to use this mod feature: "+name;
     }
     return m;
@@ -120,13 +120,26 @@ std::vector<Mod> ParseCatalog(std::string_view json) {
 Manifest ParseManifest(std::string_view json) {
     const auto j=Json::Parse(json); Manifest m; static_cast<Mod&>(m)=ReadMod(j);
     const auto schema=j.At("schema").Number();m.schema=unsigned(schema);
-    if((schema!=1&&schema!=2)||Text(j.At("game"),"xbe_sha256")!=GameSha256) throw std::runtime_error("This mod requires a different game version");
+    if((schema<1||schema>3)||Text(j.At("game"),"xbe_sha256")!=GameSha256) throw std::runtime_error("This mod requires a different game version");
     if(!m.unsupported_reason.empty())throw std::runtime_error(m.unsupported_reason);
     m.version=Text(j,"version"); m.recomp=Text(j,"recomp"); m.raw=json;
     CompareVersions(m.version,m.version); if(CompareVersions(m.recomp,RecompVersion)>0) throw std::runtime_error("Update OpenShao before installing this mod");
     std::set<std::string> paths;
     auto unique=[&](const std::string& p) { Path(p); std::string key=p; for(auto& c:key) if(c>='A'&&c<='Z') c+=32;
         if(key=="mod.json"||key=="manifest.json"||key.ends_with(".xdelta")||!paths.insert(key).second) throw std::runtime_error("Reserved or duplicate payload path"); };
+    if(j.Has("ostp")) {
+        // A texture pack in one file holds nothing else. It is larger than an ordinary file can be.
+        const auto& o=j.At("ostp");
+        if(schema<3)throw std::runtime_error("A texture pack file needs a schema 3 manifest");
+        Payload p{Text(o,"path"),Text(o,"sha256"),Number(o,"size")};Hash(p.sha256);
+        if(p.path!="pack.ostp"||!p.size||p.size>16ull*1024*1024*1024)throw std::runtime_error("Invalid texture pack file in mod metadata");
+        if(m.type!="texture"||std::find(m.features.begin(),m.features.end(),"hdtextures")==m.features.end())
+            throw std::runtime_error("A texture pack file belongs to a texture mod with the hdtextures feature");
+        const auto empty=[&](const char* key){return !j.Has(key)||j.At(key).Items().empty();};
+        if(!empty("files")||!empty("patches")||!empty("routines"))throw std::runtime_error("A mod with a texture pack file holds no other files, patches or routines");
+        m.ostp=p;
+        return m;
+    }
     for(const auto& f:j.At("files").Items()) {
         Payload p{Text(f,"path"),Text(f,"sha256"),Number(f,"size")}; unique(p.path); Hash(p.sha256);
         if(p.size>512*1024*1024) throw std::runtime_error("Mod file exceeds 512 MiB"); m.files.push_back(p);

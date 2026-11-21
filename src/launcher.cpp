@@ -20,9 +20,11 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -181,7 +183,7 @@ bool ChooseFolder(fs::path& path, const std::string& title) {
 bool ChooseModArchive(fs::path& path) {
 #ifdef _WIN32
     const auto label = Wide(T("mods.dialog_filter"));
-    const COMDLG_FILTERSPEC filter[] = {{label.c_str(), L"*.tar.xz"}};
+    const COMDLG_FILTERSPEC filter[] = {{label.c_str(), L"*.tar.xz;*.ostp"}};
     return ChooseWithDialog(path, false, Wide(T("mods.dialog_title")).c_str(), filter, 1);
 #else
     return linux_platform::ChooseFile(path, false, T("mods.dialog_title"));
@@ -199,10 +201,10 @@ bool ChooseGameSource(fs::path& path, bool folder) {
 }
 
 // Game (source selection) and Language (first run) replace the tabs until resolved.
-enum class Page { Play, Mods, Files, Support, About, Game, Language };
+enum class Page { Play, Mods, Files, Developer, Support, About, Game, Language };
 const char* PageName(Page page) {
     switch (page) {
-        case Page::Mods: return "mods"; case Page::Files: return "files"; case Page::About: return "about";
+        case Page::Mods: return "mods"; case Page::Files: return "files"; case Page::Developer: return "developer"; case Page::About: return "about";
         case Page::Support: return "support";
         case Page::Game: return "game"; case Page::Language: return "language"; default: return "play";
     }
@@ -249,9 +251,23 @@ struct Popup {
     std::function<void()> action;
     bool close_after = false;
     std::string cancel;  // the second button's label; empty shows "Cancel"
+    std::function<void()> on_cancel;  // when the dialog is dismissed instead of confirmed
 };
 
 struct Session {
+    Window* window = nullptr;  // for the pictures of mods
+    struct Logo {
+        const void* source = nullptr;  // the pixels it was made from, to tell when the mod's logo changed
+        uint64_t handle = 0;           // 0 when the renderer could not make it
+    };
+    std::map<std::string, Logo> logos;       // by mod id
+    std::set<std::string> details_open;      // mods whose details are shown
+    bool developer_mode = false;  // the Developer page, and the game reading the texture folder below
+    fs::path developer_folder;
+    struct DeveloperStatus {
+        bool exists = false, manifest = false;
+        size_t pictures = 0;
+    } developer_status;
     Page page = Page::Play;
     Settings settings;
     fs::path source;
@@ -298,13 +314,16 @@ struct Session {
     void Message(std::string title, std::string text, bool close_after = false) {
         popup = Popup{std::move(title), std::move(text), {}, {}, close_after};
     }
-    void Confirm(std::string title, std::string text, std::string label, std::function<void()> action) {
-        popup = Popup{std::move(title), std::move(text), std::move(label), std::move(action), false};
+    void Confirm(std::string title, std::string text, std::string label, std::function<void()> action,
+                 std::function<void()> on_cancel = {}) {
+        popup = Popup{std::move(title), std::move(text), std::move(label), std::move(action), false, {}, std::move(on_cancel)};
     }
     void Dismiss() {
         if (!popup) return;
         const bool close = popup->close_after;
+        auto on_cancel = popup->on_cancel;
         popup.reset();
+        if (on_cancel) on_cancel();
         if (close) result = 0;
     }
     void Accept() {
@@ -382,11 +401,44 @@ struct Session {
         return prepared.path;
     }
     void InstallMod(const std::string& id) { if (const auto game = ModGame(); !game.empty()) mods->Install(id, game); }
-    void InstallModFile(const fs::path& file) { if (const auto game = ModGame(); !game.empty()) mods->InstallFile(file, game); }
+    void InstallModFile(const fs::path& file) { if (const auto game = ModGame(); !game.empty()) mods->InstallFile(file, game, true); }
+    // A mod that is already installed is replaced only when the user says so, with the two versions in front of them
+    void PollReplacement() {
+        const auto view = mods->View();
+        if (!view.asking || popup) return;
+        const auto& ask = *view.asking;
+        const int order = mods::CompareVersions(ask.installed, ask.incoming);
+        const std::string text = F(order == 0 ? "mods.replace_same" : order > 0 ? "mods.replace_older" : "mods.replace_other",
+                                   {{"name", ask.name}, {"installed", ask.installed}, {"incoming", ask.incoming}});
+        Confirm(T("mods.replace_title"), text, T("mods.install"), [this] { mods->Answer(true); }, [this] { mods->Answer(false); });
+    }
     void RemoveMod(const mods::Mod& mod) {
         const auto id = mod.id;
         Confirm(F("message.remove_title", {{"name", mod.name}}), T("message.remove_text"), T("mods.remove"),
                 [this, id] { mods->Remove(id); });
+    }
+    // The picture for a mod's logo, made when first needed and again if the mod's logo changes; 0 when there is none to show
+    uint64_t LogoFor(const std::string& id, const mods::Details& details) {
+        auto& entry = logos[id];
+        if (entry.source != details.logo.get()) {
+            if (entry.handle && window) window->DestroyImage(entry.handle);
+            entry = {};
+            entry.source = details.logo.get();
+            if (details.logo && window && details.logo->size() == size_t(details.logo_width) * details.logo_height * 4)
+                entry.handle = window->CreateImage(details.logo->data(), int(details.logo_width), int(details.logo_height));
+        }
+        return entry.handle;
+    }
+    void ForgetLogos(const mods::BrowserState& view) {
+        for (auto it = logos.begin(); it != logos.end();) {
+            if (view.details.count(it->first)) { ++it; continue; }
+            if (it->second.handle && window) window->DestroyImage(it->second.handle);
+            it = logos.erase(it);
+        }
+    }
+    void ReleaseLogos() {
+        for (auto& [id, entry] : logos) if (entry.handle && window) window->DestroyImage(entry.handle);
+        logos.clear();
     }
     void ToggleMod(const std::string& id) {
         for (const auto& installed : mods->View().installed)
@@ -433,6 +485,48 @@ struct Session {
         std::error_code ec;
         if (fs::is_directory(root, ec)) OpenLocation(files::Utf8(root));
         else Message(T("message.no_saves"), F("message.no_saves_text", {{"path", files::Utf8(root)}}));
+    }
+    // Developer mode: kept in settings.toml beside the update preference, under [launcher]
+    void SaveDeveloper() {
+        try {
+            auto table = Disk();
+            auto launcher = table["launcher"].as_table() ? *table["launcher"].as_table() : toml::table{};
+            launcher.insert_or_assign("developer_mode", developer_mode);
+            launcher.insert_or_assign("developer_texture_folder", files::Utf8(developer_folder));
+            table.insert_or_assign("launcher", launcher);
+            std::string error;
+            if (!Write(paths::Config(), table, error)) throw std::runtime_error(error);
+        } catch (const std::exception& e) { Message(T("dev.save_error"), e.what()); }
+    }
+    void RefreshDeveloperStatus() {
+        developer_status = {};
+        std::error_code ec;
+        if (developer_folder.empty() || !fs::is_directory(developer_folder, ec)) return;
+        developer_status.exists = true;
+        developer_status.manifest = fs::is_regular_file(developer_folder / "manifest.json", ec);
+        for (fs::recursive_directory_iterator it(developer_folder, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+            auto ext = it->path().extension().string();
+            for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+            if (ext == ".png") ++developer_status.pictures;
+        }
+    }
+    void SetDeveloperMode(bool on) {
+        developer_mode = on;
+        if (!on && page == Page::Developer) page = Page::Files;
+        if (on) RefreshDeveloperStatus();
+        SaveDeveloper();
+    }
+    void ChooseDeveloperFolder() {
+        fs::path selected;
+        if (!ChooseFolder(selected, T("dev.choose_dialog"))) return;
+        developer_folder = selected;
+        RefreshDeveloperStatus();
+        SaveDeveloper();
+    }
+    void ClearDeveloperFolder() {
+        developer_folder.clear();
+        RefreshDeveloperStatus();
+        SaveDeveloper();
     }
     void SetCheckUpdates(bool enabled) {
         try {
@@ -593,13 +687,18 @@ void TopBar(Session& s, const Canvas& c, float W) {
             s.page = support ? Page::Game : Page::Support;
         return;
     }
-    const Page pages[] = {Page::Play, Page::Mods, Page::Files, Page::Support, Page::About};
-    const char* labels[] = {T("nav.play"), T("nav.mods"), T("nav.files"), T("nav.support"), T("nav.about")};
+    // The Developer page is there only while developer mode is on (the switch is on the Files page)
+    std::vector<Page> pages{Page::Play, Page::Mods, Page::Files};
+    std::vector<const char*> labels{T("nav.play"), T("nav.mods"), T("nav.files")};
+    if (s.developer_mode) { pages.push_back(Page::Developer); labels.push_back(T("nav.developer")); }
+    pages.push_back(Page::Support); labels.push_back(T("nav.support"));
+    pages.push_back(Page::About); labels.push_back(T("nav.about"));
+    const int count = int(pages.size());
     float x = W - 40;
-    float xs[5];
-    for (int i = 4; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[i]).x; xs[i] = x; x -= 34; }
+    std::vector<float> xs(size_t(count), 0.f);
+    for (int i = count - 1; i >= 0; --i) { x -= c.Measure(Weight::Medium, 19, labels[size_t(i)]).x; xs[size_t(i)] = x; x -= 34; }
     const bool updates = s.mods->View().updates;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < count; ++i) {
         const float width = c.Measure(Weight::Medium, 19, labels[i]).x;
         const auto hit = Item(labels[i], c, xs[i] - 8, 18, xs[i] + width + 8, 56);
         if (hit.clicked) s.page = pages[i];
@@ -743,6 +842,7 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
     c.Rule(48, right, top);
 
     const auto rows = mods::DisplayMods(view);
+    s.ForgetLogos(view);
     ImGui::SetCursorScreenPos(c.P(0, top + 1));
     ImGui::BeginChild("##mod-list", ImVec2(c.S(W), c.S(std::max(40.f, H - top - 24))), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
     const Canvas list{ImGui::GetWindowDrawList(), c.scale, ImGui::GetCursorScreenPos()};
@@ -758,12 +858,35 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         const float text_x = 48 + 76, actions = installed ? 38 + 24 + (update ? update_w + 12 : 0) : install_w + 24;
         const float wrap = right - text_x - actions - 24;
         const float summary_h = list.Measure(Weight::Regular, 19, mod.summary.c_str(), wrap).y;
-        const float row_h = std::max(56.f + 44, 32 + summary_h + 28 + 44);
+        // What a texture pack file says about itself, shown under the mod when the user asks for it
+        const auto about = view.details.find(mod.id);
+        const mods::Details* details = installed && about != view.details.end() ? &about->second : nullptr;
+        std::vector<std::pair<const char*, const std::string*>> facts;
+        if (details) {
+            if (!details->description.empty()) facts.push_back({"", &details->description});
+            if (!details->credits.empty()) facts.push_back({T("mods.credits"), &details->credits});
+            if (!details->website.empty()) facts.push_back({T("mods.website"), &details->website});
+            if (!details->license.empty()) facts.push_back({T("mods.license"), &details->license});
+        }
+        const bool open = !facts.empty() && s.details_open.count(mod.id);
+        const float fact_x = text_x + 84, fact_wrap = right - fact_x - 24;
+        float facts_h = 0;
+        if (open)
+            for (const auto& fact : facts)
+                facts_h += std::max(24.f, list.Measure(Weight::Regular, 18, fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24).y) + 8;
+        const float row_h = std::max(56.f + 44, 32 + summary_h + 28 + 44) + (open ? facts_h + 14 : 0);
         const float ty = y + 22;
         list.Rect(48, ty, 104, ty + 56, Rgb(color::Slate), 12);
         const float icon_alpha = installed && installed->enabled ? 1.f : 0.45f;
+        const uint64_t logo = details ? s.LogoFor(mod.id, *details) : 0;
+        if (logo) {
+            // the mod's own logo, as large as fits the square and in its proportion
+            const float lw = float(details->logo_width), lh = float(details->logo_height), fit = std::min(52.f / lw, 52.f / lh);
+            const float w = lw * fit, h = lh * fit, cx = 76, cy = ty + 28;
+            list.list->AddImageRounded(reinterpret_cast<ImTextureID>(static_cast<uintptr_t>(logo)), list.P(cx - w / 2, cy - h / 2), list.P(cx + w / 2, cy + h / 2),
+                                       ImVec2(0, 0), ImVec2(1, 1), Rgb(0xFFFFFF, icon_alpha), list.S(6));
         // A flag stays bright until its pack is installed and disabled.
-        if (!art::LanguageFlag(list, {76, ty + 28}, 38, mod.language, installed && !installed->enabled ? 0.45f : 1.f)) art::Enso(list, {76, ty + 28}, 15, 5, 1.f, icon_alpha, 7, 10);
+        } else if (!art::LanguageFlag(list, {76, ty + 28}, 38, mod.language, installed && !installed->enabled ? 0.45f : 1.f)) art::Enso(list, {76, ty + 28}, 15, 5, 1.f, icon_alpha, 7, 10);
         list.Text(Weight::SemiBold, 22, text_x, ty + 2, Rgb(color::Paper), mod.name.c_str());
         list.Text(Weight::Regular, 19, text_x, ty + 32, Rgb(color::Mist), mod.summary.c_str(), wrap);
         std::string meta;
@@ -785,11 +908,61 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
             ImGui::EndDisabled();
             list.Text(Weight::Medium, 18, remove_x, meta_y, Rgb(remove.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), T("mods.remove"));
             if (remove.clicked) s.RemoveMod(mod);
+            float link_x = remove_x + list.Measure(Weight::Medium, 18, T("mods.remove")).x + 18;
+            if (const auto quality = view.quality.find(mod.id); quality != view.quality.end()) {
+                // A texture pack file: High uses every level of its textures, Low leaves them at twice the game's size
+                const bool low = quality->second == texpack::Quality::Low;
+                const std::string label = T(low ? "mods.quality_low" : "mods.quality_high");
+                const float quality_x = link_x, quality_w = list.Measure(Weight::Medium, 18, label.c_str()).x;
+                ImGui::BeginDisabled(view.busy);
+                const auto choose = Item("##quality", list, quality_x, meta_y - 1, quality_x + quality_w, meta_y + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, quality_x, meta_y, Rgb(choose.hovered ? color::Paper : color::Mist, view.busy ? 0.5f : 1.f), label.c_str());
+                if (choose.clicked) s.mods->SetQuality(mod.id, low ? texpack::Quality::High : texpack::Quality::Low);
+                link_x += quality_w + 18;
+            }
+            if (!facts.empty()) {
+                const char* label = T(open ? "mods.hide_details" : "mods.details");
+                const float label_w = list.Measure(Weight::Medium, 18, label).x;
+                const auto show = Item("##details", list, link_x, meta_y - 1, link_x + label_w, meta_y + 17);
+                list.Text(Weight::Medium, 18, link_x, meta_y, Rgb(show.hovered ? color::Paper : color::Mist), label);
+                if (show.clicked) {
+                    if (open) s.details_open.erase(mod.id);
+                    else s.details_open.insert(mod.id);
+                }
+            }
+            if (open) {
+                float fy = meta_y + 34;
+                for (const auto& fact : facts) {
+                    if (fact.first[0]) list.Text(Weight::Medium, 18, text_x, fy, Rgb(color::Dim), fact.first);
+                    list.Text(Weight::Regular, 18, fact.first[0] ? fact_x : text_x, fy, Rgb(color::Mist), fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24);
+                    fy += std::max(24.f, list.Measure(Weight::Regular, 18, fact.second->c_str(), fact.first[0] ? fact_wrap : right - text_x - 24).y) + 8;
+                }
+            }
             ImGui::BeginDisabled(view.busy);
             const auto toggle = Item("##toggle", list, right - 38, ty + 6, right, ty + 28);
             ImGui::EndDisabled();
             art::Toggle(list, right - 38, ty + 6, installed->enabled, toggle.hovered);
             if (toggle.clicked) s.ToggleMod(mod.id);
+            if (const auto at = std::find(view.order.begin(), view.order.end(), mod.id); view.order.size() > 1 && at != view.order.end()) {
+                // Several texture mods can be on at once: the first in this order is the one whose texture is used
+                const size_t place = size_t(at - view.order.begin());
+                const float line = ty + 44, down_w = list.Measure(Weight::Medium, 18, T("mods.down")).x, up_w = list.Measure(Weight::Medium, 18, T("mods.up")).x;
+                const std::string label = F("mods.priority", {{"place", std::to_string(place + 1)}, {"count", std::to_string(view.order.size())}});
+                const float down_x = right - down_w, up_x = down_x - 16 - up_w, label_x = up_x - 16 - list.Measure(Weight::Regular, 18, label.c_str()).x;
+                list.Text(Weight::Regular, 18, label_x, line, Rgb(color::Dim), label.c_str());
+                const bool can_up = place > 0 && !view.busy, can_down = place + 1 < view.order.size() && !view.busy;
+                ImGui::BeginDisabled(!can_up);
+                const auto up = Item("##up", list, up_x, line - 1, up_x + up_w, line + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, up_x, line, Rgb(up.hovered && can_up ? color::Paper : color::Mist, can_up ? 1.f : 0.4f), T("mods.up"));
+                if (up.clicked && can_up) s.mods->MoveTexture(mod.id, true);
+                ImGui::BeginDisabled(!can_down);
+                const auto down = Item("##down", list, down_x, line - 1, down_x + down_w, line + 17);
+                ImGui::EndDisabled();
+                list.Text(Weight::Medium, 18, down_x, line, Rgb(down.hovered && can_down ? color::Paper : color::Mist, can_down ? 1.f : 0.4f), T("mods.down"));
+                if (down.clicked && can_down) s.mods->MoveTexture(mod.id, false);
+            }
             if (update && Button("##update", list, right - 38 - 24 - update_w, ty, right - 38 - 24, ty + 34, update_label.c_str(), false, !view.busy))
                 s.InstallMod(mod.id);
         } else if (Button("##install", list, right - install_w, ty, right, ty + 34, T("mods.install"), true, release && !view.busy && mod.unsupported_reason.empty())) {
@@ -798,6 +971,20 @@ void ModsPage(Session& s, const Canvas& c, float W, float H) {
         y += row_h;
         list.Rule(48, right, y);
         ImGui::PopID();
+    }
+    if (!view.overlaps.empty()) {
+        // Two texture mods that have the same texture: only the one first in the order is used for it
+        const auto name = [&](const std::string& id) {
+            for (const auto& i : view.installed) if (i.mod.id == id) return i.mod.name;
+            return id;
+        };
+        list.Text(Weight::SemiBold, 18.5f, 48, y + 20, Rgb(color::Paper), T("mods.overlaps_title"));
+        y += 48;
+        for (const auto& o : view.overlaps) {
+            const std::string line = F("mods.overlap_line", {{"winner", name(o.winner)}, {"count", std::to_string(o.count)}, {"loser", name(o.loser)}});
+            list.Text(Weight::Regular, 18, 48, y, Rgb(color::Mist), line.c_str(), right - 48);
+            y += 28;
+        }
     }
     const char* empty = T(rows.empty() ? "mods.catalog_unavailable" : "mods.more_soon");
     list.Text(Weight::Regular, 18.5f, 48, y + 24, Rgb(color::Dim), empty, right - 48);
@@ -882,9 +1069,47 @@ void FilesPage(Session& s, const Canvas& parent, float W, float H) {
     const auto discord_toggle = Item("##discord-presence", c, right - 38, y + 22, right, y + 44);
     art::Toggle(c, right - 38, y + 22, s.discord_presence, discord_toggle.hovered);
     if (discord_toggle.clicked) s.SetDiscordPresence(!s.discord_presence);
+    y += 60;
+    c.Rule(48, right, y);
+    c.Text(Weight::SemiBold, 20, label_x, y + 25, Rgb(color::Paper), T("dev.title"));
+    c.Text(Weight::Regular, 19, value_x, y + 25, Rgb(color::Mist), T("dev.toggle_hint"));
+    const auto developer = Item("##developer-mode", c, right - 38, y + 22, right, y + 44);
+    art::Toggle(c, right - 38, y + 22, s.developer_mode, developer.hovered);
+    if (developer.clicked) s.SetDeveloperMode(!s.developer_mode);
     ImGui::SetCursorScreenPos(c.P(0, y + 54));
     ImGui::Dummy(ImVec2(1, 1));
     ImGui::EndChild();
+}
+
+void DeveloperPage(Session& s, const Canvas& c, float W, float) {
+    Header(c, T("dev.title"), T("dev.subtitle"), W);
+    const float right = W - 48, wrap = right - 48;
+    c.Rule(48, right, 200);
+    c.Text(Weight::SemiBold, 20, 48, 225, Rgb(color::Paper), T("dev.folder"));
+    const bool has_folder = !s.developer_folder.empty();
+    const std::string value = has_folder ? files::Utf8(s.developer_folder) : std::string(T("dev.no_folder"));
+    c.Text(Weight::Regular, 19, 190, 225, Rgb(has_folder ? color::Mist : color::Dim), c.Fit(Weight::Regular, 19, right - 190 - 200, value).c_str());
+    if (Button("Choose##developer", c, right - 84, 216, right, 250, T("dev.choose"), false)) s.ChooseDeveloperFolder();
+    if (Button("Clear##developer", c, right - 180, 216, right - 96, 250, T("dev.clear"), false, has_folder)) s.ClearDeveloperFolder();
+    float y = 276;
+    std::string line;
+    uint32_t tone = color::Mist;
+    if (!has_folder) line = T("dev.hint");
+    else if (!s.developer_status.exists) { line = T("dev.unreadable"); tone = color::Warning; }
+    else {
+        line = F(s.developer_status.manifest ? "dev.pictures_manifest" : "dev.pictures_no_manifest", {{"count", std::to_string(s.developer_status.pictures)}});
+        if (!s.developer_status.manifest) tone = color::Warning;
+    }
+    c.Text(Weight::Medium, 19, 48, y, Rgb(tone), line.c_str(), wrap);
+    if (has_folder && Link("Refresh##developer", c, right, y, T("dev.refresh"), true)) s.RefreshDeveloperStatus();
+    y += 44;
+    c.Rule(48, right, y);
+    const char* paragraphs[] = {T("dev.p1"), T("dev.p2"), T("dev.p3")};
+    y += 24;
+    for (const char* text : paragraphs) {
+        c.Text(Weight::Regular, 19, 48, y, Rgb(color::Mist), text, wrap);
+        y += c.Measure(Weight::Regular, 19, text, wrap).y + 14;
+    }
 }
 
 void SupportPage(Session& s, const Canvas& c, float W, float) {
@@ -951,7 +1176,7 @@ void AboutPage(Session&, const Canvas& c, float W, float) {
     struct Component { const char* name; const char* license; };
     const Component components[] = {
         {"XboxXBERecomp", "MIT"}, {"SDL 3", "zlib"}, {"Dear ImGui", "MIT"}, {"toml++", "MIT"},
-        {"Lua 5.4", "MIT"}, {"miniz", "MIT"}, {"XZ Embedded", "0BSD"}, {"Vulkan-Headers", "Apache-2.0 or MIT"},
+        {"Lua 5.4", "MIT"}, {"miniz", "MIT"}, {"stb_image", "Public domain or MIT"}, {"XZ Embedded", "0BSD"}, {"Vulkan-Headers", "Apache-2.0 or MIT"},
         {"glslang", T("about.bsd_others")}, {"Hanken Grotesk", "SIL Open Font License 1.1"},
         {"discord-rpc and RapidJSON", "MIT"}, {T("about.keyboard"), "GPL-2.0-or-later"},
     };
@@ -1105,6 +1330,7 @@ void LanguagePage(Session& s, const Canvas& c, float W, float H) {
 
 void Draw(Session& s, float scale) {
     s.PollGame();
+    s.PollReplacement();
     s.PollReport();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float W = viewport->Size.x / scale, H = viewport->Size.y / scale;
@@ -1122,6 +1348,7 @@ void Draw(Session& s, float scale) {
         case Page::Play: PlayPage(s, c, W, H); break;
         case Page::Mods: ModsPage(s, c, W, H); break;
         case Page::Files: FilesPage(s, c, W, H); break;
+        case Page::Developer: DeveloperPage(s, c, W, H); break;
         case Page::Support: SupportPage(s, c, W, H); break;
         case Page::About: AboutPage(s, c, W, H); break;
         case Page::Game: GamePage(s, c, W, H); break;
@@ -1262,7 +1489,9 @@ public:
                 << ",\"enabled\":" << (installed && installed->enabled ? "true" : "false") << "}";
             first = false;
         }
-        out << "],\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
+        out << "],\"developer_mode\":" << (s.developer_mode ? "true" : "false") << ",\"developer_folder\":\"" << Escape(files::Utf8(s.developer_folder))
+            << "\",\"developer_pictures\":" << s.developer_status.pictures << ",\"developer_manifest\":" << (s.developer_status.manifest ? "true" : "false")
+            << ",\"check_updates\":" << (s.check_updates ? "true" : "false") << ",\"game_busy\":" << (s.preparing ? "true" : "false")
             << ",\"discord_presence\":" << (s.discord_presence ? "true" : "false")
             << ",\"game_error\":\"" << Escape(s.game_error) << "\",\"report_busy\":" << (s.report_job.valid()?"true":"false")
             << ",\"report_path\":\"" << Escape(files::Utf8(s.report.zip)) << "\",\"report_error\":\"" << Escape(s.report.error) << "\""
@@ -1293,7 +1522,8 @@ private:
         if (command == "page") {
             if (argument == "support") s.page = Page::Support;
             else if (!s.game_required)
-                for (Page page : {Page::Play, Page::Mods, Page::Files, Page::About}) if (argument == PageName(page)) s.page = page;
+                for (Page page : {Page::Play, Page::Mods, Page::Files, Page::Developer, Page::About})
+                    if (argument == PageName(page) && (page != Page::Developer || s.developer_mode)) s.page = page;
         }
         else if (command == "generate-report") s.GenerateReport();
         else if (command == "play") s.Play();
@@ -1306,6 +1536,8 @@ private:
         else if (command == "renderer") s.SetRenderer(argument);
         else if (command == "check-updates") s.SetCheckUpdates(argument == "on");
         else if (command == "discord-presence") s.SetDiscordPresence(argument == "on");
+        else if (command == "developer-mode") s.SetDeveloperMode(argument == "on");
+        else if (command == "developer-folder") { s.developer_folder = files::FromUtf8(argument); s.RefreshDeveloperStatus(); s.SaveDeveloper(); }
         else if (command == "mods-refresh") s.mods->Refresh();
         else if (command == "mod-install") s.InstallMod(argument);
         else if (command == "mod-install-file") s.InstallModFile(files::FromUtf8(argument));
@@ -1326,6 +1558,18 @@ private:
 
 bool CheckUpdatesEnabled() {
     try { return Disk()["launcher"]["check_updates"].value_or(true); } catch (...) { return true; }
+}
+
+void LoadDeveloper(Session& s) {
+    try {
+        const auto table = Disk();
+        const auto* launcher = table["launcher"].as_table();
+        if (launcher) {
+            s.developer_mode = (*launcher)["developer_mode"].value_or(false);
+            s.developer_folder = files::FromUtf8((*launcher)["developer_texture_folder"].value_or(std::string{}));
+        }
+    } catch (...) {}
+    s.RefreshDeveloperStatus();
 }
 
 bool RunAutomated(Session& s) {
@@ -1360,6 +1604,15 @@ bool RunAutomated(Session& s) {
 }
 }
 
+std::filesystem::path DeveloperTextureFolder() {
+    try {
+        const auto table = Disk();
+        const auto* launcher = table["launcher"].as_table();
+        if (!launcher || !(*launcher)["developer_mode"].value_or(false)) return {};
+        return files::FromUtf8((*launcher)["developer_texture_folder"].value_or(std::string{}));
+    } catch (...) { return {}; }
+}
+
 bool Show() {
     update::RemovePreviousFiles(app::ExeDir());
     Session s;
@@ -1389,6 +1642,7 @@ bool Show() {
     s.check_updates = CheckUpdatesEnabled();
     s.discord_presence = DiscordPresenceEnabled();
     if (s.language_saved.empty() && (!automated || first_run_test)) s.OpenLanguage(true);
+    LoadDeveloper(s);
     if (!options.launcher_test.empty()) return RunAutomated(s);
 
     Window window;
@@ -1416,12 +1670,15 @@ bool Show() {
             if (s.check_updates && s.updater) s.updater->Tick();
             s.OfferUpdate();
             gamepads.Poll(s);
+            s.window = &window;
             Draw(s, window.Scale());
             window.EndFrame();
             if (s.updater && s.updater->Get().state == update::State::Ready) { s.relaunch = true; s.result = 0; }
         }
     }
+    s.ReleaseLogos();
     window.Close();
+    s.window = nullptr;
     s.mods.reset();
     s.updater.reset();
     if (s.relaunch) {
