@@ -10,6 +10,7 @@
 #include "texture_pack.h"
 #include <cstdlib>
 #include "mods/manager.h"
+#include "mods/mod_settings.h"
 #include "mods/languages.h"
 #include "mods/runtime.h"
 #include "mods/sha256.h"
@@ -51,7 +52,7 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         const auto voices=settings.voice_language;
         std::vector<language::PackSelection> packs;
         std::vector<mods::RoutineScript> scripts;
-        std::vector<std::filesystem::path> hd_packs;
+        std::vector<texpack::PackSpec> hd_packs;
         bool credits=false;
         if(!options.language_pack.empty()){packs.push_back({options.language_pack,selected=="pt-BR",voices=="pt-BR"});credits=selected=="pt-BR";}
         else {
@@ -73,7 +74,7 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                     const auto file=pack/"pack.ostp";std::error_code ec;
                     if(!std::filesystem::is_regular_file(file,ec)||std::filesystem::file_size(file,ec)!=row.mod.ostp->size)
                         throw std::runtime_error("Installed texture pack file changed: "+row.mod.name);
-                    hd_packs.push_back(file);
+                    hd_packs.push_back({file,mods::ReadTextureQuality(paths::Mods(),row.mod.id)});
                 } else if(std::find(row.mod.features.begin(),row.mod.features.end(),"hdtextures")!=row.mod.features.end()) {
                     const auto index=std::find_if(row.mod.files.begin(),row.mod.files.end(),[](auto& f){return f.path=="hd/index.txt";});
                     if(index==row.mod.files.end()||mods::Sha256File(pack/"hd/index.txt")!=index->sha256)
@@ -133,7 +134,7 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         mods::StageRoutines(std::move(scripts));
         // A development aid: the folder this names is read as a texture pack before the installed ones, so a pack can be tried
         // without packaging and installing it
-        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)hd_packs.insert(hd_packs.begin(),folder);
+        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)hd_packs.insert(hd_packs.begin(),texpack::PackSpec{std::filesystem::path(folder)});
         texpack::SetPacks(hd_packs);
         const auto& stats=language::Statistics();
         LOGR("Language resources: text=%s voices=%s",selected.c_str(),voices.c_str());

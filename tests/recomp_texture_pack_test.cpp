@@ -84,7 +84,7 @@ int main() try {
         Check(source != nullptr, "A source for the packs in use");
         const auto entry = source->Find(0xa1);
         Check(entry && entry->width == 16 && entry->height == 8 && entry->levels == 3 && entry->format == texpack::BcFormat::Bc3 &&
-                  entry->medium_first_level == 0,
+                  entry->first_level == 0,
               "The source describes a texture");
         std::vector<uint8_t> all, later;
         Check(source->ReadLevels(*entry, 0, all) && all == blocks, "The source reads what Load reads");
@@ -195,6 +195,13 @@ int main() try {
         e = source->Find(0xa1);
         Check(e && e->width == 64 && source->ReadLevels(*e, 0, out) && out.front() == 0x77,
               "The file before the folder gives its own texture when both have it");
+        // The quality is the pack's own: Medium starts a 4x texture at the second level, High at the first
+        texpack::SetPacks({{root / "c.ostp", texpack::Quality::Medium}, root / "a"});
+        source = texpack::Source();
+        e = source->Find(0xf1);
+        Check(e && e->first_level == 1, "A pack file in Medium starts its textures at the second level");
+        texpack::SetPacks({{root / "c.ostp", texpack::Quality::High}});
+        Check(texpack::Source()->Find(0xf1)->first_level == 0, "A pack file in High starts at the first level");
         texpack::SetPacks({root / "junk.ostp"});
         Check(texpack::Source() == nullptr && !texpack::Enabled(), "Only a file that is not a pack turns the replacement off");
     }

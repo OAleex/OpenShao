@@ -125,7 +125,7 @@ public:
         if (it == set_->index.end()) return std::nullopt;
         const Entry& e = it->second.entry;
         // the folders do not say how large the game's texture is, so the Medium quality is the High one
-        return SourceEntry{hash, uint16_t(e.w), uint16_t(e.h), uint8_t(e.levels), BcFormat::Bc3, 0};
+        return SourceEntry{hash, uint16_t(e.w), uint16_t(e.h), uint8_t(e.levels), BcFormat::Bc3, 0, 0};
     }
     bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
         const auto it = set_->index.find(entry.hash);
@@ -178,9 +178,10 @@ std::shared_ptr<const PackSource> Current() {
 }
 }
 
-void SetPacks(const std::vector<std::filesystem::path>& packs) {
+void SetPacks(const std::vector<PackSpec>& packs) {
     std::vector<std::shared_ptr<const PackSource>> members;
-    for (const auto& path : packs) {
+    for (const auto& spec : packs) {
+        const auto& path = spec.path;
         std::error_code ec;
         if (std::filesystem::is_directory(path, ec)) {
             auto set = std::make_shared<Set>();
@@ -197,9 +198,9 @@ void SetPacks(const std::vector<std::filesystem::path>& packs) {
                 LOGE("Texture pack: %s is not a valid pack file: %s", path.string().c_str(), error.c_str());
                 continue;
             }
-            LOGI("Texture pack: file %s: %zu replacements, %zu to load ahead", path.string().c_str(), file->entries().size(),
-                 file->info().preload.size());
-            members.push_back(AsSource(std::move(file)));
+            LOGI("Texture pack: file %s: %zu replacements, %zu to load ahead, %s quality", path.string().c_str(),
+                 file->entries().size(), file->info().preload.size(), spec.quality == Quality::Medium ? "medium" : "high");
+            members.push_back(AsSource(std::move(file), spec.quality));
         } else {
             LOGE("Texture pack: %s is neither a folder nor a file", path.string().c_str());
         }

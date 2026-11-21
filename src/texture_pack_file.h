@@ -39,8 +39,8 @@ uint64_t LevelSize(uint32_t width, uint32_t height, uint32_t level, BcFormat for
 uint32_t FirstLevel(const FileEntry& entry, Quality quality);
 
 class PackFile;
-// The pack as the loader reads it
-std::shared_ptr<const PackSource> AsSource(std::shared_ptr<const PackFile> pack);
+// The pack as the loader reads it. With Medium it starts every texture at the level that leaves it at twice the game's size.
+std::shared_ptr<const PackSource> AsSource(std::shared_ptr<const PackFile> pack, Quality quality = Quality::High);
 
 class PackFile {
 public:

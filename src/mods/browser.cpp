@@ -45,7 +45,9 @@ void Browser::Start(const Job& job,bool checking){
     });
 }
 void Browser::Reload(){
-    auto rows=ReadInstalled(root_);std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.updates=false;
+    auto rows=ReadInstalled(root_);std::map<std::string,texpack::Quality> quality;
+    for(const auto& i:rows)if(i.mod.ostp)quality[i.mod.id]=ReadTextureQuality(root_,i.mod.id);
+    std::lock_guard lock(mutex_);state_.installed=std::move(rows);state_.quality=std::move(quality);state_.updates=false;
     for(const auto& m:state_.catalog)for(const auto& i:state_.installed)if(i.mod.id==m.id)if(const auto* v=LatestCompatible(m))if(CompareVersions(v->version,i.mod.version)>0)state_.updates=true;
 }
 void Browser::Refresh(){Start([this]{
@@ -86,6 +88,7 @@ void Browser::Install(std::string id,const fs::path& game){Start([this,id,game]{
     std::lock_guard lock(mutex_);state_.status="Mod installed";
 });}
 void Browser::Enable(std::string id,bool enabled){Start([this,id,enabled]{SetEnabled(root_,id,enabled);std::lock_guard lock(mutex_);state_.status=enabled?"Mod enabled":"Mod disabled";});}
+void Browser::SetQuality(std::string id,texpack::Quality quality){Start([this,id,quality]{WriteTextureQuality(root_,id,quality);std::lock_guard lock(mutex_);state_.status="Texture quality saved. It applies the next time you play.";});}
 void Browser::Remove(std::string id){Start([this,id]{Uninstall(root_,id);std::lock_guard lock(mutex_);state_.status="Mod uninstalled";});}
 std::vector<Mod> DisplayMods(const BrowserState& view){auto list=view.catalog;for(const auto& i:view.installed)if(std::none_of(list.begin(),list.end(),[&](auto& m){return m.id==i.mod.id;}))list.push_back(i.mod);return list;}
 }

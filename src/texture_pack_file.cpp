@@ -363,11 +363,11 @@ bool PackFile::ReadLevels(const FileEntry& entry, uint32_t first_level, std::vec
 namespace {
 class FileSource final : public PackSource {
 public:
-    explicit FileSource(std::shared_ptr<const PackFile> pack) : pack_(std::move(pack)) {}
+    FileSource(std::shared_ptr<const PackFile> pack, Quality quality) : pack_(std::move(pack)), quality_(quality) {}
     std::optional<SourceEntry> Find(uint64_t hash) const override {
         const FileEntry* e = pack_->Find(hash);
         if (!e) return std::nullopt;
-        return SourceEntry{e->hash, e->width, e->height, e->levels, e->format, FirstLevel(*e, Quality::Medium)};
+        return SourceEntry{e->hash, e->width, e->height, e->levels, e->format, FirstLevel(*e, quality_)};
     }
     bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
         const FileEntry* e = pack_->Find(entry.hash);
@@ -378,10 +378,11 @@ public:
 
 private:
     std::shared_ptr<const PackFile> pack_;
+    Quality quality_;
 };
 }
 
-std::shared_ptr<const PackSource> AsSource(std::shared_ptr<const PackFile> pack) {
-    return std::make_shared<FileSource>(std::move(pack));
+std::shared_ptr<const PackSource> AsSource(std::shared_ptr<const PackFile> pack, Quality quality) {
+    return std::make_shared<FileSource>(std::move(pack), quality);
 }
 }
