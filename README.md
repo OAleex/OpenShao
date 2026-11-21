@@ -136,6 +136,12 @@ For a downloaded `.tar.xz`, use **Install from file**.
 Choose the language in **Konfigure Recompilation > Language**.
 Mod authors can read the [mod guide](docs/MODS.md).
 
+### Is there an HD texture pack?
+
+Yes. **Remastered 4X** is a 4x HD texture pack for the whole game. It adapts the [HD Texture by Matasiete](https://gbatemp.net/threads/dragonmortal-kombat-shaolin-monks-hd-texture-by-matasiete-dragon.673436/) to OpenShao.
+It needs the [latest nightly build](https://github.com/HexAbyss/OpenShao/releases/latest), which has texture pack support.
+The download link and the install steps are in [issue #9](https://github.com/HexAbyss/OpenShao/issues/9).
+
 ### How can I improve performance?
 
 Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate.
