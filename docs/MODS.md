@@ -94,7 +94,7 @@ video memory. A pack comes in one of two forms, and several packs can be enabled
 The replacement is found by the **hash** of the game's own texture: the SDK `Hash` of the bytes of its level 0, as 16 hexadecimal digits.
 A replacement must have the same proportion as the game's texture. The runtime reads the pictures on threads of its own, so the game never waits
 for the disk: a texture is drawn as the game made it until its replacement has been read, which takes a few frames.
-Only the Vulkan renderer replaces textures for now.
+Both renderers, Direct3D 12 and Vulkan, replace textures.
 
 ### A pack in one file (`.ostp`)
 
@@ -114,11 +114,11 @@ The page shows the mod's logo, and **Details** opens its description, credits, w
   Down on the Mods page (kept by id in `settings.toml`; without a choice, the order they were installed in), and the page lists how many textures each
   pair has in common.
 - **Video memory.** The pictures a pack puts in video memory are kept within a budget, and the ones not drawn for the longest time go first, never
-  one drawn in the last two seconds. The budget is 60% of what the driver says the game may use (`VK_EXT_memory_budget`, which leaves out other
-  programs), or 40% of the largest local heap without it. `OPENSHAO_HD_VRAM_MB` sets it by hand. A picture that is taken out is read again when the
-  game draws it.
-- The pack file can list the textures to have ready before the menus draw them (`preload`), which keeps the menus from changing a few frames after
-  they appear.
+  one drawn in the last two seconds. The budget is 60% of what the driver says the game may use (`VK_EXT_memory_budget` with Vulkan, the adapter's
+  video memory budget with Direct3D 12, both of which leave out other programs), or 40% of the largest local heap (of the adapter's own memory with
+  Direct3D 12) without it. `OPENSHAO_HD_VRAM_MB` sets it by hand. A picture that is taken out is read again when the game draws it.
+- The pack file can list the textures to have ready before the game draws them (`preload`): those of the menus, which keeps them from changing a
+  few frames after they appear, and the first picture the game shows, which it draws for only a few frames before it stops to load.
 
 The OpenShao ModKit (the OpenShao-ModKit repository) extracts the game's textures from the player's own disc image and
 compiles an edited folder into a `.ostp`, with a window, a command line and a Python package.
@@ -136,8 +136,9 @@ the number of levels and the file, separated by spaces. Lines starting with `#` 
 - The **file** is a DDS with the `DXT5` format and every level, from the largest down, each a multiple of 4 in size.
 - The pack's textures keep their own size and levels. A file that is missing or does not match its line is not used, and the game's texture stays.
 
-`hd/preload.txt` is optional. It lists, one hash per line, the replacements to have ready before the menus draw them. Lines starting with `#` are
-comments, and a hash that has no line in `index.txt` is ignored. Keep it to the textures the menus draw: each one takes video memory from the start.
+`hd/preload.txt` is optional. It lists, one hash per line, the replacements to have ready before the game draws them: those of the menus and of the
+first picture the game shows. Lines starting with `#` are comments, and a hash that has no line in `index.txt` is ignored. Keep it to those textures:
+each one takes video memory from the start.
 
 ### Developer mode
 
