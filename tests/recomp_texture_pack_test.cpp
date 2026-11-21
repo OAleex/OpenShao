@@ -154,6 +154,26 @@ int main() try {
         Check(texpack::TakeInterval(2, span) && span.waits == 2 && span.wait_us == 6000 && span.pop_ins == 2 &&
                   span.pop_frames == 10 && span.pop_max >= 7 && span.ready == 2 && span.disk_us == 900 && span.worst_frame_us == 100,
               "Waits and pop-ins add up, and a read made elsewhere does not count against the frame");
+        // what the memory budget does
+        texpack::NoteEviction(3, 3000);
+        texpack::NoteEviction(2, 500);
+        texpack::NoteReload();
+        texpack::NoteNoRoom();
+        texpack::NoteNoRoom();
+        texpack::NoteMemoryFailure();
+        texpack::SetBudget(64u << 20);
+        texpack::EndFrame();
+        texpack::EndFrame();
+        Check(texpack::TakeInterval(2, span) && span.evictions == 5 && span.evicted_bytes == 3500 && span.reloads == 1 &&
+                  span.no_room == 2 && span.memory_failures == 1 && span.budget_bytes == (64u << 20),
+              "An interval counts the replacements taken out, the ones that came back, and the refusals");
+        texpack::EndFrame();
+        texpack::EndFrame();
+        Check(texpack::TakeInterval(2, span) && span.evictions == 0 && span.reloads == 0 && span.budget_bytes == (64u << 20),
+              "The next interval starts over, and the budget stays");
+        const auto total = texpack::GetStats();
+        Check(total.evictions >= 5 && total.evicted_bytes >= 3500 && total.reloads >= 1 && total.no_room >= 2 && total.budget_bytes == (64u << 20),
+              "The totals keep them");
         uint32_t number = 0;
         Check(!texpack::TakeMarker(number), "No marker without a request");
         texpack::RequestMarker();
