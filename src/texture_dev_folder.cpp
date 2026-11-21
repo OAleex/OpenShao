@@ -16,7 +16,7 @@
 #define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #define STBI_MAX_DIMENSIONS 8192
-#include "../third_party/stb/stb_image.h"
+#include "vendor/stb_image.h"  // public domain (Sean Barrett), kept here because third_party/ is not tracked
 
 namespace openshao::texpack {
 namespace {
