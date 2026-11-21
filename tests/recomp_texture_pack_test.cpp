@@ -98,6 +98,17 @@ int main() try {
         texpack::SetPacks({root / "a", root / "b"});
         Check(texpack::Generation() != generation, "Setting the packs changes the generation");
         Check(source->ReadLevels(*entry, 0, all) && texpack::Source() != source, "An old source keeps reading what it described");
+        Check(texpack::Source()->Preload().empty(), "Folders without a list ask for nothing ahead");
+        {
+            std::ofstream(root / "a" / "preload.txt") << "# the menus\n00000000000000a1\n\nnot a hash\n00000000000000dd\n00000000000000a1\n";
+            std::ofstream(root / "b" / "preload.txt") << "00000000000000b1 and the rest of the line is ignored\n00000000000000a1\n";
+            texpack::SetPacks({root / "a", root / "b"});
+            const auto ahead = texpack::Source()->Preload();
+            Check(ahead == std::vector<uint64_t>({0xa1, 0xb1}),
+                  "The list to load ahead has what the folders have a replacement for, once, in order");
+            fs::remove(root / "a" / "preload.txt");
+            fs::remove(root / "b" / "preload.txt");
+        }
         std::vector<uint8_t> other;
         texpack::SetPacks({});
         Check(texpack::Source() == nullptr, "No packs, no source");
@@ -130,6 +141,8 @@ int main() try {
         texpack::EndFrame();
         texpack::EndFrame();
         Check(texpack::TakeInterval(2, span) && span.loads == 0 && span.worst_frame_us == 0, "A quiet interval has no loads");
+        texpack::NoteReadyAtFirstUse();
+        texpack::NoteReadyAtFirstUse();
         texpack::NoteWait(2000);
         texpack::NoteWait(4000);
         texpack::NotePopIn(3);
@@ -138,7 +151,7 @@ int main() try {
         texpack::EndFrame();
         texpack::EndFrame();
         Check(texpack::TakeInterval(2, span) && span.waits == 2 && span.wait_us == 6000 && span.pop_ins == 2 &&
-                  span.pop_frames == 10 && span.pop_max >= 7 && span.disk_us == 900 && span.worst_frame_us == 100,
+                  span.pop_frames == 10 && span.pop_max >= 7 && span.ready == 2 && span.disk_us == 900 && span.worst_frame_us == 100,
               "Waits and pop-ins add up, and a read made elsewhere does not count against the frame");
         uint32_t number = 0;
         Check(!texpack::TakeMarker(number), "No marker without a request");

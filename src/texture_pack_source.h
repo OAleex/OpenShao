@@ -24,5 +24,7 @@ public:
     // The BC blocks of the levels from `first_level` on, every level tightly packed, the largest first. Safe to call
     // from several threads.
     virtual bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const = 0;
+    // The textures the pack asks to have ready before anything draws them: those of the menus, in the order to load them
+    virtual std::vector<uint64_t> Preload() const { return {}; }
 };
 }

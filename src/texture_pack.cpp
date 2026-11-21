@@ -18,9 +18,14 @@ struct Item {
     std::filesystem::path file;
 };
 using Index = std::unordered_map<uint64_t, Item>;
+// What the folders in use hold: the replacements, and the ones to load ahead
+struct Set {
+    Index index;
+    std::vector<uint64_t> preload;
+};
 
 std::mutex lock;
-std::shared_ptr<const Index> current;
+std::shared_ptr<const Set> current;
 std::atomic<uint64_t> generation{0};
 
 bool SafeName(const std::string& name) {
@@ -57,17 +62,37 @@ void ReadIndex(const std::filesystem::path& folder, Index& index) {
 }
 }
 
+namespace {
+// preload.txt: one hash on each line, those of the textures to have ready before the menus draw them. Lines that start with
+// # are comments. Only what the folders have a replacement for is kept, once, in the order given.
+void ReadPreload(const std::filesystem::path& folder, Set& set) {
+    std::ifstream in(folder / "preload.txt");
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream fields(line);
+        std::string hash;
+        uint64_t key;
+        if (!(fields >> hash) || !Hex64(hash, key) || !set.index.count(key)) continue;
+        if (std::find(set.preload.begin(), set.preload.end(), key) == set.preload.end()) set.preload.push_back(key);
+    }
+}
+}
+
 void SetPacks(const std::vector<std::filesystem::path>& folders) {
-    auto index = std::make_shared<Index>();
-    for (const auto& folder : folders) ReadIndex(folder, *index);
-    if (!folders.empty()) LOGI("Texture packs: %zu replacements from %zu folders", index->size(), folders.size());
+    auto set = std::make_shared<Set>();
+    for (const auto& folder : folders) ReadIndex(folder, set->index);
+    for (const auto& folder : folders) ReadPreload(folder, *set);
+    if (!folders.empty())
+        LOGI("Texture packs: %zu replacements from %zu folders, %zu to load ahead", set->index.size(), folders.size(),
+             set->preload.size());
     std::lock_guard<std::mutex> guard(lock);
-    current = index->empty() ? nullptr : std::move(index);
+    current = set->index.empty() ? nullptr : std::move(set);
     ++generation;
 }
 
 namespace {
-std::shared_ptr<const Index> Current() {
+std::shared_ptr<const Set> Current() {
     std::lock_guard<std::mutex> guard(lock);
     return current;
 }
@@ -76,10 +101,10 @@ std::shared_ptr<const Index> Current() {
 bool Enabled() { return Current() != nullptr; }
 
 std::optional<Entry> Find(uint64_t hash) {
-    const auto index = Current();
-    if (!index) return std::nullopt;
-    const auto it = index->find(hash);
-    if (it == index->end()) return std::nullopt;
+    const auto set = Current();
+    if (!set) return std::nullopt;
+    const auto it = set->index.find(hash);
+    if (it == set->index.end()) return std::nullopt;
     return it->second.entry;
 }
 
@@ -122,35 +147,36 @@ bool ReadItem(const Item& item, uint32_t first_level, std::vector<uint8_t>& bloc
 // A snapshot of the packs, for the loader's threads
 class FolderSource final : public PackSource {
 public:
-    explicit FolderSource(std::shared_ptr<const Index> index) : index_(std::move(index)) {}
+    explicit FolderSource(std::shared_ptr<const Set> set) : set_(std::move(set)) {}
     std::optional<SourceEntry> Find(uint64_t hash) const override {
-        const auto it = index_->find(hash);
-        if (it == index_->end()) return std::nullopt;
+        const auto it = set_->index.find(hash);
+        if (it == set_->index.end()) return std::nullopt;
         const Entry& e = it->second.entry;
         // the folders do not say how large the game's texture is, so the Medium quality is the High one
         return SourceEntry{hash, uint16_t(e.w), uint16_t(e.h), uint8_t(e.levels), BcFormat::Bc3, 0};
     }
     bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
-        const auto it = index_->find(entry.hash);
-        return it != index_->end() && ReadItem(it->second, first_level, out);
+        const auto it = set_->index.find(entry.hash);
+        return it != set_->index.end() && ReadItem(it->second, first_level, out);
     }
+    std::vector<uint64_t> Preload() const override { return set_->preload; }
 
 private:
-    std::shared_ptr<const Index> index_;
+    std::shared_ptr<const Set> set_;
 };
 }
 
 std::shared_ptr<const PackSource> Source() {
-    auto index = Current();
-    return index ? std::make_shared<FolderSource>(std::move(index)) : nullptr;
+    auto set = Current();
+    return set ? std::make_shared<FolderSource>(std::move(set)) : nullptr;
 }
 
 uint64_t Generation() { return generation.load(); }
 
 bool Load(uint64_t hash, std::vector<uint8_t>& blocks) {
-    const auto index = Current();
-    if (!index) return false;
-    const auto it = index->find(hash);
-    return it != index->end() && ReadItem(it->second, 0, blocks);
+    const auto set = Current();
+    if (!set) return false;
+    const auto it = set->index.find(hash);
+    return it != set->index.end() && ReadItem(it->second, 0, blocks);
 }
 }

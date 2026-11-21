@@ -7,13 +7,13 @@ namespace {
 std::atomic<uint32_t> resident_count{0};
 std::atomic<uint64_t> resident_bytes{0}, load_count{0}, load_failures{0}, disk_us_total{0}, upload_us_total{0};
 std::atomic<uint64_t> wait_count{0}, wait_us_total{0}, pop_count{0}, pop_frames_total{0}, pop_worst{0}, pop_worst_span{0};
-std::atomic<uint64_t> render_us_total{0};
+std::atomic<uint64_t> render_us_total{0}, ready_total{0};
 std::atomic<uint64_t> frame_us{0};  // what the loads cost the frame in progress
 std::atomic<uint32_t> markers_asked{0}, markers_taken{0};
 // Kept by the renderer thread, which is the one that ends the frames
 struct Since {
     uint64_t frames = 0, worst_frame_us = 0, loads = 0, failures = 0, disk_us = 0, upload_us = 0;
-    uint64_t waits = 0, wait_us = 0, pop_ins = 0, pop_frames = 0;
+    uint64_t waits = 0, wait_us = 0, pop_ins = 0, pop_frames = 0, ready = 0;
 } since;
 }
 
@@ -23,7 +23,8 @@ Stats GetStats() {
             disk_us_total.load(std::memory_order_relaxed), upload_us_total.load(std::memory_order_relaxed),
             wait_count.load(std::memory_order_relaxed), wait_us_total.load(std::memory_order_relaxed),
             pop_count.load(std::memory_order_relaxed), pop_frames_total.load(std::memory_order_relaxed),
-            pop_worst.load(std::memory_order_relaxed), render_us_total.load(std::memory_order_relaxed)};
+            pop_worst.load(std::memory_order_relaxed), render_us_total.load(std::memory_order_relaxed),
+            ready_total.load(std::memory_order_relaxed)};
 }
 
 void NoteLoad(uint64_t disk_us, uint64_t upload_us, bool ok, bool disk_on_render_thread) {
@@ -39,6 +40,8 @@ void NoteWait(uint64_t wait_us) {
     wait_count.fetch_add(1, std::memory_order_relaxed);
     wait_us_total.fetch_add(wait_us, std::memory_order_relaxed);
 }
+
+void NoteReadyAtFirstUse() { ready_total.fetch_add(1, std::memory_order_relaxed); }
 
 void NotePopIn(uint64_t frames) {
     pop_count.fetch_add(1, std::memory_order_relaxed);
@@ -66,11 +69,12 @@ bool TakeInterval(uint64_t frames, Interval& out) {
     out.wait_us = now.wait_us - since.wait_us;
     out.pop_ins = now.pop_ins - since.pop_ins;
     out.pop_frames = now.pop_frames - since.pop_frames;
+    out.ready = now.ready - since.ready;
     out.pop_max = pop_worst_span.exchange(0, std::memory_order_relaxed);  // of this stretch, where the overlay shows the total
     out.worst_frame_us = since.worst_frame_us;
     out.resident = now.resident;
     out.resident_bytes = now.resident_bytes;
-    since = {0, 0, now.loads, now.failures, now.disk_us, now.upload_us, now.waits, now.wait_us, now.pop_ins, now.pop_frames};
+    since = {0, 0, now.loads, now.failures, now.disk_us, now.upload_us, now.waits, now.wait_us, now.pop_ins, now.pop_frames, now.ready};
     return true;
 }
 
