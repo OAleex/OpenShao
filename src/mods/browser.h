@@ -3,6 +3,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <map>
+#include <memory>
+#include <vector>
 #include "mod_settings.h"
 #include <mutex>
 #include <optional>
@@ -11,6 +13,12 @@ namespace openshao::mods {
 // An installed mod that a package chosen by the user would replace: what to ask before it does
 // Textures that two enabled texture pack files both have; the winner is the one that comes first in the order
 struct Overlap {std::string winner,loser;size_t count=0;};
+// What a texture pack file says about itself, for the Mods page; the logo is raw RGBA, top row first
+struct Details {
+    std::string description,credits,website,license;
+    unsigned logo_width=0,logo_height=0;
+    std::shared_ptr<const std::vector<uint8_t>> logo;
+};
 struct Replacement {
     std::string name,installed,incoming;
 };
@@ -21,6 +29,7 @@ struct BrowserState {
     uint64_t done=0,total=0,revision=0;
     bool busy=false,updates=false,checking=false;
     std::map<std::string,texpack::Quality> quality;  // of the installed texture pack files, by mod id
+    std::map<std::string,Details> details;  // of the installed texture pack files, by mod id
     std::vector<std::string> order;    // the installed texture mods, the one that wins first
     std::vector<Overlap> overlaps;
     std::optional<Replacement> asking;  // set while an installation waits for the answer
@@ -30,6 +39,7 @@ class Browser {
     mutable std::mutex mutex_;
     BrowserState state_;
     std::atomic<bool> cancel_{false};
+    std::map<std::string,Details> details_cache_;  // by mod id and the SHA-256 of its file, so a pack is not opened again for nothing
     std::condition_variable answered_;
     std::optional<bool> answer_;
     std::jthread worker_;

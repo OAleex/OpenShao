@@ -224,6 +224,10 @@ Window::Window() : s_(new State) {}
 Window::~Window() { Close(); delete s_; }
 float Window::Scale() const { return s_->scale; }
 
+// Not done for Direct3D 12 yet: the launcher draws its own mark where a mod has no logo to show
+uint64_t Window::CreateImage(const uint8_t*, int, int) { return 0; }
+void Window::DestroyImage(uint64_t) {}
+
 bool Window::Open(const char* title, int width, int height, const std::function<void(float)>& prepare) try {
     State& s = *s_;
     s.failed = s.closing = false;
