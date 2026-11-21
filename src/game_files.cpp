@@ -41,6 +41,13 @@ std::filesystem::path OriginalPath(const std::filesystem::path& root,std::string
     }
     return path;
 }
+// The texture sources that need no installed mod: the developer mode's folder (the launcher's Developer page), and before it the
+// folder or pack file that OPENSHAO_HD_PACK_DIR names, so a pack can be tried without packaging and installing it
+void AddDevelopmentTexturePacks(std::vector<openshao::texpack::PackSpec>& ordered) {
+    using namespace openshao;
+    if(const auto developer=launcher::DeveloperTextureFolder();!developer.empty())ordered.insert(ordered.begin(),texpack::PackSpec{developer});
+    if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)ordered.insert(ordered.begin(),texpack::PackSpec{std::filesystem::path(folder)});
+}
 bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& game,std::string& error) {
     using namespace openshao;
     language::Disable();mods::StageRoutines({});texpack::SetPacks({});
@@ -101,7 +108,13 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                 if(!voice_ready)throw std::runtime_error("Install and enable a pack for the selected voice language in Mods.");
             }
         }
-        if(packs.empty())return true;
+        if(packs.empty()) {
+            // no mod is active, but the texture sources that need none still apply
+            std::vector<texpack::PackSpec> development;
+            AddDevelopmentTexturePacks(development);
+            texpack::SetPacks(development);
+            return true;
+        }
         const auto* disc=kernel::MountedDisc();
         struct Readers {std::mutex mutex;std::map<std::string,language::ReadAt> files;};
         const auto readers=std::make_shared<Readers>();
@@ -132,8 +145,6 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         if(!mounted)return false;
         if(options.validate_language_pack&&!language::ValidateMovies(error))return false;
         mods::StageRoutines(std::move(scripts));
-        // A development aid: the folder this names is read as a texture pack before the installed ones, so a pack can be tried
-        // without packaging and installing it
         // The first pack wins when several have a texture: the order is the user's, from the Mods page
         std::vector<texpack::PackSpec> ordered;
         if(!hd_packs.empty()) {
@@ -144,9 +155,8 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
             std::stable_sort(hd_packs.begin(),hd_packs.end(),[&](const auto& a,const auto& b){return rank(a.first)<rank(b.first);});
             for(auto& pack:hd_packs)ordered.push_back(std::move(pack.second));
         }
-        // The developer mode's folder (the launcher's Developer page) comes before every texture mod; the variable below before it
-        if(const auto developer=launcher::DeveloperTextureFolder();!developer.empty())ordered.insert(ordered.begin(),texpack::PackSpec{developer});
-        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)ordered.insert(ordered.begin(),texpack::PackSpec{std::filesystem::path(folder)});
+        // The development sources come before every texture mod
+        AddDevelopmentTexturePacks(ordered);
         texpack::SetPacks(ordered);
         const auto& stats=language::Statistics();
         LOGR("Language resources: text=%s voices=%s",selected.c_str(),voices.c_str());
