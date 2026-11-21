@@ -96,8 +96,7 @@ Inside Level 1, read the framed rules and press A to begin.
 
 Photo Mode works in the campaign and Survival Mode, in single player and Ko-op.
 It is not available in Versus or during Fatality scenes.
-Press SELECT, then choose Photo Mode or press L3 + R3.
-On the keyboard, use the keys bound to L3 and R3, or P if they have none.
+Press SELECT, then choose Photo Mode.
 Move the camera with the left stick and turn it with the right stick.
 The triggers zoom. Black and White raise and lower the camera.
 Press A to take a photo, Y to hide the controls and B to return to the pause menu.

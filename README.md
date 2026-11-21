@@ -86,7 +86,7 @@ Select **Game Mode > Survival Mode** to choose single player or Ko-op, select fr
 Survival Mode starts locked. Find its secret in Story Mode, then save your game. The unlock then applies to every save.
 
 Photo Mode works in the campaign and Survival Mode, in single player and Ko-op. It is not available in Versus or during Fatality scenes.
-Press **Select**, then choose **Photo Mode** or press **L3 + R3**. On the keyboard, use the keys bound to L3 and R3, or **P** if they have none.
+Press **Select**, then choose **Photo Mode**.
 Move the camera with the left stick and turn it with the right stick. The triggers zoom, and **Black** and **White** raise and lower the camera.
 Press **A** to take a photo, **Y** to hide the controls and **B** to return to the pause menu.
 Press **X** for the options: filter, intensity, vignette, tilt, quality and camera range. **Reset Defaults** restores them.
