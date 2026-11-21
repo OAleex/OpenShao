@@ -109,7 +109,8 @@ The page shows the mod's logo, and **Details** opens its description, credits, w
 
 - **Quality.** For a pack file, the Mods page offers High (every level of each texture) or Medium (each texture at twice the game's size,
   a quarter of the video memory and of the reading). It applies the next time the game starts. The choice is kept by the mod's id in `settings.toml`
-  beside the mod registry, so it survives updating or reinstalling the mod.
+  beside the mod registry, so it survives updating or reinstalling the mod. A pack may have pictures up to 8192 pixels on a side (8K); those
+  need a graphics card with a lot of video memory (an 8K texture takes about 85 MB), and on a card of 4 GB, Medium is the setting to use. Sizes beyond 4K have not been measured in the game.
 - **Order.** When several texture mods are on, the first in the order wins a texture that more than one has. The user sets the order with Up and
   Down on the Mods page (kept by id in `settings.toml`; without a choice, the order they were installed in), and the page lists how many textures each
   pair has in common.
