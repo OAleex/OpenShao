@@ -164,10 +164,12 @@ int main() try {
         texpack::NoteNoRoom();
         texpack::NoteMemoryFailure();
         texpack::SetBudget(64u << 20);
+        texpack::NoteHash(1000);
+        texpack::NoteHash(500);
         texpack::EndFrame();
         texpack::EndFrame();
         Check(texpack::TakeInterval(2, span) && span.evictions == 5 && span.evicted_bytes == 3500 && span.reloads == 1 &&
-                  span.no_room == 2 && span.memory_failures == 1 && span.budget_bytes == (64u << 20),
+                  span.no_room == 2 && span.memory_failures == 1 && span.budget_bytes == (64u << 20) && span.hashes == 2 && span.hashed_bytes == 1500,
               "An interval counts the replacements taken out, the ones that came back, and the refusals");
         texpack::EndFrame();
         texpack::EndFrame();

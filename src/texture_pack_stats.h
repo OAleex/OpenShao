@@ -17,6 +17,7 @@ struct Stats {
     uint64_t no_room = 0;          // replacements that did not fit and stayed the game's own picture for a while
     uint64_t memory_failures = 0;  // images the device had no memory for
     uint64_t budget_bytes = 0;     // what the replacements may take now
+    uint64_t hashes = 0, hashed_bytes = 0;  // textures hashed to look for a replacement: the cost of having a pack on
 };
 Stats GetStats();
 // `disk_on_render_thread` is whether the reading held up the frame; the loader's threads read apart from it
@@ -29,6 +30,7 @@ void NoteReload();
 void NoteNoRoom();
 void NoteMemoryFailure();
 void SetBudget(uint64_t bytes);
+void NoteHash(uint64_t bytes);
 // A stretch of frames, for the log: what the loads cost while it lasted, and the worst frame of loading in it
 struct Interval {
     uint64_t frames = 0, loads = 0, failures = 0, disk_us = 0, upload_us = 0, worst_frame_us = 0;
@@ -36,6 +38,7 @@ struct Interval {
     uint32_t resident = 0;
     uint64_t resident_bytes = 0;
     uint64_t evictions = 0, evicted_bytes = 0, reloads = 0, no_room = 0, memory_failures = 0, budget_bytes = 0;
+    uint64_t hashes = 0, hashed_bytes = 0;
 };
 // The renderer calls this once a frame
 void EndFrame();

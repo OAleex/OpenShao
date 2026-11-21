@@ -39,6 +39,8 @@ class Browser {
     mutable std::mutex mutex_;
     BrowserState state_;
     std::atomic<bool> cancel_{false};
+    std::string overlaps_key_;                    // the enabled texture pack files, in order, that overlaps_cache_ is for
+    std::vector<Overlap> overlaps_cache_;
     std::map<std::string,Details> details_cache_;  // by mod id and the SHA-256 of its file, so a pack is not opened again for nothing
     std::condition_variable answered_;
     std::optional<bool> answer_;

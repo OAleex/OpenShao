@@ -8,14 +8,14 @@ std::atomic<uint32_t> resident_count{0};
 std::atomic<uint64_t> resident_bytes{0}, load_count{0}, load_failures{0}, disk_us_total{0}, upload_us_total{0};
 std::atomic<uint64_t> wait_count{0}, wait_us_total{0}, pop_count{0}, pop_frames_total{0}, pop_worst{0}, pop_worst_span{0};
 std::atomic<uint64_t> render_us_total{0}, ready_total{0};
-std::atomic<uint64_t> eviction_count{0}, evicted_bytes_total{0}, reload_count{0}, no_room_count{0}, memory_failure_count{0}, budget_now{0};
+std::atomic<uint64_t> eviction_count{0}, evicted_bytes_total{0}, reload_count{0}, no_room_count{0}, memory_failure_count{0}, budget_now{0}, hash_count{0}, hashed_total{0};
 std::atomic<uint64_t> frame_us{0};  // what the loads cost the frame in progress
 std::atomic<uint32_t> markers_asked{0}, markers_taken{0};
 // Kept by the renderer thread, which is the one that ends the frames
 struct Since {
     uint64_t frames = 0, worst_frame_us = 0, loads = 0, failures = 0, disk_us = 0, upload_us = 0;
     uint64_t waits = 0, wait_us = 0, pop_ins = 0, pop_frames = 0, ready = 0;
-    uint64_t evictions = 0, evicted_bytes = 0, reloads = 0, no_room = 0, memory_failures = 0;
+    uint64_t evictions = 0, evicted_bytes = 0, reloads = 0, no_room = 0, memory_failures = 0, hashes = 0, hashed_bytes = 0;
 } since;
 }
 
@@ -29,7 +29,8 @@ Stats GetStats() {
             ready_total.load(std::memory_order_relaxed), eviction_count.load(std::memory_order_relaxed),
             evicted_bytes_total.load(std::memory_order_relaxed), reload_count.load(std::memory_order_relaxed),
             no_room_count.load(std::memory_order_relaxed), memory_failure_count.load(std::memory_order_relaxed),
-            budget_now.load(std::memory_order_relaxed)};
+            budget_now.load(std::memory_order_relaxed), hash_count.load(std::memory_order_relaxed),
+            hashed_total.load(std::memory_order_relaxed)};
 }
 
 void NoteLoad(uint64_t disk_us, uint64_t upload_us, bool ok, bool disk_on_render_thread) {
@@ -55,6 +56,10 @@ void NoteReload() { reload_count.fetch_add(1, std::memory_order_relaxed); }
 void NoteNoRoom() { no_room_count.fetch_add(1, std::memory_order_relaxed); }
 void NoteMemoryFailure() { memory_failure_count.fetch_add(1, std::memory_order_relaxed); }
 void SetBudget(uint64_t bytes) { budget_now.store(bytes, std::memory_order_relaxed); }
+void NoteHash(uint64_t bytes) {
+    hash_count.fetch_add(1, std::memory_order_relaxed);
+    hashed_total.fetch_add(bytes, std::memory_order_relaxed);
+}
 
 void NotePopIn(uint64_t frames) {
     pop_count.fetch_add(1, std::memory_order_relaxed);
@@ -93,8 +98,10 @@ bool TakeInterval(uint64_t frames, Interval& out) {
     out.no_room = now.no_room - since.no_room;
     out.memory_failures = now.memory_failures - since.memory_failures;
     out.budget_bytes = now.budget_bytes;
+    out.hashes = now.hashes - since.hashes;
+    out.hashed_bytes = now.hashed_bytes - since.hashed_bytes;
     since = {0, 0, now.loads, now.failures, now.disk_us, now.upload_us, now.waits, now.wait_us, now.pop_ins, now.pop_frames, now.ready,
-             now.evictions, now.evicted_bytes, now.reloads, now.no_room, now.memory_failures};
+             now.evictions, now.evicted_bytes, now.reloads, now.no_room, now.memory_failures, now.hashes, now.hashed_bytes};
     return true;
 }
 

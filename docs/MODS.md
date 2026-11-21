@@ -99,7 +99,7 @@ Only the Vulkan renderer replaces textures for now.
 ### A pack in one file (`.ostp`)
 
 The mod's package holds a single `pack.ostp`, and its manifest has `"schema": 3` and an `ostp` block with the file's `path`, `size` and `sha256`
-(it holds no `files` or `patches`). The file's own format is specified in `FORMATO_PACK.md` of the project notes: a header, the pack's information
+(it holds no `files` or `patches`). The file's format is specified in [TEXTURE_PACK_FORMAT.md](TEXTURE_PACK_FORMAT.md): a header, the pack's information
 (id, name, version, authors, summary, description, credits, license, website), an optional logo of up to 256 x 256 pixels, an index sorted by hash,
 and the BC1 or BC3 blocks of every texture with all their levels.
 

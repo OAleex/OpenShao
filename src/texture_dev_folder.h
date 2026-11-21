@@ -8,8 +8,7 @@
 
 // The developer mode's texture folder: PNG files named <hash>_<format>_<width>x<height>.png, as the extraction tool writes them,
 // with a manifest.json that holds the signature of each picture's pixels. Only the pictures whose pixels differ from their
-// signature count as replacements; the others are the game's own textures as they were extracted. The design is in
-// docs/MODO_DESENVOLVEDOR.md.
+// signature count as replacements; the others are the game's own textures as they were extracted. docs/MODS.md describes the mode.
 namespace openshao::texpack {
 // SHA-256, in hexadecimal, of "<width>x<height>:" followed by the RGBA bytes row by row, top row first: what the manifest holds
 std::string PixelSignature(uint32_t width, uint32_t height, const uint8_t* rgba);

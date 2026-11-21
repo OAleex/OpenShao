@@ -247,6 +247,7 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
     };
     std::vector<Outcome> outcomes(work.size());
     std::atomic<size_t> next{0};
+    std::mutex large_pictures;
     const auto worker = [&] {
         for (size_t i = next.fetch_add(1); i < work.size(); i = next.fetch_add(1)) {
             const Work& w = work[i];
@@ -257,6 +258,11 @@ std::shared_ptr<const PackSource> OpenDevFolder(const std::filesystem::path& fol
                 o.why = "cannot be read";
                 continue;
             }
+            // A picture of a few thousand pixels a side takes hundreds of MiB decoded, and the hash copies it: those go one at a time.
+            std::unique_lock<std::mutex> large(large_pictures, std::defer_lock);
+            int info_w = 0, info_h = 0, info_c = 0;
+            if (stbi_info_from_memory(bytes.data(), int(bytes.size()), &info_w, &info_h, &info_c) && uint64_t(info_w) * uint64_t(info_h) * 4 > (16ull << 20))
+                large.lock();
             if (!Decode(bytes, pic, o.why)) continue;
             const uint32_t pw = uint32_t(pic.width), ph = uint32_t(pic.height);
             if (pw < kMinSide || ph < kMinSide || pw > kMaxSide || ph > kMaxSide) {
