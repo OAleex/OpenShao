@@ -120,8 +120,8 @@ The page shows the mod's logo, and **Details** opens its description, credits, w
 - The pack file can list the textures to have ready before the menus draw them (`preload`), which keeps the menus from changing a few frames after
   they appear.
 
-The OpenShao texture tool (in the OpenShao-Mods repository, `tools/texturetool`) extracts the game's textures from the player's own disc image and
-compiles an edited folder into a `.ostp`.
+The OpenShao ModKit (the OpenShao-ModKit repository) extracts the game's textures from the player's own disc image and
+compiles an edited folder into a `.ostp`, with a window, a command line and a Python package.
 
 ### A pack as a folder (`hd/`)
 
