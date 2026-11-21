@@ -15,6 +15,9 @@ int Hotkey();
 
 // The menu falls back to the default ImGui font when these are not set.
 void SetFonts(ImFont* regular, ImFont* bold);
+// Bakes the menu typeface at several sizes. Call once the ImGui context exists and before
+// the renderer builds the font atlas; does nothing afterwards.
+void InitFonts();
 // Menu position as a percentage (0-100) of the free screen space.
 void SetMenuPosition(int x_percent, int y_percent);
 
