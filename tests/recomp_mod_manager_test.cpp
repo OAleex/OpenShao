@@ -200,6 +200,9 @@ int main(int argc,char** argv){try{
                 "Changing one choice keeps the others");
         mods::WriteTextureQuality(folder,"A",texpack::Quality::High);
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A choice can change back");
+        std::ofstream(folder/"settings.toml",std::ios::trunc)<<"[mods.A]\ntexture_quality = \"medium\"\n[mods.B]\ntexture_quality = \"low\"\n[mods.C]\ntexture_quality = \"high\"\n";
+        Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Low&&mods::ReadTextureQuality(folder,"B")==texpack::Quality::Low&&
+                mods::ReadTextureQuality(folder,"C")==texpack::Quality::High,"The earlier name of the reduced quality, medium, still reads as Low");
         std::ofstream(folder/"settings.toml",std::ios::trunc)<<"this is [not toml";
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::High,"A file that cannot be read means High");
         // Writing must not start from nothing: a damaged file would be replaced by one key and every other choice lost
