@@ -116,6 +116,20 @@ bool VersionChars(const std::string& version) {
     return digit && dots == 2;
 }
 
+constexpr size_t kMaxPreload = 4096;
+
+// Sixteen hexadecimal digits, as a hash is written everywhere
+bool Hash16(const std::string& text, uint64_t& value) {
+    if (text.size() != 16) return false;
+    value = 0;
+    for (char c : text) {
+        const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (digit < 0) return false;
+        value = value << 4 | uint64_t(digit);
+    }
+    return true;
+}
+
 bool ReadInfo(const std::vector<uint8_t>& bytes, uint32_t count, PackInfo& info, std::string& error) {
     mods::Json root;
     try {
@@ -139,6 +153,16 @@ bool ReadInfo(const std::vector<uint8_t>& bytes, uint32_t count, PackInfo& info,
     if (type != "texture") return Fail(error, "information: \"type\" is not \"texture\"");
     if (std::find(info.features.begin(), info.features.end(), "hdtextures") == info.features.end())
         return Fail(error, "information: \"features\" lacks \"hdtextures\"");
+    if (root.Has("preload")) {
+        const auto* items = std::get_if<mods::Json::Array>(&root.At("preload").value);
+        if (!items || items->size() > kMaxPreload) return Fail(error, "information: \"preload\" is not a list within its limit");
+        for (const auto& item : *items) {
+            const auto* text = std::get_if<std::string>(&item.value);
+            uint64_t hash;
+            if (!text || !Hash16(*text, hash)) return Fail(error, "information: \"preload\" has an item that is not a hash of sixteen hexadecimal digits");
+            info.preload.push_back(hash);
+        }
+    }
     if (root.Has("texture_count")) {
         const auto* number = std::get_if<int64_t>(&root.At("texture_count").value);
         if (!number || *number != int64_t(count)) return Fail(error, "information: \"texture_count\" differs from the header");
@@ -302,6 +326,12 @@ std::unique_ptr<PackFile> PackFile::Open(const std::filesystem::path& path, std:
         return nullptr;
     }
     if (!ReadInfo(bytes, count, pack->info_, error)) return nullptr;
+    {  // only what the pack has a replacement for, once, in the order given
+        std::vector<uint64_t> kept;
+        for (uint64_t hash : pack->info_.preload)
+            if (pack->Find(hash) && std::find(kept.begin(), kept.end(), hash) == kept.end()) kept.push_back(hash);
+        pack->info_.preload = std::move(kept);
+    }
 
     if (logo.size) {
         bytes.assign(size_t(logo.size), 0);
@@ -342,6 +372,7 @@ public:
         const FileEntry* e = pack_->Find(entry.hash);
         return e && pack_->ReadLevels(*e, first_level, out);
     }
+    std::vector<uint64_t> Preload() const override { return pack_->info().preload; }
 
 private:
     std::shared_ptr<const PackFile> pack_;

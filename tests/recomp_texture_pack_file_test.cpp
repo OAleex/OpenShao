@@ -124,6 +124,23 @@ int main() try {
         Check(mismatched && !mismatched->logo(), "A logo whose size disagrees with its pixels is dropped");
     }
 
+    // The list to load ahead (version 1.1)
+    {
+        const auto pre = [&](const std::string& list) { return Build(Three(), InfoFor(3, ",\"preload\":" + list)); };
+        auto listed = texpack::PackFile::Open(
+            Write("preload.ostp", pre(R"(["0000000000000020","0000000000000010","00000000000000FF","0000000000000020"])")), error);
+        Check(listed && listed->info().preload == std::vector<uint64_t>({0x20, 0x10}), "The list keeps what the pack has, once, in order: " + error);
+        const std::shared_ptr<const texpack::PackFile> shared = std::move(listed);
+        const auto source = texpack::AsSource(shared);
+        Check(source->Preload() == std::vector<uint64_t>({0x20, 0x10}), "The source gives the list");
+        Check(pack->info().preload.empty(), "A pack without a list asks for nothing ahead");
+        for (const char* bad : {R"(["not a hash"])", R"(["00000000000000200"])", R"([16])", R"("0000000000000010")", R"(["000000000000001g"])"})
+            Check(OpenError(pre(bad)).find("preload") != std::string::npos, std::string("A list with ") + bad + " is refused");
+        std::string many = "[";
+        for (int i = 0; i < 4097; ++i) many += std::string(i ? "," : "") + "\"0000000000000010\"";
+        Check(OpenError(pre(many + "]")).find("preload") != std::string::npos, "A list over its limit is refused");
+    }
+
     // Header
     Refused("magic", "not a texture pack", [](Bytes& b) { b[0] = 'X'; });
     Refused("major version", "version", [](Bytes& b) { Put(b, 8, 2, 2); });

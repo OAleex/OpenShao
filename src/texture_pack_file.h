@@ -25,6 +25,7 @@ struct PackInfo {
     std::string id, name, version, summary, min_recomp;
     std::string description, website, license, credits;
     std::vector<std::string> authors, features;
+    std::vector<uint64_t> preload;  // hashes of the replacements to have ready before the menus draw them (version 1.1)
 };
 
 struct Logo {
