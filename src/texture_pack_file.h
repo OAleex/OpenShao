@@ -5,14 +5,12 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "texture_pack_source.h"
 
 // A texture pack in the single file format: a header, the pack's information, an optional logo, an index sorted by
 // texture hash and the BC blocks of every texture, largest level first. Open checks the whole structure before anything
 // from the file is used.
 namespace openshao::texpack {
-enum class BcFormat : uint8_t { Bc1 = 1, Bc3 = 2 };
-enum class Quality { High, Medium };
-
 struct FileEntry {
     uint64_t hash = 0;  // of the level 0 bytes of the game's own texture
     uint16_t width = 0, height = 0;            // level 0 of the stored texture
@@ -38,6 +36,10 @@ struct Logo {
 uint64_t LevelSize(uint32_t width, uint32_t height, uint32_t level, BcFormat format);
 // The first level to use: all of them for High, and for Medium the ones that leave the texture at twice the game's size
 uint32_t FirstLevel(const FileEntry& entry, Quality quality);
+
+class PackFile;
+// The pack as the loader reads it
+std::shared_ptr<const PackSource> AsSource(std::shared_ptr<const PackFile> pack);
 
 class PackFile {
 public:

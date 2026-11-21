@@ -35,11 +35,20 @@ static std::vector<Tex> Many(int count) {
     return textures;
 }
 
-static std::shared_ptr<const texpack::PackFile> Open(const std::string& name, int count = 8) {
+struct Opened {
+    std::shared_ptr<const texpack::PackFile> file;
+    std::shared_ptr<const texpack::PackSource> source;
+    const texpack::FileEntry* Find(uint64_t hash) const { return file->Find(hash); }
+    bool ReadLevels(const texpack::FileEntry& e, uint32_t first, std::vector<uint8_t>& out) const { return file->ReadLevels(e, first, out); }
+    operator std::shared_ptr<const texpack::PackSource>() const { return source; }
+    const Opened* operator->() const { return this; }
+};
+
+static Opened Open(const std::string& name, int count = 8) {
     std::string error;
     std::shared_ptr<const texpack::PackFile> pack = texpack::PackFile::Open(Write(name, Build(Many(count), InfoFor(size_t(count)))), error);
     Check(pack != nullptr, "The test pack opens: " + error);
-    return pack;
+    return {pack, texpack::AsSource(pack)};
 }
 
 static std::vector<texpack::Loaded> TakeAll(texpack::Loader& loader) {
@@ -82,7 +91,8 @@ int main() try {
         Check(out.size() == 1 && out[0].ok && out[0].hash == 0x100 && out[0].first_level == 0, "It is delivered");
         std::vector<uint8_t> expected;
         Check(pack->ReadLevels(*pack->Find(0x100), 0, expected) && out[0].blocks == expected, "The blocks are those of the pack");
-        Check(out[0].entry == pack->Find(0x100) && out[0].pack == pack, "The result names its entry and keeps the pack");
+        Check(out[0].entry.hash == 0x100 && out[0].entry.levels == 7 && out[0].entry.width == 64 && out[0].pack == pack.source,
+              "The result names its entry and keeps the pack");
         Check(out[0].wait_us >= out[0].read_us, "The wait includes the read");
         Check(TakeAll(loader).empty(), "A result is delivered once");
         const auto stats = loader.GetStats();
@@ -197,7 +207,7 @@ int main() try {
         Check(!loader.Request(0x104) && loader.Request(0x103), "The new pack decides what can be asked for");
         loader.ProcessOne();
         const auto out = TakeAll(loader);
-        Check(out.size() == 1 && out[0].pack == other && out[0].first_level == 1, "Results come from the new pack and quality");
+        Check(out.size() == 1 && out[0].pack == other.source && out[0].first_level == 1, "Results come from the new pack and quality");
     }
 
     // A read in progress when the pack changes is dropped when it ends
@@ -232,7 +242,7 @@ int main() try {
         Check(broken != nullptr, "Opens before the damage");
         fs::resize_file(path, 300);
         texpack::Loader loader(NoThreads());
-        loader.SetPack(broken, texpack::Quality::High);
+        loader.SetPack(texpack::AsSource(broken), texpack::Quality::High);
         loader.Request(0x101);
         loader.ProcessOne();
         const auto out = TakeAll(loader);

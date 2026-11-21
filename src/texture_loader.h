@@ -1,5 +1,5 @@
 #pragma once
-#include "texture_pack_file.h"
+#include "texture_pack_source.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -19,8 +19,8 @@
 namespace openshao::texpack {
 struct Loaded {
     uint64_t hash = 0;
-    std::shared_ptr<const PackFile> pack;  // keeps `entry` valid
-    const FileEntry* entry = nullptr;
+    std::shared_ptr<const PackSource> pack;
+    SourceEntry entry;
     uint32_t first_level = 0;  // the level the blocks start at: the quality may skip the largest ones
     bool ok = false;           // false: the file could not be read, and `blocks` is empty
     std::vector<uint8_t> blocks;
@@ -54,7 +54,7 @@ public:
 
     // The pack to read from and the quality. Requests and results of an earlier pack are dropped; a read in progress
     // finishes and its result is dropped.
-    void SetPack(std::shared_ptr<const PackFile> pack, Quality quality);
+    void SetPack(std::shared_ptr<const PackSource> pack, Quality quality);
     // Asks for a texture. False when the pack has no such texture. Asking again raises the priority, keeps the request
     // from growing old and makes it the most recent of its priority. Higher priorities are read first, and among equal
     // ones the most recent request.
@@ -92,7 +92,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     bool stop_ = false;
-    std::shared_ptr<const PackFile> pack_;
+    std::shared_ptr<const PackSource> pack_;
     Quality quality_ = Quality::High;
     uint64_t generation_ = 0, sequence_ = 0, frame_ = 0;
     std::unordered_map<uint64_t, Pending> pending_;
