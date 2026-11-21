@@ -205,6 +205,17 @@ int main(int argc,char** argv){try{
         mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
         Require(mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,"A damaged file is written again");
         fs::remove_all(folder);
+        // The order of the texture mods: the user's first, then the others as installed, and none that is gone
+        using Ids=std::vector<std::string>;
+        Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"A","B","C"}),"Without a choice the order is the installation order");
+        mods::WriteTextureOrder(folder,{"C","A"});
+        Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"C","A","B"}),"The user's order comes first and the others follow");
+        Require(mods::TextureOrder(folder,{"A","D"})==Ids({"A","D"}),"A mod that is no longer installed leaves the order");
+        Require(mods::TextureOrder(folder,{})==Ids{},"No mods, no order");
+        mods::WriteTextureQuality(folder,"A",texpack::Quality::Medium);
+        Require(mods::TextureOrder(folder,{"A","B","C"})==Ids({"C","A","B"})&&mods::ReadTextureQuality(folder,"A")==texpack::Quality::Medium,
+                "The order and the quality share the file without touching each other");
+        fs::remove_all(folder);
     }
     std::cout<<"Mod manager checks passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -52,7 +52,7 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         const auto voices=settings.voice_language;
         std::vector<language::PackSelection> packs;
         std::vector<mods::RoutineScript> scripts;
-        std::vector<texpack::PackSpec> hd_packs;
+        std::vector<std::pair<std::string,texpack::PackSpec>> hd_packs;  // with the id of the mod, to put them in the user's order
         bool credits=false;
         if(!options.language_pack.empty()){packs.push_back({options.language_pack,selected=="pt-BR",voices=="pt-BR"});credits=selected=="pt-BR";}
         else {
@@ -74,12 +74,12 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                     const auto file=pack/"pack.ostp";std::error_code ec;
                     if(!std::filesystem::is_regular_file(file,ec)||std::filesystem::file_size(file,ec)!=row.mod.ostp->size)
                         throw std::runtime_error("Installed texture pack file changed: "+row.mod.name);
-                    hd_packs.push_back({file,mods::ReadTextureQuality(paths::Mods(),row.mod.id)});
+                    hd_packs.push_back({row.mod.id,{file,mods::ReadTextureQuality(paths::Mods(),row.mod.id)}});
                 } else if(std::find(row.mod.features.begin(),row.mod.features.end(),"hdtextures")!=row.mod.features.end()) {
                     const auto index=std::find_if(row.mod.files.begin(),row.mod.files.end(),[](auto& f){return f.path=="hd/index.txt";});
                     if(index==row.mod.files.end()||mods::Sha256File(pack/"hd/index.txt")!=index->sha256)
                         throw std::runtime_error("Installed texture pack index changed: "+row.mod.name);
-                    hd_packs.push_back(pack/"hd");
+                    hd_packs.push_back({row.mod.id,pack/"hd"});
                 }
                 for(const auto& path:row.mod.routines) {
                     const auto script=pack/files::FromUtf8(path);
@@ -134,8 +134,18 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         mods::StageRoutines(std::move(scripts));
         // A development aid: the folder this names is read as a texture pack before the installed ones, so a pack can be tried
         // without packaging and installing it
-        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)hd_packs.insert(hd_packs.begin(),texpack::PackSpec{std::filesystem::path(folder)});
-        texpack::SetPacks(hd_packs);
+        // The first pack wins when several have a texture: the order is the user's, from the Mods page
+        std::vector<texpack::PackSpec> ordered;
+        if(!hd_packs.empty()) {
+            std::vector<std::string> installed;
+            for(const auto& row:mods::ReadInstalled(paths::Mods()))if(row.mod.type=="texture")installed.push_back(row.mod.id);
+            const auto order=mods::TextureOrder(paths::Mods(),installed);
+            const auto rank=[&](const std::string& id){return std::find(order.begin(),order.end(),id)-order.begin();};
+            std::stable_sort(hd_packs.begin(),hd_packs.end(),[&](const auto& a,const auto& b){return rank(a.first)<rank(b.first);});
+            for(auto& pack:hd_packs)ordered.push_back(std::move(pack.second));
+        }
+        if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)ordered.insert(ordered.begin(),texpack::PackSpec{std::filesystem::path(folder)});
+        texpack::SetPacks(ordered);
         const auto& stats=language::Statistics();
         LOGR("Language resources: text=%s voices=%s",selected.c_str(),voices.c_str());
         LOGR("Mods ready: packs=%zu resources=%u voices=%u occurrences=%u movies=%u",packs.size(),stats.archive.resources,
