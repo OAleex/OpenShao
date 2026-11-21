@@ -10,6 +10,7 @@ int main() {
     auto check = [&](bool ok, const char* message) { if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); } };
     check(!Visible(), "overlay must start hidden");
     check(!Message(0x100, 'W', 0) && !Visible(), "game keys must pass through without toggling the overlay");
+    check(Message(0x100, 0x79, 0) && Message(0x101, 0x79, 0) && !Visible(), "F10 marks the texture pack log and leaves the overlay alone");
     check(Message(0x100, 0x78, 0) && Visible(), "F9 down must enable the overlay");
     check(Message(0x100, 0x78, intptr_t(1) << 30) && Visible(), "holding F9 must not toggle on key repeat");
     check(Message(0x101, 0x78, 0) && Visible(), "releasing F9 must keep the overlay enabled");

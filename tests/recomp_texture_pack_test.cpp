@@ -87,11 +87,34 @@ int main() try {
     const auto released = texpack::GetStats();
     Check(released.resident == before.resident && released.resident_bytes == before.resident_bytes,
           "A released replacement stops counting");
+    {
+        texpack::Interval span;
+        Check(!texpack::TakeInterval(2, span), "An interval waits for its frames");
+        texpack::NoteLoad(100, 400, true);
+        texpack::EndFrame();
+        texpack::NoteLoad(10, 20, true);
+        texpack::NoteLoad(5, 5, true);
+        texpack::EndFrame();
+        Check(texpack::TakeInterval(2, span) && span.frames == 2 && span.loads == 3 && span.disk_us == 115 &&
+                  span.upload_us == 425 && span.worst_frame_us == 500,
+              "An interval has the loads of its frames and the worst frame");
+        Check(!texpack::TakeInterval(2, span), "The next interval starts over");
+        texpack::EndFrame();
+        texpack::EndFrame();
+        Check(texpack::TakeInterval(2, span) && span.loads == 0 && span.worst_frame_us == 0, "A quiet interval has no loads");
+        uint32_t number = 0;
+        Check(!texpack::TakeMarker(number), "No marker without a request");
+        texpack::RequestMarker();
+        texpack::RequestMarker();
+        Check(texpack::TakeMarker(number) && number == 1 && texpack::TakeMarker(number) && number == 2 && !texpack::TakeMarker(number),
+              "Markers are taken in order, once each");
+    }
+    const auto before_noted = texpack::GetStats();
     texpack::NoteLoad(300, 700, true);
     texpack::NoteLoad(50, 0, false);
     const auto noted = texpack::GetStats();
-    Check(noted.loads == before.loads + 1 && noted.failures == before.failures + 1 &&
-              noted.disk_us == before.disk_us + 350 && noted.upload_us == before.upload_us + 700,
+    Check(noted.loads == before_noted.loads + 1 && noted.failures == before_noted.failures + 1 &&
+              noted.disk_us == before_noted.disk_us + 350 && noted.upload_us == before_noted.upload_us + 700,
           "Loads and failures add their times");
 
     texpack::SetPacks({});
