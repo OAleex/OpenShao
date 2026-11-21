@@ -425,6 +425,9 @@ void Draw(X86Context& ctx) {
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
         else if(selection==3)message="settings.enhanced_camera_hint";
+        else if(selection==4)message="settings.cheats_hint";
+        else if(selection==5)message="settings.cheat_key_hint";
+        else if(selection==6)message="settings.statue_heal_hint";
     } else if(!exit_prompt && page==Page::Interface && message.empty()) {
         message=selection==0?"settings.fps_hint":"settings.notifications_hint";
     }
