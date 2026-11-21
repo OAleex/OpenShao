@@ -262,22 +262,24 @@ X86_FUNC(__imp__sub_00012BA8) {
               memory[0x4f1cd8]==0xffffffff,"Continue, Options and Exit Game keep their original source definition");
         if(exercise_locked_pause) {
             const auto rows=memory[0x4054];
-            Check(memory[0x4064]==6 && rows!=0x5000 && memory[rows+48]==0xffffffff,
-                  "locked pause includes separate settings and enhancements before its exit rows");
-            Check(memory[rows+16]==0xffffff00 && memory[rows+24]==0xffffff09 &&
-                  memory[rows+32]==0x1a7 && memory[rows+36]==0x16262,
+            Check(memory[0x4064]==7 && rows!=0x5000 && memory[rows+56]==0xffffffff,
+                  "locked pause includes save, separate settings and enhancements before its exit rows");
+            Check(memory[rows+16]==0xffffff0b && memory[rows+20]==0x135c1,
+                  "Save Game follows Options and keeps the inert retail callback");
+            Check(memory[rows+24]==0xffffff00 && memory[rows+32]==0xffffff09 &&
+                  memory[rows+40]==0x1a7 && memory[rows+44]==0x16262,
                   "Enhancements follows settings while Exit Game retains its native callback");
         }
     }
     if(exercise_pause) {
         const auto rows=memory[0x4054];
-        Check(memory[0x4064]==7 && rows!=0x5000 && memory[rows+48]==0x19f &&
-              memory[rows+52]==0x135c6 && memory[rows+56]==0xffffffff,
-              "unlocked pause adds settings, desktop exit, Nexus and a terminator in owned storage");
+        Check(memory[0x4064]==8 && rows!=0x5000 && memory[rows+56]==0x19f &&
+              memory[rows+60]==0x135c6 && memory[rows+64]==0xffffffff,
+              "unlocked pause adds save, settings, desktop exit, Nexus and a terminator in owned storage");
         for(unsigned i=0;i<4;++i)Check(memory[rows+i*4]==memory[0x5000+i*4],
               "root additions preserve original Continue and Options callbacks");
-        Check(memory[rows+16]==0xffffff00 && memory[rows+24]==0xffffff09 &&
-              memory[rows+32]==memory[0x5010] && memory[rows+36]==memory[0x5014],
+        Check(memory[rows+24]==0xffffff00 && memory[rows+32]==0xffffff09 &&
+              memory[rows+40]==memory[0x5010] && memory[rows+44]==memory[0x5014],
               "Exit Game follows settings with its original label and callback");
         Check(memory[0x4f1cd8]==0xffffffff && memory[0x4f1ce0]==0x1a3 &&
               memory[0x4f1cf8]==0x1a7 && memory[0x4f1d00]==0xffffffff,
@@ -294,7 +296,7 @@ X86_FUNC(__imp__sub_00012BA8) {
             sub_00015687(result,nullptr);
             Check(result.esp==0x1004 && result.eax==unsigned(consumed),"custom pause action preserves native event ABI");
         };
-        event(2,4);
+        event(3,4);
         Check(memory[0x4064]==4 && memory[0x4054]!=rows && memory[0x406c]==0,
               "recompilation settings opens the shared display, graphics, controls and audio groups");
         X86Context footer;memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
@@ -381,12 +383,19 @@ X86_FUNC(__imp__sub_00012BA8) {
         event(0,6,true);
         event(0,6,true);
         Check(memory[0x4040]==0,"the original border padding returns on longer lists");
-        Check(memory[0x4054]==rows && memory[0x4064]==7 && memory[0x406c]==2,
+        Check(memory[0x4054]==rows && memory[0x4064]==8 && memory[0x406c]==3,
               "Back restores the original pause list and selection");
+        {
+            const auto before_save=native_pause_events;
+            X86Context save;memory[save.esp+4]=0x4000;memory[save.esp+8]=4;
+            memory[0x406c]=2;sub_00015687(save,nullptr);
+            Check(save_opens==0 && native_pause_events==before_save+1 && save.eax==0xCC00 && memory[0x406c]==0,
+                  "Save Game closes the pause through the native Continue action instead of opening over it");
+        }
         footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
         Check(GuestText(footer.eax)=="= Select  | Exit  {/} Navigate",
               "the Select root retains B Exit after leaving a nested page");
-        event(3,4);
+        event(4,4);
         Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Enhancements && memory[0x4064]==4,
               "Enhancements opens directly from the pause root");
         footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
@@ -396,18 +405,18 @@ X86_FUNC(__imp__sub_00012BA8) {
         Check(GuestText(footer.eax)=="= Select  | Back  {/} Navigate","a camera submenu hides the adjustment hint");
         X86Context enhancement_back;memory[enhancement_back.esp+4]=0x4000;memory[enhancement_back.esp+8]=6;
         sub_00015687(enhancement_back,nullptr);
-        Check(enhancement_back.eax==1 && memory[0x4054]==rows && memory[0x406c]==3,
+        Check(enhancement_back.eax==1 && memory[0x4054]==rows && memory[0x406c]==4,
               "B returns from Enhancements to its root row without closing gameplay pause");
-        event(5,4);
+        event(6,4);
         Check(memory[0x4064]==2 && memory[0x406c]==0 && memory[0x4054]!=rows,
               "desktop exit confirmation defaults to No and displays the unsaved-progress warning");
         event(0,4);
         Check(desktop_exits==0 && memory[0x4054]==rows,"No returns to pause without exiting");
-        event(5,4);event(1,4);
+        event(6,4);event(1,4);
         Check(desktop_exits==1,"only explicitly confirming Yes requests desktop exit");
         X86Context cancel;memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
-        Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==5,
+        Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==6,
               "cancel leaves desktop confirmation and returns to pause");
         event(3,4);event(2,4);
         Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,"Back fixture starts inside controls");
@@ -437,7 +446,7 @@ X86_FUNC(__imp__sub_00012BA8) {
         Check(native_pause_events==pause_events+1 && original.eax==0xCC00 && original.esp==0x1004,
               "Continue dispatches to the real native Select-list handler");
         original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=4;
-        memory[0x406c]=4;sub_00015687(original,nullptr);
+        memory[0x406c]=5;sub_00015687(original,nullptr);
         Check(native_pause_events==pause_events+2 && original.eax==0xCC00 && original.esp==0x1004,
               "Exit Game in its new row still dispatches to the native handler");
         release_input();original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=6;

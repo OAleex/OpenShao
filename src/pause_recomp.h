@@ -9,7 +9,7 @@ enum class Item : uint32_t {
 };
 enum class Page : uint8_t {
     Categories, Controls, Graphics, Display, Audio,
-    Controller, Keyboard, KeyboardAlternate, Mouse, DisplayConfirm, EnhancedCamera, Enhancements, Interface
+    Controller, Keyboard, KeyboardAlternate, Mouse, DisplayConfirm, EnhancedCamera, Enhancements, Interface, Cheats
 };
 inline constexpr unsigned MaxRows=6;
 std::string Text(Item item);

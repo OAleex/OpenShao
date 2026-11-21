@@ -59,7 +59,7 @@ int main(){
     turn(7);
     assert(RowCount()==3 && PageIndicator().find("1/9")!=std::string::npos);
     Open();
-    assert(RowCount()==5 && RowText(0)=="Tela" && RowText(5).empty() && PageIndicator().empty());
+    assert(RowCount()==6 && RowText(0)=="Tela" && RowText(5)=="Cheats" && RowText(6).empty() && PageIndicator().empty());
     Choose(2);assert(CurrentPage()==Page::Controls && RowCount()==5);
     const auto deadzone=settings.deadzone;
     change(3);assert(settings.deadzone!=deadzone && saves==1);
@@ -203,6 +203,12 @@ int main(){
     assert(settings.hold_camera_angle && settings.smooth_camera_framing && settings.camera_speed==100 && saves==camera_saves+4);
     Back();assert(RowCount()==4 && RowText(0).find("Scorpion")!=std::string::npos);
     assert(Back());
+    settings.language="pt-BR";Open();Choose(5);
+    assert(CurrentPage()==Page::Cheats && RowCount()==2 && RowText(1).find("F8")!=std::string::npos);
+    const auto cheat_saves=saves;
+    assert(Adjust(0,1) && settings.cheats_enabled && saves==cheat_saves+1);
+    assert(Adjust(1,1) && settings.cheat_menu_key==0x78 && RowText(1).find("F9")!=std::string::npos);
+    Back();
     assert(exits==0);
     Open(Page::Controller);
     settings.bindings[1]="none";
