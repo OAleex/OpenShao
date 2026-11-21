@@ -1,6 +1,7 @@
 #include "texture_pack.h"
 #include "core/log.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -20,6 +21,7 @@ using Index = std::unordered_map<uint64_t, Item>;
 
 std::mutex lock;
 std::shared_ptr<const Index> current;
+std::atomic<uint64_t> generation{0};
 
 bool SafeName(const std::string& name) {
     return !name.empty() && name.find_first_of("\\:") == std::string::npos && name.front() != '/' &&
@@ -61,6 +63,7 @@ void SetPacks(const std::vector<std::filesystem::path>& folders) {
     if (!folders.empty()) LOGI("Texture packs: %zu replacements from %zu folders", index->size(), folders.size());
     std::lock_guard<std::mutex> guard(lock);
     current = index->empty() ? nullptr : std::move(index);
+    ++generation;
 }
 
 namespace {
@@ -85,14 +88,13 @@ uint32_t LevelBytes(uint32_t w, uint32_t h, uint32_t level) {
     return ((lw + 3) / 4) * ((lh + 3) / 4) * 16;
 }
 
-bool Load(uint64_t hash, std::vector<uint8_t>& blocks) {
-    const auto index = Current();
-    if (!index) return false;
-    const auto it = index->find(hash);
-    if (it == index->end()) return false;
-    const Entry& e = it->second.entry;
-    const std::string name = it->second.file.string();
-    std::ifstream in(it->second.file, std::ios::binary);
+namespace {
+// The blocks of a texture from `first_level` on, after checking the file against its line of the index
+bool ReadItem(const Item& item, uint32_t first_level, std::vector<uint8_t>& blocks) {
+    const Entry& e = item.entry;
+    const std::string name = item.file.string();
+    if (first_level >= e.levels) return false;
+    std::ifstream in(item.file, std::ios::binary);
     uint8_t head[128];
     if (!in.read(reinterpret_cast<char*>(head), sizeof(head)) || std::memcmp(head, "DDS ", 4) ||
         std::memcmp(head + 84, "DXT5", 4)) {
@@ -106,13 +108,49 @@ bool Load(uint64_t hash, std::vector<uint8_t>& blocks) {
         LOGE("Texture pack: %s is %ux%u, the index says %ux%u", name.c_str(), width, height, e.w, e.h);
         return false;
     }
-    size_t total = 0;
-    for (uint32_t l = 0; l < e.levels; l++) total += LevelBytes(e.w, e.h, l);
+    size_t skipped = 0, total = 0;
+    for (uint32_t l = 0; l < e.levels; l++) (l < first_level ? skipped : total) += LevelBytes(e.w, e.h, l);
     blocks.resize(total);
+    in.seekg(std::streamoff(sizeof(head) + skipped));
     if (!in.read(reinterpret_cast<char*>(blocks.data()), std::streamsize(total))) {
         LOGE("Texture pack: %s is shorter than its index says", name.c_str());
         return false;
     }
     return true;
+}
+
+// A snapshot of the packs, for the loader's threads
+class FolderSource final : public PackSource {
+public:
+    explicit FolderSource(std::shared_ptr<const Index> index) : index_(std::move(index)) {}
+    std::optional<SourceEntry> Find(uint64_t hash) const override {
+        const auto it = index_->find(hash);
+        if (it == index_->end()) return std::nullopt;
+        const Entry& e = it->second.entry;
+        // the folders do not say how large the game's texture is, so the Medium quality is the High one
+        return SourceEntry{hash, uint16_t(e.w), uint16_t(e.h), uint8_t(e.levels), BcFormat::Bc3, 0};
+    }
+    bool ReadLevels(const SourceEntry& entry, uint32_t first_level, std::vector<uint8_t>& out) const override {
+        const auto it = index_->find(entry.hash);
+        return it != index_->end() && ReadItem(it->second, first_level, out);
+    }
+
+private:
+    std::shared_ptr<const Index> index_;
+};
+}
+
+std::shared_ptr<const PackSource> Source() {
+    auto index = Current();
+    return index ? std::make_shared<FolderSource>(std::move(index)) : nullptr;
+}
+
+uint64_t Generation() { return generation.load(); }
+
+bool Load(uint64_t hash, std::vector<uint8_t>& blocks) {
+    const auto index = Current();
+    if (!index) return false;
+    const auto it = index->find(hash);
+    return it != index->end() && ReadItem(it->second, 0, blocks);
 }
 }
