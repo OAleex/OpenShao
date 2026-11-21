@@ -26,6 +26,20 @@ int main() {
     check(clock.Take(116666667)==6,"A short missed interval must retain the six elapsed simulation steps");
     check(clock.Take(1116666667)==1,"A loading stall must start a new interval without a burst of catch-up gameplay");
     check(clock.Take(100)==1 && clock.Alpha()==0,"A clock discontinuity must clear timing history");
+    {
+        Clock limited;
+        limited.Take(0,1);
+        check(limited.Take(116666667,1)==1,"A limited clock must run one update after a late output");
+        check(limited.Take(120000000,1)==0,"Dropped steps must not be replayed on the next output");
+        check(limited.Take(133333334,1)==1,"A limited clock must resume one update per interval");
+        unsigned updates=0,most=0;
+        for(int output=1;output<=2400;++output) {
+            const int64_t now=133333334+int64_t(output)*1000000000/240+int64_t(output/120)*150000000;
+            const auto steps=limited.Take(now,1);updates+=steps;most=std::max(most,steps);
+        }
+        // Ten seconds of output plus twenty 150 ms stalls: 600 regular updates and one per stall, not nine.
+        check(most==1 && updates>=600 && updates<=621,"Periodic stalls at 240 FPS must slow gameplay down instead of bursting updates");
+    }
     clock.Reset();
     check(clock.Take(5000000000)==1 && clock.Alpha()==0,"Changing frame-rate mode must start without accumulated gameplay steps");
     for(const int fps:openshao::frames::RateOptions) {

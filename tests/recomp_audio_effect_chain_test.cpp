@@ -91,8 +91,7 @@ int main(int argc,char** argv) {
         }
         uint64_t image_fingerprint=14695981039346656037ull;
         Fingerprint(image_fingerprint,image);
-        // These sequences matched the original programs sample for sample and state
-        // word for state word before the reference execution tools were removed.
+        // These sequences matched the original programs sample for sample before the reference tools were removed.
         if (image_fingerprint==0x9BBE14297F9AF82Bull)
             Check(fingerprint==0x1569F22F3E074DF0ull,"standard effects must match the validated output and history sequence");
         if (image_fingerprint==0x9863549866BC8B56ull)

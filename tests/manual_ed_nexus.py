@@ -1,8 +1,4 @@
-"""Real-game regression using an owned hidden window and isolated saves.
-
-Checks the three original codes, the held modifier, the session unlock, native
-pause/Nexus navigation and return to gameplay. Inspect the resulting images.
-"""
+"""Real-game regression: codes, held modifier, session unlock and pause/Nexus navigation."""
 import argparse
 import ctypes as c
 from ctypes import wintypes as w

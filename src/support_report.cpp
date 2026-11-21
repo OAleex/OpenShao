@@ -81,7 +81,7 @@ toml::table Settings(const fs::path& path) {
     const auto source = Parse(path); toml::table result;
     for (const auto* key : {"renderer", "fps_cap", "voice_language", "language", "display_mode", "aspect_ratio",
             "width", "height", "render_percent", "anisotropic_filtering", "vsync", "bloom_effect", "show_fps", "rumble",
-            "restore_dialogue", "cinematic_bars", "scorpion_unfiltered", "improved_difficulty", "master_volume", "music_volume",
+            "restore_dialogue", "cinematic_bars", "scorpion_unfiltered", "master_volume", "music_volume",
             "effects_volume", "speech_volume", "brightness", "deadzone"}) {
         if (auto* node = source.get(key)) {
             if (auto value = node->value<std::string>()) result.insert(key, privacy::Redact(value->substr(0,256)));
@@ -89,7 +89,7 @@ toml::table Settings(const fs::path& path) {
         }
     }
     const std::pair<const char*,std::vector<const char*>> groups[] = {
-        {"enhancements", {"restore_dialogue","cinematic_bars","scorpion_unfiltered","improved_difficulty"}},
+        {"enhancements", {"restore_dialogue","cinematic_bars","scorpion_unfiltered"}},
         {"game", {"music_volume","effects_volume","speech_volume","brightness","versus_rounds","versus_time","camera_reverse"}},
         {"controller", {"deadzone","rumble"}}, {"mouse", {"sensitivity","invert_x","invert_y","motion"}}
     };

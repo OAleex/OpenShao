@@ -6,29 +6,35 @@ int main() {
     auto check=[&](bool ok,const char* text){if(!ok){++failures;std::cerr<<text<<'\n';}};
     openshao::launcher::Settings original;original.master_volume=42;original.mouse.sensitivity=165;
     Model model;model.Open(original);
-    check(model.Rows().size()==7 && model.CurrentPage()==Page::Home,"Recompilation Home must include five categories and explicit save/discard");
-    check(model.Rows()[5].key=="settings.save" && model.Rows()[6].key=="settings.discard","Enhancements must have a separate main-menu entry");
-    model.Enter(5);check(model.CurrentPage()==Page::Home,"Saving must not enter a configuration category");
+    check(model.Rows().size()==6 && model.CurrentPage()==Page::Home && model.Rows()[5].key=="recomp.interface",
+          "Recompilation Home must show its six categories, Interface last, without a global save step");
     model.Go(Page::Enhancements);
-    check(model.Title()=="recomp.enhancements" && model.Rows().size()==6 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
+    check(model.Title()=="recomp.enhancements" && model.Rows().size()==4 && model.Rows()[0].key=="settings.scorpion_unfiltered" &&
           model.Rows()[1].key=="settings.restore_dialogue" && model.Rows()[1].value=="value.on" &&
           model.Rows()[2].key=="settings.cinematic_bars" && model.Rows()[2].value=="value.off" &&
-          model.Rows()[3].key=="settings.improved_difficulty" && model.Rows()[3].value=="value.on" &&
-          model.Rows()[4].key=="settings.save" && model.Rows()[5].key=="settings.discard",
-          "The main-menu Enhancements page must expose its toggles and explicit Save/Discard actions");
+          model.Rows()[3].key=="settings.enhanced_camera" && model.Rows()[3].value==">" && model.Rows()[3].action,
+          "The main-menu Enhancements page must expose the camera as a submenu");
     model.Change(2,1);
     check(openshao::launcher::Merge({},model.Draft())["enhancements"]["cinematic_bars"].value_or(false) && model.Dirty(),
           "The cinematic bar row must enable and persist the enhancement");
     model.Discard();model.Go(Page::Enhancements);
     check(model.Rows()[2].value=="value.off","Discard must restore the cinematic bar preference");
     model.Change(3,1);
-    check(!openshao::launcher::Merge({},model.Draft())["enhancements"]["improved_difficulty"].value_or(true) && model.Rows()[3].value=="value.off" && model.Dirty(),
-          "Players must be able to choose the original difficulty selector");
+    check(!model.Dirty() && model.Rows()[3].action,"The camera submenu must not toggle any preference");
     model.Discard();model.Go(Page::Enhancements);
-    check(model.Rows()[3].value=="value.on" && model.Draft().improved_difficulty,"Discard must restore the improved difficulty preference");
-    model.Change(4,1);
-    check(model.Rows()[4].key=="settings.save" && !model.Dirty(),
-          "Save must remain an action after removing the retired shadow setting");
+    model.Enter(3);
+    check(model.CurrentPage()==Page::EnhancedCamera && model.Rows().size()==3 && model.Rows()[1].value=="100%",
+          "Enhanced Camera must group enable, speed and smoothing on its own page");
+    model.Change(0,1);model.Change(1,1);model.Change(2,1);
+    check(openshao::launcher::Merge({},model.Draft())["enhancements"]["hold_camera_angle"].value_or(false) &&
+          model.Rows()[0].value=="value.on" && model.Draft().camera_speed==110 && model.Draft().smooth_camera_framing && model.Dirty(),
+          "The camera options must adjust independently");
+    model.Commit();model.Change(1,-1);model.Revert();
+    check(model.CurrentPage()==Page::EnhancedCamera && model.Draft().camera_speed==110 && !model.Dirty(),
+          "Saving and reverting an individual setting must preserve the current page");
+    model.Back();check(model.CurrentPage()==Page::Enhancements && model.Rows()[3].value==">" && model.Draft().hold_camera_angle,
+          "Returning from camera settings must keep the enabled preference and show a submenu indicator");
+    model.Open(original);model.Go(Page::Enhancements);
     model.Change(1,1);
     check(!model.Draft().restore_dialogue && model.Rows()[1].value=="value.off" && model.Dirty(),
           "Players must be able to choose the original dialogue behavior");
@@ -85,21 +91,31 @@ int main() {
     check(model.Draft().music_volume==original.music_volume && model.Draft().effects_volume==original.effects_volume && model.Draft().speech_volume==original.speech_volume && model.Draft().original_override==original.original_override,
         "Global audio edits must preserve the native music, effects and speech controls and persistence policy");
     model.Back();model.Enter(2);model.Enter(0);
-    check(model.CurrentPage()==Page::Controller && model.Rows().size()==25,"Every controller direction and device reset must be available");
+    constexpr auto recenter=openshao::bindings::RecenterCamera, binding_count=openshao::bindings::Count;
+    check(model.CurrentPage()==Page::Controller && model.Rows().size()==binding_count+1,"Every controller binding and device reset must be available");
+    check(model.Rows()[recenter].key=="binding.camera_recenter" && model.Rows()[recenter].value=="source.leftstick" &&
+          model.Conflict(recenter).empty() && model.Conflict(8).empty(), "L3 must support recenter and its original stick click");
+    check(!model.ControllerBinding(recenter,"a") && model.ControllerBinding(recenter,"rightstick") &&
+          model.Rows()[recenter].value=="source.rightstick" && model.Draft().bindings[9]=="rightstick",
+          "Rebinding the camera to R3 must preserve the original stick click and refuse conflicts with face buttons");
     model.ControllerBinding(0,"rightx-");
     check(model.Draft().bindings[0]=="a" && model.Draft().bindings[22]=="rightx-","An occupied controller input must be refused without changing either action");
     model.ControllerBinding(22,"none");model.ControllerBinding(0,"rightx-");check(model.Draft().bindings[0]=="rightx-","A released analog direction must be assignable");
     check(model.Rows()[0].value=="source.rightx-","Controller values must use localized catalog keys");
     check(model.Conflict(0).empty(),"A refused duplicate must not leave a shared controller binding");
-    model.Enter(24);check(model.Draft().bindings==openshao::bindings::controller_defaults,"Device defaults must restore controller bindings");
+    model.Enter(binding_count);check(model.Draft().bindings==openshao::bindings::controller_defaults,"Device defaults must restore controller bindings");
     check(model.Draft().master_volume>42 && model.Draft().mouse.sensitivity==165,"Controller reset must preserve unrelated devices and audio");
     model.Back();model.Enter(1);model.KeyboardBinding(0,0,'Z');
+    check(model.Rows()[recenter].key=="binding.camera_recenter" && model.Rows()[recenter].value=="key.192" &&
+          !model.KeyboardBinding(recenter,0,'Z') && model.KeyboardBinding(recenter,0,'P') &&
+          openshao::launcher::Read(openshao::launcher::Merge({},model.Draft())).keyboard.keys[recenter][0]=='P',
+          "Keyboard recenter is remappable, respects conflicts and persists");
     check(model.Rows()[0].value=="key.90","Captured keyboard keys must retain their numeric identity for localized display");
     model.KeyboardBinding(1,0,'Z');
     check(model.Draft().keyboard.keys[1][0]==27,"A captured keyboard input already used by another action must be refused");
     model.KeyboardBinding(1,0,73);model.Change(1,1);
     check(model.Draft().keyboard.keys[1][0]==76 && model.Conflict(1).empty(),"Cycling keyboard inputs must skip J and K, which belong to other actions");
-    model.Enter(24);check(model.CurrentPage()==Page::KeyboardAlternate,"Alternate keyboard bindings must have their own page");
+    model.Enter(binding_count);check(model.CurrentPage()==Page::KeyboardAlternate,"Alternate keyboard bindings must have their own page");
     model.KeyboardBinding(0,1,'V');
     check(model.Draft().keyboard.keys[0][0]=='Z' && model.Draft().keyboard.keys[0][1]=='V',"Primary and alternate keys must remain independent");
     model.KeyboardBinding(2,1,'Z');
@@ -108,8 +124,10 @@ int main() {
     check(model.Draft().bindings[0]!="b" && model.Conflict(0).empty(),"Controller cycling must skip inputs owned by other actions");
     model.Discard();check(model.Draft()==original,"Discard must restore the complete opening settings snapshot");
     model.Go(Page::Graphics);
-    check(model.Rows()[5].value=="value.display_refresh","VSync must identify the display refresh as its output target");
-    model.Change(5,1);
+    const auto graphics_rows=model.Rows();
+    check(graphics_rows.size()==5 && graphics_rows[4].value=="value.display_refresh","VSync must identify the display refresh as its output target");
+    check(std::none_of(graphics_rows.begin(),graphics_rows.end(),[](const auto& row){return row.key=="settings.fps";}),"Show FPS moved from Graphics to Interface");
+    model.Change(4,1);
     check(model.Draft().fps_cap==original.fps_cap,"The inactive software limit must not change while VSync follows the monitor");
     model.Change(2,1);
     const auto graphics=model.Rows();
@@ -141,7 +159,19 @@ int main() {
               "VSync must follow display refresh without changing the stored software limit");
         model.Discard();check(model.Draft()==original,"Discard must restore the opening frame rate");
     }
-    for(const auto page:{Page::Display,Page::Graphics,Page::Controls,Page::Controller,Page::Keyboard,Page::KeyboardAlternate,Page::Mouse,Page::Audio,Page::Language}) {
+    model.Discard();model.Enter(5);
+    check(model.CurrentPage()==Page::Interface && model.Title()=="recomp.interface" && model.Rows().size()==2 &&
+          model.Rows()[0].key=="settings.fps" && model.Rows()[0].value=="value.off" &&
+          model.Rows()[1].key=="settings.notifications" && model.Rows()[1].value=="value.on","Interface must hold Show FPS and photo notifications");
+    model.Change(0,1);model.Change(1,1);
+    {
+        const auto persisted=openshao::launcher::Merge({},model.Draft());
+        check(persisted["show_fps"].value_or(false) && !persisted["screenshot_notifications"].value_or(true) &&
+              !openshao::launcher::Read(persisted).screenshot_notifications,"Interface choices must be saved and read back");
+    }
+    model.Back();check(model.CurrentPage()==Page::Home,"Back from Interface must return Home");
+    model.Discard();
+    for(const auto page:{Page::Display,Page::Graphics,Page::Controls,Page::Controller,Page::Keyboard,Page::KeyboardAlternate,Page::Mouse,Page::Audio,Page::Language,Page::Interface}) {
         model.Go(page);
         for(size_t row=0;row<model.Rows().size();++row)for(int repeat=0;repeat<60;++repeat)model.Change(row,repeat%2?1:-1);
         std::string error;check(openshao::launcher::Validate(model.Draft(),error),"Every field edit must preserve settings validation");

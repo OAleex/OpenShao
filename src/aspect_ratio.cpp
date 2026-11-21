@@ -44,9 +44,12 @@ bool ExpandViewportTint(void* vertices,uint32_t count,uint32_t stride) {
             std::memcpy(xy[i],bytes+i*stride,8);
             if(!std::isfinite(xy[i][0]) || !std::isfinite(xy[i][1]))return false;
         }
-        // The retail masks own their fade/slide: undo only the fitted projection so bands span the output.
+        float left=xy[0][0],right=left;
+        for(const auto& vertex:xy){left=std::min(left,vertex[0]);right=std::max(right,vertex[0]);}
+        if(right<=left)return false;
+        // Native bounds can sit a pixel inside: anchor both sides to the output; masks keep their slide, texture and fade.
         for(unsigned i=0;i<4;++i) {
-            xy[i][0]=(xy[i][0]+.5f)/scale.x-.5f;
+            xy[i][0]=((xy[i][0]-left)/(right-left)*640.f-320.f)/scale.x-.5f;
             xy[i][1]=(xy[i][1]+.5f)/scale.y-.5f;
             std::memcpy(bytes+i*stride,xy[i],8);
         }

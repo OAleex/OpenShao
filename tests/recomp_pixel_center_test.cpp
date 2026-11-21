@@ -58,8 +58,7 @@ static int RunCase(bool pretransformed, bool quad, float scale=1, int fallback=0
         {"ATTR",9,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,D3D11_INPUT_PER_VERTEX_DATA,0}};
     ComPtr<ID3D11InputLayout> layout;
     if (!Ok(device->CreateInputLayout(elements, 3, vs_code->GetBufferPointer(), vs_code->GetBufferSize(), &layout), "layout")) return 2;
-    // The upper frame occupies rows 0..6. Row 7 starts a neighboring white piece.
-    // Console integer pixel centers stop at atlas y=6.78125 on the last row.
+    // Upper frame rows 0..6, row 7 is a white neighbor; console centers stop at y=6.78125.
     std::array<uint32_t,256> pixels{};
     for (int x=0; x<16; ++x) { pixels[x]=0xFF4080C0; pixels[7*16+x]=0xFFFFFFFF; }
     if (menu) {
@@ -107,8 +106,7 @@ static int RunCase(bool pretransformed, bool quad, float scale=1, int fallback=0
             vertices[i][9]=(i&2)?-1.9998126029968262f:-3.f;
         }
         if (menu==7) {
-            // Brightness frame: the horizontal texture is rotated clockwise
-            // onto the right edge, with V running from -8 to -9 across X.
+            // Brightness frame: texture rotated clockwise onto the right edge, V from -8 to -9 across X.
             vertices[i][8]=(i&2)?1.f:0.f;
             vertices[i][9]=(i&1)?-9.f:-8.f;
         }

@@ -3,6 +3,7 @@
 #include "difficulty.h"
 #include "survival_mode.h"
 #include "survival_session.h"
+#include "campaign_finishers.h"
 #include "ed_nexus.h"
 #include "launcher.h"
 #include "kernel/kernel.h"
@@ -40,13 +41,11 @@ double VoiceGap = 0.8, SceneGap = 1.5;
 double quiet = 0, gap = VoiceGap;
 bool silent = false;
 bool cinematic_active = false;
-// Our additions play once per attempt: revisiting a map keeps them heard, while a death/retry
-// checkpoint restore or returning to the front end (no world) lets them play again.
+// Additions play once per attempt; a death/retry restore or the front end lets them play again.
 std::unordered_set<uint32_t> attempt_heard;
 uint32_t attempt_restores = 0;
 bool attempt_reset = false;  // set when a checkpoint restore cleared the attempt
-// Campaign starts with Raiden's intro (7922A984), which a totem save never replays; it stays
-// "unsaved" until a slot is saved or loaded (used by tutorial-only additions).
+// Raiden's intro (7922A984) starts the campaign; it stays "unsaved" until a slot is saved or loaded.
 constexpr uint32_t CampaignIntroScene = 0x7922A984;
 struct { bool fresh = false; uint32_t start = 0; } campaign;
 void NoteCampaignScene(uint32_t scene) {
@@ -130,8 +129,7 @@ void TrackScriptVoice(uint32_t sound, uint32_t handle) {
 }
 
 struct MissingCue { uint32_t room, target, sound; int16_t character; };
-// These activatetrigger targets have ordinal -1 and no definition; retain their script timing.
-// Owner removed Raiden's vo_rdn_help_gl_ps2_13 (room 96 B001C237 -> 822C1D1F) from the story.
+// Targets with ordinal -1 and no definition keep script timing (owner removed vo_rdn_help_gl_ps2_13).
 constexpr std::array<MissingCue, 6> MissingCues{{
     {101, 0xC1CE6AC6, 0x7CE0B357, 0}, {101, 0x0EAC5D51, 0xE0967133, 1},
     {101, 0xFB84C07D, 0x3B40C987, 0}, {101, 0x2326CE4B, 0xDDF65883, 1},
@@ -140,8 +138,7 @@ constexpr std::array<MissingCue, 6> MissingCues{{
 std::array<uint16_t, MissingCues.size()> recovered_cues{};
 uint32_t cue_room = 0, cue_world = 0;
 uint16_t kitana_trap = 0;
-// Gates opened when an arena is cleared (spawner-driven, no event of their own):
-// _d_door05up -> (a)_d_move02 and _d_door05_b -> (a)_d_move_exit mark the opening.
+// Gates opened by clearing an arena: _d_door05up -> (a)_d_move02, _d_door05_b -> (a)_d_move_exit.
 constexpr std::array<std::pair<uint32_t, uint32_t>, 2> GateOpenings{{
     {0x9406D458, 142}, {0x9A955116, 33}}};
 uint32_t gate_warning_world = 0;  // World whose gate warning already played.
@@ -196,8 +193,7 @@ struct ErmacPhaseVoice {
 std::array<ErmacPhaseVoice, 2> ermac_phase_voices{};
 uint32_t ermac_world = 0, ermac_room = 0;
 constexpr std::array<uint32_t, 2> ErmacPhaseSounds{0x14DC5B86u, 0x29BC7236u};
-// Ermac's first line (vo_erm_wu_shi_13_01, unused in retail) opens his presentation:
-// _d_staterm3 -> _d_ermac (769191E3/3) spawns him from the statue.
+// Ermac's unused first line (vo_erm_wu_shi_13_01) plays as _d_staterm3 -> _d_ermac (769191E3/3) spawns him.
 constexpr uint32_t ErmacIntroTarget = 0x769191E3, ErmacIntroOrdinal = 3, ErmacIntroSound = 0x537C2156;
 constexpr double ErmacIntroDelay = 0.5;
 struct { uint32_t world = 0; double age = 0; bool pending = false, done = false; } ermac_intro;
@@ -236,8 +232,7 @@ struct MileenaMonasteryCombat {
 uint32_t native_world = 0, native_room = 0;
 VariationCursor spear_choice, fire_choice, shao_choice;
 bool shao_challenge = false;
-// The lead monk opens the Shao Kahn fight as his intro scene (60F8EA8D) ends, before his first taunt:
-// Liu found_10_05_2 / Kung found_10_04_2 ("You have no honor").
+// The lead monk's "You have no honor" (found_10_05_2 / found_10_04_2) as Shao Kahn's intro (60F8EA8D) ends.
 constexpr uint32_t ShaoIntroScene = 0x60F8EA8D;
 struct { uint32_t world = 0; bool armed = false, seen_scene = false; } shao_opener;
 
@@ -264,8 +259,7 @@ constexpr double CaptionVoiceStart = 0.5;
 uint32_t CaptionVoiceHandle() {
     if (!kernel::G<uint8_t>(MessageManager + 0x6C0)) return 0;
     const uint32_t handle = kernel::R32(MessageManager + 0x6C8);
-    // Reserve the slot between caption submission and native voice creation, but only briefly:
-    // a portrait prompt (e.g. Baraka's impale, template 8) is voiced by its script's vosound instead.
+    // Reserve the slot briefly between caption and native voice; portrait prompts use their script's vosound.
     return handle ? handle : CaptionHasVoice() && caption_pending_age < CaptionVoiceStart ? 0xFFFFFFFFu : 0;
 }
 
@@ -408,8 +402,7 @@ uint32_t ChoiceIndex(X86Context& ctx, VariationCursor& cursor, uint32_t count) {
     return cursor.next % count;
 }
 
-// Wu Shi Map 08 (room 103): remark on the 2nd catapult launch (an enemy fires the 1st),
-// then on the next barricade broken.
+// Wu Shi Map 08 (room 103): remark on the 2nd catapult launch (an enemy fires the 1st), then the next barricade.
 constexpr uint32_t CatapultRoom = 103, CatapultEngage = 0xF5F029C2, BarricadeBreak = 0xF67B4949;
 uint8_t catapult_remarks = 0;  // bit 0: catapult line queued, bit 1: barricade line queued
 uint8_t catapult_launches = 0;
@@ -1041,8 +1034,7 @@ uint32_t EscapeWarningSound() {
     return character == 0 ? (solo ? 0xBEC5353Eu : 0x0CE5E92Eu) : (solo ? 0xEA53782Au : 0xADF302FAu);
 }
 
-// Tombs Map 13 (room 12): Orochi devours Tarkatans to heal. The hero remarks on it once per visit:
-// vo_liukang_st_13_03 / vo_kunglao_st_13_03 ("he's eating the Tarkatans to get his energy back").
+// Tombs Map 13 (room 12): once per visit the hero remarks that Orochi eats Tarkatans to heal (st_13_03).
 constexpr uint32_t OrochiRoom = 12, HealthComponent = 0x200, Health = 0x368, MaxHealth = 0x370;
 struct OrochiFeast {
     uint32_t world = 0;
@@ -1060,8 +1052,7 @@ uint32_t LivingEnemy(uint32_t slot) {
     return int32_t(kernel::R32(component + Health)) > 0 ? id : 0;
 }
 
-// Wu Shi Map 06: the warlord spawns in the same tick as 94FE469F, so a new arrival is any
-// enemy missing from the previous update's snapshot.
+// Wu Shi Map 06: the warlord spawns with 94FE469F, so a new arrival is an enemy missing from the last snapshot.
 struct { uint32_t world = 0; bool armed = false; std::array<uint32_t, ActorCount> before{}; } warlord_watch;
 std::array<uint32_t, ActorCount> enemies_last_update{};
 
@@ -1116,8 +1107,7 @@ void UpdateOrochiFeast() {
     }
 }
 
-// Wu Shi Map 06 first save totem: when its prompt (text 60) appears, Raiden explains shrines
-// (vo_rdn_wu_shi_6_01). Tutorial only: new, unsaved campaigns.
+// Wu Shi Map 06 first totem prompt (text 60): Raiden explains shrines (vo_rdn_wu_shi_6_01), new campaigns only.
 constexpr uint32_t SaveShrineRoom = 101, SaveShrinePrompt = 60, SaveShrineHint = 0x4B368C31;
 struct { uint32_t world = 0, room = 0; bool done = false; } save_shrine_hint;
 
@@ -1155,11 +1145,9 @@ void UpdateShaoOpener(X86Context& ctx, bool cinematic, bool paused) {
     LOGD("Dialogue Shao Kahn opener: sound=%08X", opener);
 }
 
-// play_cincamera (thunk 0x16924 -> 0x70830) activates camera slot 1 ([0x599844]+0x1C) for the
-// path. Foundry cues: Map 04 hooks/cauldron (cin1/cin2), Map 03 forge door after the press.
+// play_cincamera (0x16924 -> 0x70830) activates camera slot 1 ([0x599844]+0x1C) for the Foundry Map 03/04 cues.
 constexpr uint32_t CameraManager = 0x599844, CinCameraSlot = 1;
-// `during` < 0: speak as the camera ends; otherwise speak that many seconds into the camera.
-// A cue with both takes uses the lead monk; a single-take cue plays if that monk is in play.
+// during < 0 speaks as the camera ends, else that many seconds in; two-take cues use the lead monk.
 struct CameraCue { uint32_t room, camera, liu, kung; double during; const char* name; };
 constexpr CameraCue CameraCues[] = {
     {67, 1, 0x26AAB15F, 0xEA7D1072, -1, "foundry hooks hint"},
@@ -1226,8 +1214,7 @@ void UpdateHooksHint(bool cinematic, bool paused, double elapsed) {
         LOGD("Dialogue %s: sound=%08X camera_seen=%d", cue.name, hint, hooks_hint.seen);
 }
 
-// Foundry Map 02 furnace (gameevent 26 once used): Liu's vo_liukang_found_2_01_2 2 s into
-// every visit until then. Game events: byte [[0x5ACEBC] + 0x4874 + id].
+// Foundry Map 02 furnace: Liu's found_2_01_2 2 s into each visit until event 26 ([[0x5ACEBC]+0x4874+id]).
 constexpr uint32_t FurnaceRoom = 65, FurnaceEvent = 26, FurnaceRemark = 0x2BB4C118;
 constexpr double FurnaceDelay = 2.0;
 struct { uint32_t world = 0, room = 0; double age = 0; bool done = false; } furnace_hint;
@@ -1464,8 +1451,7 @@ X86_FUNC(sub_001A18F0) {
         optional_voice = 0;
     }
     const uint32_t original_voice = kernel::R32(VoiceHandle);
-    // Caption contention takes the native busy exit; restore the script slot afterwards.
-    // The script's own line for the caption being shown is that caption's voice: let it start now.
+    // Caption contention takes the native busy exit; restore the slot and let the caption's own voice start now.
     const bool caption_line = kernel::R32(MessageManager + 0x6C4) == sound && !kernel::R32(MessageManager + 0x6C8);
     const uint32_t caption_voice = RestorationEnabled() && !original_voice
         ? (CaptionVoiceHandle() && !caption_line ? CaptionVoiceHandle() : queue.HasRequired() ? 0xFFFFFFFFu : 0) : 0;
@@ -2091,6 +2077,7 @@ X86_EXTERN_FUNC(__imp__sub_001A1880);
 X86_FUNC(sub_001A1880) {
     __imp__sub_001A1880(ctx, base);
     openshao::survival::UpdateVoice(ctx);
+    openshao::campaign_finishers::Update(ctx);
     AuditSceneAudio(false);
     // A panel already due takes precedence over starting another queued line.
     UpdateAttackTutorial(ctx);

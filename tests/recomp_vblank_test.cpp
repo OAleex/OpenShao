@@ -6,8 +6,7 @@
 int main() {
     using namespace std::chrono;
     openshao::VBlankClock clock;
-    // A notification after 3ms must release the wait immediately. The old
-    // unconditional 16ms sleep introduced needless latency on every movie frame.
+    // A notification after 3 ms releases the wait at once (the old 16 ms sleep added latency).
     std::thread producer([&] {
         std::this_thread::sleep_for(milliseconds(3));
         clock.Tick();

@@ -1,8 +1,10 @@
 #include "survival_session.h"
 #include "survival_mode.h"
+#include "fighter_selection.h"
 #include "survival_unlock.h"
 #include "difficulty.h"
 #include "kernel/kernel.h"
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -12,6 +14,7 @@ namespace {
 constexpr uint32_t Manager=0x4E6E20,Template=0x4E6A98,MessageSlot=Manager+0x6C0;
 std::array<uint8_t,8<<20> memory{};
 bool starting=false,playing=false,transition=false,native_room_reset=false;
+openshao::fighter_selection::Purpose starting_purpose=openshao::fighter_selection::Purpose::Survival;
 unsigned failures=0,native_starts=0,native_maps=0;
 std::vector<unsigned> skill_grants,health_tiers,fatality_upgrades;
 std::vector<uint32_t> health_progressions;
@@ -110,10 +113,12 @@ uint32_t CallGuest(X86Context& ctx,uint32_t fn,const uint32_t* args,size_t count
 namespace logx {void Write(Level,const char*,...) {}}
 namespace mem {uint32_t AllocSystem(uint32_t size,uint32_t){Check(size==44,"Survival allocates one native rect");return 0x77F000;}}
 namespace openshao::difficulty {void SetDebugRefill(bool enabled){debug_refill=enabled;}}
-namespace openshao::survival {
-bool Starting(){return starting;}
-void Started(){starting=false;}
+namespace openshao::fighter_selection {
+bool StartingFor(Purpose purpose){return starting && purpose==starting_purpose;}
+void FinishStartup(){starting=false;}
+void ApplyStartMode(){}
 }
+namespace openshao::survival {void Started(){}}
 namespace openshao::survival::unlock {
 bool portal_available=false;
 bool Available(){return portal_available;}
@@ -152,6 +157,40 @@ int main(){
     kernel::W32(Template+0x34,10);kernel::W32(Manager+0x68C,0x40);
     auto ctx=Context();sub_000122D4(ctx,memory.data());
     Check(!ActiveSession() && kernel::R32(0x505970)==96,"story startup retains its original room");
+    for(bool koop:{false,true}){
+        constexpr uint32_t CampaignState=0x740000,FirstHealth=0x750000,SecondHealth=0x751000;
+        ResetSession();starting=true;starting_purpose=openshao::fighter_selection::Purpose::Campaign;
+        kernel::W32(0x5ACEBC,CampaignState);kernel::W32(CampaignState+0x88,koop);
+        kernel::W32(CampaignState+0x90,1);kernel::W32(CampaignState+0x94,koop?400:200);
+        kernel::W32(CampaignState+0xE0,0);
+        std::array<uint8_t,56> normal_skills{};
+        if(koop)for(unsigned player=0;player<2;++player)for(unsigned skill=23;skill<27;++skill)
+            normal_skills[player*28+skill]=2;
+        std::copy(normal_skills.begin(),normal_skills.end(),memory.begin()+CampaignState+0x1C4);
+        for(unsigned player=1;player<=2;++player){
+            const auto health=player==1?FirstHealth:SecondHealth;
+            kernel::W32(0x5CE880+player*0x3238+0x200,health);
+            kernel::W32(health+0x368,200);kernel::W32(health+0x370,200);
+        }
+        sounds.clear();messages.clear();skill_grants.clear();health_tiers.clear();health_progressions.clear();fatality_upgrades.clear();
+        ctx=Context();if(koop)sub_00011DB1(ctx,memory.data());else sub_000122D4(ctx,memory.data());
+        Check(!ActiveSession() && !starting && kernel::R32(0x505970)==96 && kernel::R32(0x5CABAC)==96,
+              "Campaign-purpose selection keeps both native startup callbacks in room 96");
+        Check(ctx.esp==0x8004 && ctx.eax==77 && ctx.esi==0x1234 && ctx.edi==0x4321,
+              "Campaign-purpose startup preserves the native return ABI");
+        kernel::W32(0x639224,0x720000);RoomReady(ctx);UpdateVoice(ctx);TriggerActivated(ctx,0xBF0B9329,true);
+        Check(std::equal(normal_skills.begin(),normal_skills.end(),memory.begin()+CampaignState+0x1C4) &&
+              kernel::R32(CampaignState+0xE0)==0 && kernel::R32(CampaignState+0x94)==(koop?400u:200u) &&
+              kernel::R32(FirstHealth+0x368)==200 && kernel::R32(FirstHealth+0x370)==200 &&
+              kernel::R32(SecondHealth+0x368)==200 && kernel::R32(SecondHealth+0x370)==200,
+              "Campaign startup retains normal native skill bytes and health");
+        Check(messages.empty() && sounds.empty() && skill_grants.empty() && health_tiers.empty() &&
+              health_progressions.empty() && fatality_upgrades.empty() && !HoldRulesWorld() &&
+              RulesBackdropOpacity()==0 && !DeferMusic(123) && !FilterLevelMessage(0x730000),
+              "Campaign startup emits no Survival rules, banners, completion or automatic upgrades");
+    }
+    starting_purpose=openshao::fighter_selection::Purpose::Survival;
+    kernel::W32(0x5ACEBC,0);kernel::W32(0x639224,0);sounds.clear();
     AnnounceMode(ctx);AnnounceMode(ctx);
     Check(stops==std::vector<uint32_t>{0x101},"reselecting Survival stops its previous recording before replaying");
     StopAnnouncement(ctx);StopAnnouncement(ctx);
@@ -222,8 +261,7 @@ int main(){
     RoomLoading();RoomReady(ctx);VoicePlayed(0xD5FEA8B2,0x202);UpdateVoice(ctx);
     Check(messages.size()==3 && messages.back()[0]==2 && sounds.size()==2,
           "retrying Level One repeats its banner without repeating rules or the opening challenge");
-    // Level Two: the banner may post while the room variable still names the previous
-    // arena; the room-ready fallback must not repeat it (and its announcer voice).
+    // Level Two banner can post before the room changes; the fallback must not repeat it.
     {
         const auto before=messages.size();
         RoomLoading();NativeInfo(2,157);
@@ -275,8 +313,7 @@ int main(){
     memory[0x5AE5B0]=0;
     ResetSession();kernel::W32(0x505970,161);ctx=Context();sub_00012883(ctx,memory.data());
     Check(kernel::R32(0x4FC160)==162,"ordinary map transitions remain native outside Survival");
-    // The green portal is in Foundry Map 1 (room 64) and loads Survival room 161; the
-    // story stays in the Foundry with first/unsaved/saved repeat messages.
+    // The Foundry Map 1 (room 64) portal loads Survival room 161; the story keeps its messages.
     transition=false;
     for(unsigned visit=0;visit<3;++visit){
         kernel::W32(0x505970,64);memory[MessageSlot]=0;
@@ -375,8 +412,7 @@ int main(){
               "repeated room-ready callbacks cannot reapply abilities or refill health during combat");
         const auto damage=kernel::R32(First+0x370)-5;
         kernel::W32(First+0x368,damage);
-        // Native Ko-op-only ranks may change independently of the campaign
-        // loadout. That must not trigger an upgrade or heal a damaged hero.
+        // Ko-op-only rank changes must not upgrade or heal a damaged hero.
         memory[Live+0x1C4+23]=uint8_t(coop?1:0);
         const auto previous_messages=messages.size();
         RoomLoading();RoomReady(ctx);

@@ -1,4 +1,7 @@
 #include "frame_rate.h"
+#include "ed_nexus.h"
+#include "kontent_menu.h"
+#include "photo_mode.h"
 #include <bitset>
 #include <unordered_map>
 namespace openshao::aspect {
@@ -82,7 +85,8 @@ bool IsTransitionScenery(uint32_t scene,uint32_t texture) {
     // Transition scenery uses control timelines, including their companion layers.
     switch(AnimationTextureKey(scene,texture)) {
         case 0x6280E35F:case 0xC46465E6:case 0x9587CD64:case 0x14BA29FA:return true;
-        case 0xAB8EFAE9:case 0xFEE6AC1F: // Main menu to Options.
+        // Main menu to Options. The second layer is 0x5E21FDB6 in the French, German, Spanish and Italian data.
+        case 0xAB8EFAE9:case 0xFEE6AC1F:case 0x5E21FDB6:
         case 0xB3940E03:case 0x137124EA:case 0x2BD63191: // Main menu to Kontent.
         case 0x25055CA7:case 0xA3DF797D:return true; // Kontent category transitions.
     default:return false;
@@ -260,12 +264,12 @@ X86_FUNC(sub_000124C3) {
 X86_EXTERN_FUNC(__imp__sub_00152CE0);
 X86_FUNC(sub_00152CE0) {
     const uint32_t caller=kernel::R32(ctx.esp);
-    if((caller==0x45F0D || caller==0x4F97B) && openshao::survival::SetupPopup()){
+    if((caller==0x45F0D || caller==0x4F97B) && openshao::fighter_selection::RosterBackdrop()){
         const uint32_t depth=kernel::R32(0x6C9308);
         if(depth && depth<16){
             const uint32_t top=kernel::R32(0x6C9308+depth*4);
             const uint32_t parent=depth>1?kernel::R32(0x6C9308+(depth-1)*4):0;
-            if(openshao::survival::HideVersusArenaCaption(caller,true,top,parent)){
+            if(top==0x598DF0 || (top==0x596810 && parent==0x598DF0)){
                 // 0x45F0D wrote ROOFTOPS over the difficulty description; 0x4F97B is the other arena-name call (both cdecl).
                 kernel::Return(ctx,0,0);return;
             }
@@ -297,7 +301,8 @@ X86_FUNC(sub_00152CE0) {
     // The solo combo call also draws the centered experience reward (320,240); keep text at x=320 in place.
     else if(caller==0x7C480 && layout==TextLayout::Combo)layout=TextLayout::None;
     openshao::aspect::TextScope text(layout);
-    __imp__sub_00152CE0(ctx,base);
+    openshao::ed_nexus::DrawPausePageIndicator(ctx);
+    openshao::campaign_moves::FitReferenceDetails(ctx,base,__imp__sub_00152CE0);
 }
 X86_EXTERN_FUNC(__imp__sub_000123BA);
 X86_FUNC(sub_000123BA) {
@@ -308,6 +313,8 @@ X86_FUNC(sub_000123BA) {
 }
 X86_EXTERN_FUNC(__imp__sub_001EE580);
 X86_FUNC(sub_001EE580) {
+    // Photo mode shows the world alone: no queued 2D text (HUD names, experience, banners) but its own controls.
+    if(openshao::photo_mode::Active() && !openshao::photo_mode::DrawingControls()){kernel::Return(ctx,0,1);return;}
     const uint32_t queue=ctx.ecx,index=kernel::R32(queue),command=kernel::R32(ctx.esp+4);
     auto anchor=openshao::aspect::UiAnchor::None;
     if(openshao::aspect::tutorial_prompt_layout)anchor=openshao::aspect::UiAnchor::TutorialPrompt;
@@ -437,6 +444,8 @@ X86_FUNC(sub_001EF210) {
 }
 X86_FUNC(sub_0011B290) {
     __imp__sub_0011B290(ctx,base);
+    // This routine caches XGetGameRegion; keep Kontent on the list without the other game's demo.
+    openshao::kontent::HideDemo();
     openshao::aspect::UpdateCamera();
 }
 X86_EXTERN_FUNC(__imp__sub_0015AFA0);
@@ -447,6 +456,8 @@ X86_FUNC(sub_0015AFA0) {
 }
 X86_EXTERN_FUNC(__imp__sub_0011D000);
 X86_FUNC(sub_0011D000) {
+    // Photo mode shows the world alone: no 2D sprites (HUD bars, portraits, fades).
+    if(openshao::photo_mode::Active()){kernel::Return(ctx,0,1);return;}
     const uint32_t entry=kernel::R32(ctx.esp+4);
     const uint32_t sprite=entry?kernel::R32(entry+8):0;
     const bool cinematic=sprite && (sprite==kernel::R32(0x6CE8A0) || sprite==kernel::R32(0x6CE8A4));
@@ -521,6 +532,8 @@ X86_FUNC(sub_0013F980) {
 }
 X86_EXTERN_FUNC(__imp__sub_0013FFB0);
 X86_FUNC(sub_0013FFB0) {
+    // Photo mode over the Select pause hides the menu's Flash polygons too.
+    if(openshao::photo_mode::Active()){kernel::Return(ctx,0,0);return;}
     // Flash polygons render later, so transform positions when Object2DDraw queues them.
     const uint32_t first=kernel::R32(0x63F5E0);
     const uint32_t menu_key=openshao::aspect::AnimationTextureKey(openshao::aspect::animation_scene,kernel::R32(ctx.esp+12));
@@ -533,13 +546,26 @@ X86_FUNC(sub_0013FFB0) {
     __imp__sub_0013FFB0(ctx,base);
     const uint32_t end=kernel::R32(0x63F5E0);
     if(first>end || end>512)return;
-    // Survival's solo roster on Versus: move only the two gradient halves and the central emblem.
+    constexpr uint32_t first_fighter=0x58F8A0,fighter_stride=0x348;
+    const uint32_t fighter_offset=openshao::aspect::animation_scene-first_fighter;
+    if(fighter_offset<8*fighter_stride && fighter_offset%fighter_stride==0 &&
+       openshao::fighter_selection::LockedPortrait(fighter_offset/fighter_stride)){
+        const auto clip=kernel::R32(openshao::aspect::animation_scene+0x2A0);
+        // Focus clips draw the fighter in neutral white over the tinted player outline.
+        if(clip>=2 && clip<=4)for(uint32_t i=first;i<end;++i)
+            for(unsigned v=0;v<3;++v){
+                const auto address=0x63F5E4+i*0x6C+0x58+4*v;
+                const auto color=kernel::R32(address);
+                if((color&0xFFFFFF)==0xFEFEFE)kernel::W32(address,color&0xFF000000);
+            }
+    }
+    // The shared solo roster on Versus: move only the two gradient halves and the central emblem.
     const uint32_t depth=kernel::R32(0x6C9308);
     const uint32_t top=depth && depth<32?kernel::R32(0x6C9308+depth*4):0;
     const bool character_parent=top==0x598DF0 || (top==0x596810 && depth>1 &&
         kernel::R32(0x6C9308+(depth-1)*4)==0x598DF0);
-    const bool solo_roster=character_parent && openshao::survival::PlayerMode()==0 &&
-        (openshao::survival::CharacterSelection() || openshao::survival::SetupPopup()) &&
+    const bool solo_roster=character_parent && openshao::fighter_selection::PlayerMode()==0 &&
+        (openshao::fighter_selection::CharacterSelection() || openshao::fighter_selection::RosterBackdrop()) &&
         openshao::aspect::animation_scene==kernel::R32(0x598DFC);
     if(solo_roster && end==first+2 && (menu_key==0xE5FF2D39 || menu_key==0x59FB5186)){
         kernel::W32(0x63F5E0,first);
@@ -585,8 +611,7 @@ X86_FUNC(sub_001B2C40) {
         kernel::R32(0x6C9308+(depth-1)*4)==0x598DF0);
     // Hide the title menu's random extra glint; the selection sparkle is the focus marker.
     if(ctx.ecx==0x5929D8 && top==0x598430){kernel::Return(ctx,0,6);return;}
-    // Fighter-screen courtyard (0x58E4F0, started by 0x43DE0) can keep running behind Main after Survival.
-    // Stop it like 0x1B29B0: inactive, clip 0, rewound.
+    // Stop the fighter-screen courtyard (0x58E4F0, from 0x43DE0) behind Main after Survival, like 0x1B29B0.
     if(ctx.ecx==0x58E4F0 && top==0x598430){
         constexpr uint32_t courtyard=0x58E4F0;
         kernel::W32(courtyard+0xC,0);kernel::W32(courtyard+0x2A0,0);
@@ -598,13 +623,13 @@ X86_FUNC(sub_001B2C40) {
     const uint32_t main_scene=main?kernel::R32(0x59843C):0;
     const uint32_t main_clip=main_scene?kernel::R32(main_scene+0x2A0):0;
     const bool survival_focus=top==0x598430 && openshao::survival::MedallionMenu() &&
-        !openshao::survival::SetupPopup();
+        !openshao::fighter_selection::SetupPopup();
     if(main && main_clip>=1 && main_clip<=6 &&
-       (!openshao::survival::Transitioning() || survival_focus) && !openshao::survival::SetupPopup())
+       (!openshao::survival::Transitioning() || survival_focus) && !openshao::fighter_selection::SetupPopup())
         kernel::W32(0x592D20+0xC,1);
     // No global selector on the fighter screen, its popup, a modal, or Main's Survival transitions.
     if(ctx.ecx==0x592D20 && (characters || (openshao::survival::Transitioning() && !survival_focus) ||
-       (top==0x598430 && (openshao::survival::SetupPopup() || openshao::survival::CharacterSelection())))){
+       (top==0x598430 && (openshao::fighter_selection::SetupPopup() || openshao::fighter_selection::CharacterSelection())))){
         kernel::Return(ctx,0,6);return;
     }
     // Background instances fill the viewport; titles, selectors and character art use the fitted canvas.
@@ -617,7 +642,7 @@ X86_FUNC(sub_001B2C40) {
     const uint32_t previous=openshao::aspect::animation_scene;
     openshao::aspect::animation_scene=ctx.ecx;
     if(backdrop)++openshao::aspect::backdrop_depth;
-    const bool custom_selector=ctx.ecx==0x592D20 && openshao::recomp::Active();
+    const bool custom_selector=ctx.ecx==0x592D20 && top==0x5985E8 && openshao::recomp::Active();
     const bool extra_selector=ctx.ecx==0x592D20 && !custom_selector &&
         top==0x598430 && kernel::R32(0x598468)<=openshao::menu::MainGameModeRow;
     const auto selector_y=ctx.esp+20,previous_y=kernel::R32(selector_y);
@@ -628,7 +653,19 @@ X86_FUNC(sub_001B2C40) {
         const unsigned row=kernel::R32(0x598468),step=kernel::R32(0x4DF4DC)+(kernel::R32(0x5CE864)==1?2:0);
         const auto visual=openshao::menu::MainVisualRow(row);
         const int y_adjust=int(-openshao::menu::MainMenuRise+openshao::menu::MainListAdjustment(visual));
-        kernel::W32(selector_y,previous_y+(visual-row%7)*step+y_adjust);
+        uint32_t adjusted_y=previous_y+(visual-row%7)*step+y_adjust;
+        static unsigned focused_row=UINT32_MAX;
+        static uint32_t focused_y=0;
+        const auto main_scene=kernel::R32(0x59843C);
+        const auto clip=main_scene?kernel::R32(main_scene+0x2A0):0;
+        const bool returning=openshao::recomp::MainReturning();
+        if(clip>=1 && clip<=6 && (!returning || (main_scene && *static_cast<uint8_t*>(kernel::HostPtr(main_scene+0x340)))))
+            {focused_row=row;focused_y=adjusted_y;}
+        // Keep the last focused row through both the Options-alias exit and its native return.
+        if(((openshao::recomp::Active() && clip==15) ||
+            (returning && (clip==16 || (clip>=1 && clip<=6)))) && row>=6 && row<=8 && focused_row==row)
+            adjusted_y=focused_y;
+        kernel::W32(selector_y,adjusted_y);
     }
     openshao::menu::BeginScene();
     __imp__sub_001B2C40(ctx,base);

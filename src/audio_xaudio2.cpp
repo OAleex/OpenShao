@@ -53,7 +53,10 @@ void StartOutput(std::function<void(float*,uint32_t)> render) {
     namespace output=openshao::audio::output;
     if (openshao::options.background) {
         const unsigned channels=output::SilentChannels();
-        output::StartSilent(std::move(render),channels);
+        output::StartSilent([render = std::move(render), channels](float* pcm, uint32_t frames) {
+            render(pcm, frames);
+            openshao::scorpion::audio_preview::Mix(pcm, frames, channels);
+        }, channels);
         LOGI("audio: silent diagnostic sink, %u channels (no physical device)",channels);
         return;
     }

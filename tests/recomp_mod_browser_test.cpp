@@ -1,5 +1,4 @@
-// Exercise the real browser worker and installer with a controlled download source.
-// The separate HTTPS check covers the production transport.
+// Real browser worker and installer with a controlled download source; HTTPS is tested separately.
 #include "mods/browser.h"
 #include "mods/http.h"
 #include "mods/sha256.h"

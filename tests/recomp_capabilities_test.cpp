@@ -34,6 +34,10 @@ template<class... Args> void Trace(const char* format,Args... args) {
 #include "capabilities_test.inl"
 void SyncRetailFrontendMode() {}
 namespace openshao::save_pages { void HoldAnswer(input::Pad&) {} }
+namespace openshao::campaign_finishers {
+int blocked_port = -1;
+bool BlocksTutorialWhite(unsigned player) { return int(player) == blocked_port; }
+}
 #include "input_state_test.inl"
 static bool Call(uint32_t handle,uint32_t destination,uint32_t expected) {
     X86Context c; W32(c.esp,0x87654321);W32(c.esp+4,handle);W32(c.esp+8,destination);
@@ -48,9 +52,12 @@ int main() {
     for(int i=5;i<13;++i) if(out[i]!=255) return 1;
     for(int i=13;i<21;i+=2) if(out[i]!=255 || out[i+1]!=127) return 1;
     for(int i=21;i<25;++i) if(out[i]!=255) return 1;
+    // Capabilities are read once per insertion; a pad without a motor yet must not disable vibration.
     openshao::controller::motor=false;
     if(!Call(123,0x1201,0)) return 1;
-    for(int i=21;i<25;++i) if(out[i]) return 1;
+    for(int i=21;i<25;++i) if(out[i]!=255) {
+        std::puts("FAIL: motors must stay advertised when the port has no rumble device yet");return 1;
+    }
     bytes.fill(0xCD); auto snapshot=bytes;
     if(!Call(999,0x1201,6) || std::memcmp(HostPtr(0x1200),snapshot.data()+0x200,27)) return 1;
     input::state.connected=false;
@@ -82,6 +89,20 @@ int main() {
         input::state.analog[button]=0;logs.clear();ReadInputState(state_context,state_args);
         if(HostPtr(0x1401)[6+button] || logs.size()!=1) return 1;
     }
+    openshao::campaign_finishers::blocked_port = 1;
+    g_handles[124] = {1};
+    const uint32_t partner_args[] = {124, 0x1401};
+    input::state.analog[4] = 127;
+    input::state.analog[5] = 255;
+    input::state.lx = 1200;
+    if (ReadInputState(state_context, partner_args) || HostPtr(0x1401)[11] ||
+        HostPtr(0x1401)[10] != 127 || g_handles[124].last.lx != 1200) {
+        std::puts("FAIL: only the blocked partner's White input should be removed");
+        return 1;
+    }
+    if (ReadInputState(state_context, state_args) || HostPtr(0x1401)[11] != 255) return 1;
+    openshao::campaign_finishers::blocked_port = -1;
+    if (ReadInputState(state_context, partner_args) || HostPtr(0x1401)[11] != 255) return 1;
     std::puts("PASS: packed 25-byte capabilities, four axes, motors, canaries and rejected handles/buffers");
     std::puts("PASS: guest B press/release, all analog button transitions, packet counts and delivery logs");
 }

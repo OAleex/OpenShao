@@ -27,3 +27,14 @@ X86_FUNC(sub_00123A50) {
     }
     __imp__sub_00123A50(ctx, base);
 }
+
+// Renderer setup (0x107350) zeroes the gamma brightness. Gameplay frames reapply it (0x114C45), but the legal
+// and loading screens before Press START do not, so they kept the default ramp. Apply the saved preference
+// through the native setter (0x123A50), which also uploads the gamma ramp at once.
+X86_EXTERN_FUNC(__imp__sub_00107350);
+X86_FUNC(sub_00107350) {
+    __imp__sub_00107350(ctx, base);
+    const auto saved = ctx;
+    kernel::CallGuest(ctx, 0x123A50, {kernel::R32(0x4DF5C0)});
+    ctx = saved;
+}

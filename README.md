@@ -35,8 +35,9 @@ game and its development.
 1. Download the [latest release](https://github.com/OAleex/OpenShao/releases/latest) for your system.
 2. Extract it to a folder.
 3. Open **OpenShao**.
-4. Choose your game: an ISO, XISO, ZIP, extracted folder or `default.xbe`.
-5. Select **Play**.
+4. Choose the launcher language. OpenShao selects your system language first.
+5. Choose your game: an ISO, XISO, ZIP, extracted folder or `default.xbe`.
+6. Select **Play**.
 
 Keep the game image or folder where it is. OpenShao reads it in place.
 
@@ -57,27 +58,51 @@ OpenShao migrates recognized data and saves from earlier releases to the current
 - Gameplay output up to 240 FPS, with simulation at 60 Hz and menus at 60 FPS.
 - Remappable controller, keyboard and mouse controls, including mouse camera support.
 - Local Ko-op with two controllers or keyboard and mouse plus one controller.
+- Eight-fighter campaign selection in single player and Ko-op, based on your unlocks.
 - Nine-level Survival Mode for single player or Ko-op, with the shared difficulty options.
 - In-game display, graphics, controls and audio settings through **Konfigure Recompilation**.
 - Mono, stereo and discrete PCM 5.1 audio on compatible devices.
 - Restored missing and unused dialogue using only the original recordings. Lines whose original
   trigger is lost are placed by their map, scene and script context; this is optional.
-- Optional enhancements, including Easy and Monk difficulties and cinematic bars, plus ten pages of save slots.
+- Photo Mode in the campaign and Survival Mode, with a free camera, filters and PNG photos.
+- Easy, Normal, Hard and Monk difficulties, optional cinematic bars, plus ten pages of save slots.
 - Separate text and voice languages, with an optional Brazilian Portuguese fan translation and dub as a language pack mod.
-- A launcher with [mods](https://github.com/OAleex/OpenShao-Mods), automatic updates and optional Discord Rich Presence.
+- A launcher in English, French, German, Spanish, Italian and Brazilian Portuguese, with [mods](https://github.com/OAleex/OpenShao-Mods), automatic updates and optional Discord Rich Presence.
 
-Dialogue restoration, difficulty options and cinematic bars are in **Enhancements** in the main menu.
+Dialogue restoration, cinematic bars and **Enhanced Camera** are in **Enhancements** in the main menu and directly below **Konfigure Recompilation** in the Select pause menu.
+Easy, Normal, Hard and Monk are always available when choosing a new campaign or Survival difficulty.
+Open **Enhanced Camera** to enable angle hold, set the camera speed or smooth the tracking view in solo play.
+Click the left stick (L3) or press the key below Esc to recenter. Change **Recenter Camera** under the controller or keyboard controls.
+
+Choose **Single Player** or **Ko-op** to select fighters for the campaign. Unlock Sub-Zero in the campaign to add Baraka and Kitana, or unlock Scorpion to add Johnny Cage and Reptile. Collect red koins for individual Versus unlocks.
+In **Single Player**, **Ko-op** or **Versus**, highlight a locked fighter and press **A** to see how to unlock them.
+Press **Start**, then switch to **Moves** to look up each extra fighter's basic attacks, specials, throws, combos and Fatality commands. These entries are for reference and have no XP upgrades or video previews.
+Long names and descriptions scale down to fit their panels.
+
+If every player uses an extra fighter, collect the Multality and Brutality coins to expand the Fatality meter, then clear the encounter to open the gate. In mixed Ko-op, the story fighter completes the finisher before the extra fighter receives the meter upgrade.
+
 Select **Game Mode > Survival Mode** to choose single player or Ko-op, select from your unlocked Versus fighters, and then choose the difficulty. Confirm the framed rules inside Level 1 with **A**.
 
 Survival Mode starts locked. Find its secret in Story Mode, then save your game. The unlock then applies to every save.
+
+Photo Mode works in the campaign and Survival Mode, in single player and Ko-op. It is not available in Versus or during Fatality scenes.
+Press **Select**, then choose **Photo Mode** or press **L3 + R3**. On the keyboard, use the keys bound to L3 and R3, or **P** if they have none.
+Move the camera with the left stick and turn it with the right stick. The triggers zoom, and **Black** and **White** raise and lower the camera.
+Press **A** to take a photo, **Y** to hide the controls and **B** to return to the pause menu.
+Press **X** for the options: filter, intensity, vignette, tilt, quality and camera range. **Reset Defaults** restores them.
+Photos are saved as PNG files in `Pictures\OpenShao` on Windows and `~/Pictures/OpenShao` on Linux.
+Press **F12** at any time to save a screenshot to the same folder.
 
 Version-specific changes are in the [release notes](https://github.com/OAleex/OpenShao/releases).
 
 ## Known issues
 
 - Some graphical issues remain. [Report a problem](#how-do-i-report-a-problem) with steps to reproduce it and a screenshot.
-- Mortal Kombat II and The Suffering demo do not run.
+- Mortal Kombat II does not run. Kontent does not list The Suffering 2 demo, which is a separate game.
 - Some effects can cause a brief pause on first use while shaders compile.
+- Above 60 FPS, bugs can occur. Most known ones are fixed in 0.6.0, but others may remain in animations,
+  after loading screens and in some interactions. If something goes wrong, set the frame rate to 60 FPS
+  and [report it](#how-do-i-report-a-problem).
 
 ## FAQ
 
@@ -94,6 +119,8 @@ Open **Files** in the launcher. Each folder has an **Open** button, and **Move**
 | --- | --- | --- |
 | Windows | `%LOCALAPPDATA%\OpenShao` | `Saved Games\OpenShao` |
 | Linux | `~/.local/share/OpenShao` | `~/.local/share/OpenShao/saves` |
+
+Photos and screenshots are in `Pictures\OpenShao` on Windows and `~/Pictures/OpenShao` on Linux.
 
 ### The game does not start after I changed the display settings
 
@@ -113,6 +140,7 @@ Open the launcher. Select **Files > Video > Restore**.
 | Camera | Mouse |
 | FPS display | F9 |
 | Release or capture the mouse | F10 |
+| Screenshot | F12 |
 
 Change them in **Konfigure Recompilation > Controls**. Each action has a primary and an alternate key.
 
@@ -134,6 +162,7 @@ For a controller without a mapping, put an SDL `gamecontrollerdb.txt` in the dat
 Open **Mods** in the launcher. Select **Install**.
 For a downloaded `.tar.xz`, use **Install from file**.
 Choose the language in **Konfigure Recompilation > Language**.
+The launcher language is separate. Change it in **Files > Language**.
 Mod authors can read the [mod guide](docs/MODS.md).
 
 ### How can I improve performance?
@@ -141,6 +170,7 @@ Mod authors can read the [mod guide](docs/MODS.md).
 Lower **Render scale** in **Konfigure Recompilation > Graphics**. Press F9 to see the frame rate.
 V-Sync targets the monitor's refresh rate. When V-Sync is disabled, choose a cap from 60 to 240 FPS.
 The achieved frame rate depends on your hardware and the scene.
+Above 60 FPS, some bugs can occur! See [Known issues](#known-issues).
 
 ### Why does OpenShao bring the open window forward instead of starting?
 
@@ -171,6 +201,9 @@ Only one copy can run at a time with the same data folder.
 6. Attach the reviewed report.
 
 For graphics or audio problems, choose that form on GitHub. **Report a bug** also copies your version and settings to the clipboard.
+
+You can include multiple modes, screens or locations in one report.
+Group the steps, expected behavior and actual behavior by mode, screen or location.
 
 Use the [new feature form](https://github.com/OAleex/OpenShao/issues/new?template=feature_request.yml) to request something new.
 Use the [quality-of-life form](https://github.com/OAleex/OpenShao/issues/new?template=quality_of_life.yml) to suggest an improvement to an existing feature.

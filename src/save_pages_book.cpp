@@ -57,6 +57,14 @@ uint32_t GlobalSlot(uint32_t page, uint32_t slot) {
     return (page - 1) * SlotsPerPage + slot;
 }
 
+std::string PageIndicator(std::string_view label,unsigned page,unsigned count,std::string_view group) {
+    std::string text="#   ";
+    text+=label;
+    text+=" "+std::to_string(page)+"/"+std::to_string(count);
+    if(!group.empty()){text+=" - ";text+=group;}
+    return text+"   $";
+}
+
 namespace { constexpr uint8_t Press = 0x80, Rest = 0x30; }
 
 bool ClearSlot(std::span<uint8_t> region, uint32_t slot) {

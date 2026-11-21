@@ -2,8 +2,7 @@
 
 
 def adapt_backend(text, replace_once):
-    # The two OpenShao backends share shader generation and forward-depth shadow
-    # comparisons. Keep that contract while adopting the SDK's transport changes.
+    # Keep the shared shader and forward-depth contract while adopting the SDK's transport changes.
     begin = text.index('// Depth is reversed in a 32 bit float buffer:')
     end = text.index('const char* kDepthHlsl', begin)
     text = text[:begin] + text[end:]

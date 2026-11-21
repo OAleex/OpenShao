@@ -1,5 +1,4 @@
-# Pinned shader compiler and headers shared by both desktop targets. The
-# system Vulkan loader is opened at runtime only when the renderer is used.
+# Pinned shader compiler and headers; the system Vulkan loader opens only when used.
 include_guard(GLOBAL)
 FetchContent_Declare(vulkan_headers GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG 2cd90f9d20df57eac214c148f3aed885372ddcfe)  # v1.4.321

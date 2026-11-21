@@ -48,8 +48,7 @@ int main() {
     check(!NeedsWriteInvalidation(0x1000,0,0,0,0),"swizzled texture is not invalidated");
     gpu::movie.linear=true;
 
-    // An MPEG macroblock can change outside the SDK's 64 sampled regions, leaving the
-    // LockRect signature equal; MarkDirty bumps the epoch to force the upload.
+    // A macroblock can change outside the 64 sampled regions; MarkDirty forces the upload.
     std::vector<uint8_t> a(size_t(640)*480*4,0x40), b=a;
     bool found=false;
     for (int y=16;y<450 && !found;y+=16) for (int x=16;x<610 && !found;x+=16) {

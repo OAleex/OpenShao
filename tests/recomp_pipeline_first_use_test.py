@@ -98,8 +98,7 @@ class PipelineFirstUseTest(unittest.TestCase):
         cls.temporary.cleanup()
 
     def run_renderer(self, source, backend, vulkan=False):
-        # Device creation and shader compilation are the external boundary. The
-        # cache/adoption branch and the draw's observation branch are real code.
+        # Device creation and shader compilation are stubbed; adoption and observation branches are real.
         import re
         flags = "\n".join(re.findall(r"    bool pso_\w+_ = false;[^\n]*", source))
         pipeline_type = "VkPipeline" if vulkan else "ID3D12PipelineState*"
@@ -189,7 +188,7 @@ int main() {{
     def test_shader_snapshots_retain_owned_definitions_without_copy_allocations(self):
         shader_hash = function((self.sdk / "runtime/gpu/shaders.cpp").read_text(), "uint64_t Hash(")
         program_hash = function((ROOT / "src/pipeline_precompile.cpp").read_text(), "uint64_t ProgramHash(")
-        snapshot = (ROOT / "src/pipeline_shader_snapshot.inl").read_text()
+        snapshot = function((ROOT / "src/pipeline_shader_snapshot.inl").read_text(), "bool SnapshotPipelineShaders(")
         source = r'''
 #include "pipeline_assets.h"
 #include <cstdlib>

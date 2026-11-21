@@ -33,10 +33,13 @@ Settings Read(const toml::table& table) {
     // Read prior keys so renaming the preference preserves the user's existing choice.
     s.bloom_effect = table["bloom_effect"].value_or(table["blur"].value_or(table["bloom"].value_or(s.bloom_effect)));
     s.show_fps = table["show_fps"].value_or(s.show_fps);
+    s.screenshot_notifications = table["screenshot_notifications"].value_or(s.screenshot_notifications);
     s.scorpion_unfiltered = table["enhancements"]["scorpion_unfiltered"].value_or(s.scorpion_unfiltered);
     s.restore_dialogue = table["enhancements"]["restore_dialogue"].value_or(s.restore_dialogue);
     s.cinematic_bars = table["enhancements"]["cinematic_bars"].value_or(s.cinematic_bars);
-    s.improved_difficulty = table["enhancements"]["improved_difficulty"].value_or(s.improved_difficulty);
+    s.hold_camera_angle = table["enhancements"]["hold_camera_angle"].value_or(s.hold_camera_angle);
+    s.smooth_camera_framing = table["enhancements"]["smooth_camera_framing"].value_or(s.smooth_camera_framing);
+    s.camera_speed = std::clamp(table["enhancements"]["camera_speed"].value_or(s.camera_speed), CameraSpeedMin, CameraSpeedMax);
     const auto g = table["game"];
     s.original_override = g["override_original"].value_or(s.original_override);
     s.camera_reverse = g["camera_reverse"].value_or(s.camera_reverse);
@@ -53,6 +56,13 @@ Settings Read(const toml::table& table) {
     for (size_t i = 0; i < s.bindings.size(); ++i) s.bindings[i] = c["bindings"][binding_keys[i]].value_or(s.bindings[i]);
     for(size_t i=0;i<s.keyboard.keys.size();++i)for(unsigned j=0;j<2;++j)
         s.keyboard.keys[i][j]=table["keyboard"]["bindings"][binding_keys[i]][j].value_or(s.keyboard.keys[i][j]);
+    const auto recenter=bindings::RecenterCamera;
+    const auto* recenter_key=binding_keys[recenter];
+    if(!c["bindings"][recenter_key] && !bindings::ControllerConflicts(s.bindings,recenter,s.bindings[recenter]).empty())
+        s.bindings[recenter]="none";
+    if(!table["keyboard"]["bindings"][recenter_key] &&
+       !bindings::KeyboardConflicts(s.keyboard,recenter,0,s.keyboard.keys[recenter][0]).empty())
+        s.keyboard.keys[recenter][0]=0;
     const auto m = table["mouse"];
     s.mouse.sensitivity = m["sensitivity"].value_or(s.mouse.sensitivity);
     s.mouse.invert_y = m["invert_y"].value_or(s.mouse.invert_y);
@@ -77,11 +87,15 @@ toml::table Merge(toml::table table, const Settings& s) {
     table.insert_or_assign("vsync", s.vsync); table.erase("bloom"); table.erase("blur");
     table.insert_or_assign("bloom_effect", s.bloom_effect);
     table.insert_or_assign("show_fps", s.show_fps);
+    table.insert_or_assign("screenshot_notifications", s.screenshot_notifications);
     auto enhancements = table["enhancements"].as_table() ? *table["enhancements"].as_table() : toml::table{};
     enhancements.insert_or_assign("scorpion_unfiltered", s.scorpion_unfiltered);
     enhancements.insert_or_assign("restore_dialogue", s.restore_dialogue);
     enhancements.insert_or_assign("cinematic_bars", s.cinematic_bars);
-    enhancements.insert_or_assign("improved_difficulty", s.improved_difficulty);
+    enhancements.erase("improved_difficulty");
+    enhancements.insert_or_assign("hold_camera_angle", s.hold_camera_angle);
+    enhancements.insert_or_assign("smooth_camera_framing", s.smooth_camera_framing);
+    enhancements.insert_or_assign("camera_speed", s.camera_speed);
     enhancements.erase("vertical_shadows");
     table.insert_or_assign("enhancements", enhancements);
     toml::table c, b;
@@ -116,6 +130,7 @@ bool Validate(const Settings& s, std::string& error) {
              (s.width && (s.width < 320 || s.height < 240))) error = "Set both resolution fields to zero, or select a resolution from 320 x 240 to 16384 x 16384.";
     else if (s.render_percent < 25 || s.render_percent > 400) error = "Render scale must be from 25 to 400 percent.";
     else if (!frames::SupportedRate(s.fps_cap)) error = "Select 60, 120, 144, 165 or 240 FPS.";
+    else if (s.camera_speed < CameraSpeedMin || s.camera_speed > CameraSpeedMax) error = "Camera speed must be from 50 to 200 percent.";
     else if (s.aniso != 0 && s.aniso != 2 && s.aniso != 4 && s.aniso != 8 && s.aniso != 16) error = "Select an anisotropic filtering level.";
     else if (s.master_volume < 0 || s.master_volume > 100) error = "Master volume must be from 0 to 100 percent.";
     else if (s.mouse.motion!="right_stick" && s.mouse.motion!="left_stick" && s.mouse.motion!="none") error="Select a mouse movement target.";

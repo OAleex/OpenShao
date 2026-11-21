@@ -25,6 +25,7 @@
 #include "runtime_paths.h"
 #include "support_report.h"
 #include "restart.h"
+#include "difficulty.h"
 #include "launcher_settings.h"
 #include <cerrno>
 #include <limits>
@@ -218,6 +219,7 @@ bool OpenSaveDirectory(const std::wstring& name, std::filesystem::path& result, 
             LOGR("Save directory: %s%s", result.string().c_str(), migrate ? " (configured save location)" : " (explicit/portable/isolated)");
 #endif
             restart::SaveDirectory(result);
+            difficulty::ConvertLegacyProgress();
             return true;
         }
     } catch (const std::exception& e) { error = e.what(); }

@@ -1,6 +1,6 @@
 #include "ed_nexus.h"
 #include "ed_nexus_progress.h"
-#include "survival_mode.h"
+#include "fighter_selection.h"
 #include "kernel/kernel.h"
 #include "core/log.h"
 
@@ -13,10 +13,12 @@ bool prepared = false;
 unsigned view_depth = 0;
 Progress outer_progress{};
 
-bool SurvivalFighterPopup(uint32_t object) {
+bool FighterPopup(uint32_t object) {
     if(object!=0x598DF0)return false;
-    const bool difficulty_popup=openshao::survival::SetupPopup();
-    const bool character_selection=openshao::survival::CharacterSelection();
+    if(openshao::fighter_selection::HintActive())return true;
+    // Also frozen after Accept, while the roster stays on screen until the game starts.
+    const bool difficulty_popup=openshao::fighter_selection::RosterBackdrop();
+    const bool character_selection=openshao::fighter_selection::CharacterSelection();
     if(!difficulty_popup && !character_selection)return false;
     const auto depth=kernel::R32(0x6C9308);
     if(!depth || depth>=16)return false;
@@ -29,9 +31,9 @@ bool SurvivalFighterPopup(uint32_t object) {
 // Keep the Versus portraits (mode 2) while the fighter screen or its popup is open.
 void RestoreVersusPresentation(uint32_t mode) {
     const auto depth=kernel::R32(0x6C9308);
-    const bool still_selecting=openshao::survival::CharacterSelection() && depth<16 &&
+    const bool still_selecting=openshao::fighter_selection::CharacterSelection() && depth<16 &&
         kernel::R32(0x6C9308+depth*4)==0x598DF0;
-    kernel::W32(0x598468,(still_selecting || openshao::survival::SetupPopup())?2:mode);
+    kernel::W32(0x598468,(still_selecting || openshao::fighter_selection::SetupPopup())?2:mode);
 }
 
 Progress ReadProgress() {
@@ -104,8 +106,8 @@ X86_EXTERN_FUNC(__imp__sub_000127BB);
 X86_FUNC(sub_000127BB) {
     ScopedUnlockedProgress view(ctx);
     __imp__sub_000127BB(ctx,base);
-    // Survival Solo: keep the roster but neutralize the P2 highlight.
-    if(!openshao::survival::CharacterSelection() || openshao::survival::PlayerMode()!=0)return;
+    // Shared Solo selection: keep the roster but neutralize the P2 highlight.
+    if(!openshao::fighter_selection::CharacterSelection() || openshao::fighter_selection::PlayerMode()!=0)return;
     constexpr uint32_t Character=0x598DF0;
     const auto p1=kernel::R32(Character+0x3C),p2=kernel::R32(Character+0x40);
     if(p1>=8 || p2>=8)return;
@@ -123,27 +125,56 @@ X86_FUNC(sub_000127BB) {
 // Both selector callbacks must process the real campaign mode.
 X86_EXTERN_FUNC(__imp__sub_000159E3);
 X86_FUNC(sub_000159E3) {
-    // Versus could advance to Level Select under Survival's difficulty popup.
-    if(SurvivalFighterPopup(ctx.ecx)){kernel::Return(ctx,0,0);return;}
+    // Versus could advance to Level Select under the shared difficulty popup.
+    if(FighterPopup(ctx.ecx)){kernel::Return(ctx,0,0);return;}
     ScopedUnlockedProgress view(ctx);
-    const bool character=openshao::survival::CharacterSelection();
-    const auto mode=character?openshao::survival::PlayerMode():0;
+    const bool character=openshao::fighter_selection::CharacterSelection();
+    const auto mode=character?openshao::fighter_selection::PlayerMode():0;
     if(character)kernel::W32(0x598468,mode);
     __imp__sub_000159E3(ctx,base);
     if(character)RestoreVersusPresentation(mode);
 }
 
 X86_EXTERN_FUNC(__imp__sub_00015010);
+X86_EXTERN_FUNC(__imp__sub_00011703);
+X86_FUNC(sub_00011703) {
+    if(ctx.ecx!=0x598DF0){__imp__sub_00011703(ctx,base);return;}
+    // Locked fighters use the native cursor clips while focused and the silhouette clip at rest.
+    std::array<uint32_t,8> states{};
+    unsigned locked=0;
+    for(unsigned slot=0;slot<states.size();++slot){
+        if(!openshao::fighter_selection::LockedPortrait(slot))continue;
+        const auto address=0x598E38+slot*12;
+        states[slot]=kernel::R32(address);
+        if(states[slot]<2 || states[slot]>4)kernel::W32(address,0);
+        locked|=1u<<slot;
+    }
+    __imp__sub_00011703(ctx,base);
+    for(unsigned slot=0;slot<states.size();++slot)
+        if(locked&(1u<<slot))kernel::W32(0x598E38+slot*12,states[slot]);
+}
 X86_FUNC(sub_00015010) {
-    if(SurvivalFighterPopup(ctx.ecx)){kernel::Return(ctx,0,2);return;}
+    if(FighterPopup(ctx.ecx)){kernel::Return(ctx,0,2);return;}
+    if(openshao::fighter_selection::LockedInput(ctx))return;
     ScopedUnlockedProgress view(ctx);
-    const bool character=openshao::survival::CharacterSelection();
-    const auto mode=character?openshao::survival::PlayerMode():0;
-    const bool expand=character && mode==0;
+    const bool character=openshao::fighter_selection::CharacterSelection();
+    const auto mode=character?openshao::fighter_selection::PlayerMode():0;
+    unsigned locked=0;
+    if(ctx.ecx==0x598DF0)for(unsigned slot=0;slot<8;++slot){
+        if(!openshao::fighter_selection::LockedPortrait(slot))continue;
+        const auto address=0x598E38+slot*12;
+        if(!kernel::R32(address))kernel::W32(address,1);
+        locked|=1u<<slot;
+    }
+    const bool expand=locked || (character && mode==0);
     const auto previous=expand?kernel::R32(0x58E4D0):0;
     if(character)kernel::W32(0x598468,mode);
     if(expand)kernel::W32(0x58E4D0,3);
     __imp__sub_00015010(ctx,base);
+    for(unsigned slot=0;slot<8;++slot){
+        const auto address=0x598E38+slot*12;
+        if((locked&(1u<<slot)) && kernel::R32(address)==1)kernel::W32(address,0);
+    }
     if(expand)kernel::W32(0x58E4D0,previous);
     if(character)RestoreVersusPresentation(mode);
 }

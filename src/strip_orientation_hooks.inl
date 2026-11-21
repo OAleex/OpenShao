@@ -2,6 +2,7 @@
 #include <bit>
 #include <cmath>
 #include <mutex>
+#include "async_load_guard.h"
 
 namespace {
 // One render group per source identity; rebind on reconstruction, clear reused owners.
@@ -55,6 +56,20 @@ X86_FUNC(sub_00133110) {
     }
 }
 
+X86_EXTERN_FUNC(__imp__sub_001050A0);
+X86_FUNC(sub_001050A0) {
+    const uint32_t caller = kernel::R32(ctx.esp);
+    if (caller != 0x17AB3A) {
+        __imp__sub_001050A0(ctx, base);
+        return;
+    }
+    const uint32_t requested = kernel::R32(ctx.esp + 8);
+    __imp__sub_001050A0(ctx, base);
+    const uint32_t record = kernel::R32(0x695310);
+    if (!openshao::async_load::CommittedSpan(ctx.eax, requested))
+        openshao::async_load::Stop("invalid buffer returned by original memory allocator", record, requested, ctx.eax);
+}
+
 X86_EXTERN_FUNC(__imp__sub_0017AA40);
 X86_EXTERN_FUNC(sub_0017A6B0);
 X86_FUNC(sub_0017AA40) {
@@ -65,6 +80,12 @@ X86_FUNC(sub_0017AA40) {
     static thread_local openshao::pipelines::LoadGate pipeline_gate;
     static thread_local uint32_t waiting_record = 0;
     const uint32_t load_record = kernel::R32(0x695310);
+    if (kernel::R32(0x695304) == 2 && openshao::async_load::CommittedSpan(load_record, 0x34) &&
+        kernel::R32(load_record + 0x30)) {
+        const uint32_t output = kernel::R32(load_record + 8), bytes = kernel::R32(load_record + 0x10);
+        if (!openshao::async_load::CommittedSpan(output, bytes))
+            openshao::async_load::Stop("invalid output buffer before EWDF decompression", load_record, bytes, output);
+    }
     if (pipeline_wait) {
         if (load_record == waiting_record && parsing && openshao::pipelines::PipelineLoadPending()) {
             // The parser already completed. Keep servicing the loading presentation.
@@ -97,6 +118,7 @@ X86_FUNC(sub_0017AA40) {
     }
     __imp__sub_0017AA40(ctx, base);
     if (parsing && kernel::R32(0x695304) == 4) {
+        openshao::pipelines::PrepareCatalogPipelines(room);
         openshao::pipelines::SealPipelineLoad();
         if (openshao::pipelines::PipelineLoadPending()) {
             pipeline_wait = true;

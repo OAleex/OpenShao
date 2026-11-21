@@ -9,6 +9,7 @@
 #include <cmath>
 #include <mutex>
 #include "controller.h"
+#include "campaign_finishers.h"
 #include "launcher_settings.h"
 #include "recomp_input.h"
 #include "recomp_settings.h"
@@ -25,6 +26,7 @@ namespace {
 struct Slot {
     SDL_Gamepad* device=nullptr;
     input::Pad state{};
+    bool camera_recenter=false;
     bool rumble=false, motor_warning=false;
     uint16_t desired[2]{}, sent[2]{};
     uint64_t refreshed=0;
@@ -133,6 +135,7 @@ void Configure(const launcher::Settings& settings) {
     std::lock_guard guard(lock);
     deadzone=float(settings.deadzone);rumble_enabled=settings.rumble;controller_bindings=settings.bindings;
     for(auto& source:controller_bindings)source=openshao::bindings::CanonicalSource(std::move(source));
+    for(auto& s:slots)s.camera_recenter=false;
     if(!rumble_enabled)for(auto& s:slots)s.desired[0]=s.desired[1]=0;
 }
 void Load(const void* raw) {
@@ -147,6 +150,10 @@ void Load(const void* raw) {
         if(openshao::bindings::ValidSource(*name))controller_bindings[i]=openshao::bindings::CanonicalSource(*name);
         else LOGW("input: ignored unknown binding %s=%s",openshao::bindings::keys[i],name->c_str());
     }
+    constexpr auto recenter=bindings::RecenterCamera;
+    if(!c["bindings"][bindings::keys[recenter]] &&
+       !bindings::ControllerConflicts(controller_bindings,recenter,controller_bindings[recenter]).empty())
+        controller_bindings[recenter]="none";
 }
 void Save(void* raw) {
     auto& table=*static_cast<toml::table*>(raw);
@@ -162,6 +169,7 @@ void SetFocused(bool value) {
     focused=value;
     if (!focused) for (auto& s:slots) {
         bool connected=s.state.connected; s.state={}; s.state.connected=connected;
+        s.camera_recenter=false;
         s.desired[0]=s.desired[1]=0;
     }
 }
@@ -173,6 +181,10 @@ bool HasRumble(int port) {
     return StandbyPort(port) && app::kGame.pad && slots[0].rumble;
 }
 bool RumbleEnabled(){std::lock_guard guard(lock);return rumble_enabled;}
+bool CameraRecenterDown() {
+    std::lock_guard guard(lock);
+    return !multiplayer && slots[0].camera_recenter;
+}
 void Update() {
     if (!Enabled() || !initialized || GetCurrentThreadId()!=owner_thread) return;
     SDL_PumpEvents();
@@ -203,13 +215,14 @@ void Update() {
     uint32_t raw_buttons=0;
     for (auto& s:slots) {
         const auto previous=s.state;s.state={}; auto* pad=s.device;
+        s.camera_recenter=false;
         if (!pad || !SDL_GamepadConnected(pad)) continue;
         auto& p=s.state; p.connected=true;
         if (focused) {
             for(int button=0;button<SDL_GAMEPAD_BUTTON_COUNT;++button)if(SDL_GetGamepadButton(pad,SDL_GamepadButton(button))) {
                 if(raw_source.empty())if(const auto* name=SDL_GetGamepadStringForButton(SDL_GamepadButton(button)))raw_source=name;
                 switch(button) {
-                case SDL_GAMEPAD_BUTTON_SOUTH:raw_buttons|=0x40;break;case SDL_GAMEPAD_BUTTON_EAST:raw_buttons|=0x20;break;
+                case SDL_GAMEPAD_BUTTON_SOUTH:raw_buttons|=0x40;break;case SDL_GAMEPAD_BUTTON_EAST:raw_buttons|=recomp::raw::PhysicalB;break;
                 case SDL_GAMEPAD_BUTTON_DPAD_UP:raw_buttons|=0x1000;break;case SDL_GAMEPAD_BUTTON_DPAD_DOWN:raw_buttons|=0x4000;break;
                 case SDL_GAMEPAD_BUTTON_DPAD_LEFT:raw_buttons|=0x8000;break;case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:raw_buttons|=0x2000;break;
                 }
@@ -244,6 +257,7 @@ void Update() {
                 }
             }
             openshao::bindings::Apply(p,values);
+            s.camera_recenter=values[bindings::RecenterCamera]>=.5f;
             bool changed=(p.buttons&~previous.buttons)!=0;
             for (int i=0;i<8;++i) changed|=p.analog[i]>previous.analog[i];
             changed|=std::abs(int(p.lx)-previous.lx)>4000 || std::abs(int(p.ly)-previous.ly)>4000 ||
@@ -374,6 +388,7 @@ Pad Poll(int port) {
         Pad keyboard{};app::kGame.pad(0,keyboard);p.connected=keyboard.connected;
     }
     if(p.connected)p.buttons=openshao::survival::PauseButtons(p.buttons,openshao::survival::ActiveSession());
+    if(p.connected)p.buttons=openshao::campaign_finishers::PauseButtons(p.buttons,openshao::campaign_finishers::PauseLocked());
     return p;
 }
 void Rumble(int port,uint16_t left,uint16_t right) {

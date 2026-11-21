@@ -3,16 +3,29 @@
 #include <array>
 #include <bit>
 #include <iostream>
+#include <cstdlib>
 
 static std::array<uint8_t, 8 << 20> memory{};
 static uint32_t preview;
-namespace kernel { uint8_t* g_base = memory.data(); }
+static unsigned setter_calls = 0;
+namespace kernel {
+uint8_t* g_base = memory.data();
+uint32_t CallGuest(X86Context& ctx, uint32_t fn, const uint32_t* args, size_t count) {
+    if (fn != 0x123A50 || count != 1) std::abort();
+    ++setter_calls;
+    W32(0x632BE8, std::bit_cast<uint32_t>(std::bit_cast<float>(args[0]) * .25f));
+    ctx.esp = 0xBAD; ctx.eax = 0xBAD;
+    return 0;
+}
+}
 namespace logx { void Write(Level, const char*, ...) {} }
 X86_FUNC(__imp__sub_00123A50) {
     preview = kernel::R32(ctx.esp + 4);
     kernel::Return(ctx, 123, 0);
 }
 X86_EXTERN_FUNC(sub_00123A50);
+X86_FUNC(__imp__sub_00107350) { kernel::W32(0x632BE8, 0); kernel::Return(ctx, 0, 0); }
+X86_EXTERN_FUNC(sub_00107350);
 
 int main() {
     unsigned failures = 0;
@@ -26,6 +39,15 @@ int main() {
         openshao::brightness::Initialize(percent);
         check(kernel::R32(0x4DF5C0) == std::bit_cast<uint32_t>(percent / 100.f),
               "Startup must retain the configured brightness before the native profile loads, including zero");
+    }
+    for (const auto value : {0.f, .23f, .5f, 1.f}) {
+        kernel::W32(0x4DF5C0, std::bit_cast<uint32_t>(value));
+        X86Context setup{};setup.esp = 0x1000;
+        const auto calls = setter_calls;
+        sub_00107350(setup, memory.data());
+        check(setter_calls == calls + 1 && kernel::G<float>(0x632BE8) == value * .25f,
+              "Renderer setup must apply the saved brightness through the native setter, including zero");
+        check(setup.esp == 0x1004 && setup.eax == 0, "Applying brightness at renderer setup must preserve the native context");
     }
     const auto saved = std::bit_cast<uint32_t>(.23f);
     kernel::W32(0x4DF5C0, saved);

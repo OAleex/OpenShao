@@ -22,7 +22,8 @@ Storage and game-file errors describe PC files and folders. The storage prompt o
 
 The native loader copies the serialized JSON text into its own allocations. Source resources and installed packs remain unchanged.
 System messages allow up to 255 encoded bytes. Menu captions retain their 95-byte limit.
-SELECT settings row labels use at most 24 native-encoded bytes to fit the original pause frame.
+SELECT settings retain complete captions and share their keys with the main settings.
+The pause frame follows native font measurements. Oversized rows shrink together to fit the canvas.
 
 Retail captions follow the corresponding localized menu artwork.
 Portuguese captions follow the installed community translation, with standard Unicode accents in the catalog.
@@ -47,20 +48,29 @@ restores the Exit row. Confirming requests normal shutdown.
 
 ## Gameplay pause menus
 
-SELECT retains the original Continue, Options and Exit Game actions. It also offers **Konfigure Recompilation** and **Exit to Desktop**.
+SELECT retains the original Continue, Options and Exit Game actions. It also offers **Konfigure Recompilation**, **Enhancements** and **Exit to Desktop**.
+Enhancements follows Konfigure Recompilation and uses the same captions as the main menu.
 The pause settings use the same embedded JSON catalog and original menu font as the main-menu settings.
 Their categories follow the main menu's order: **Display**, **Graphics**, **Controls** and **Audio**.
 
 Controls offers controller and primary/alternate keyboard remapping, mouse settings, dead zone and vibration.
+Use the left and right triggers to switch pages in the controller, keyboard and mouse lists. The footer shows the current page with the same trigger icons as Save Game and Load Game.
+Binding names and assigned inputs use the same captions as the main-menu settings.
 Graphics follows the main menu's order: render scale, anisotropic filtering, V-Sync, Bloom Effect, Show FPS and frame rate.
 With V-Sync enabled, frame rate shows the display target and retains the stored software cap for later use.
 Display offers display mode, resolution and aspect ratio. Audio offers master volume.
 
-Pause settings apply and save immediately.
-They do not use the main-menu draft's Save Changes and Discard and Return actions.
+Pause settings save edits in place. Display keeps pending edits behind Apply Changes and Discard Changes.
 Controller and keyboard capture reject conflicting bindings. Mouse buttons and wheel mappings cycle through available actions.
-Display mode, resolution and aspect ratio preview changes for 15 seconds and revert unless confirmed.
-Language and Enhancements are only accessible from the main menu.
+Applying display mode, resolution or aspect ratio starts a 15-second preview and reverts unless confirmed.
+Language settings are accessible from the main menu.
+Enhancements includes Scorpion Unfiltered, Restore Lost Dialogue, Cinematic Bars, Improved Difficulties and Enhanced Camera.
+B returns to the parent menu. During controller remapping in either menu, tap B to assign it or hold B to cancel the capture and keep the previous binding.
+The B hint reads Back on inner pages and Exit at the Select root.
+In Konfigure Recompilation and Enhancements, Left and Right change values. A opens pages, starts remapping or confirms actions.
+Both settings menus show Adjust only when the selected row accepts Left and Right.
+Navigable settings pages show the native Up/Down navigation hint. In the main menu, input capture and display previews hide it while navigation is unavailable.
+Main-menu footer groups share one caption scale and fit their localized text into the available width without shortening strings.
 
 The pause Exit to Desktop prompt defaults to No, warns about unsaved progress and only requests shutdown after confirming Yes.
 Leaving the pause settings returns to the original pause menu without discarding previously saved changes.

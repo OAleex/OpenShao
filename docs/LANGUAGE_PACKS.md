@@ -1,7 +1,7 @@
 # Language packs
 
 This guide is for authors of LanguagePack PT-BR, the unofficial Brazilian Portuguese fan translation mod.
-Players install it in the launcher's **Mods** page. To offer another language, see [Offer a fan translation mod](TRANSLATIONS.md).
+Players install it in the launcher's **Mods** page. To offer translation help, see [Help translate OpenShao](TRANSLATIONS.md).
 See [Mods](MODS.md) for other languages and the general package format.
 
 Keep the original game, translation sources and prepared replacement files local.

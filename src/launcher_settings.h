@@ -10,6 +10,7 @@
 
 namespace openshao::launcher {
 inline constexpr int FrameRate=60;
+inline constexpr int CameraSpeedMin=50, CameraSpeedMax=200, CameraSpeedStep=10;
 inline constexpr std::array<const char*, 6> languages{"en", "fr", "de", "es", "it", "pt-BR"};
 inline constexpr std::array<const char*,6> voice_languages{"en","fr","de","es","it","pt-BR"};
 inline constexpr auto binding_keys = bindings::keys;
@@ -26,16 +27,19 @@ struct Settings {
     int master_volume = 100;
     double deadzone = .15;
     bool vsync = true, bloom_effect = false, show_fps = false, rumble = true;
+    bool screenshot_notifications = true; // Top-right notice after a photo or an F12 screenshot.
     bool scorpion_unfiltered = false;
     bool restore_dialogue = true;
     bool cinematic_bars = false;
-    bool improved_difficulty = true;
+    bool hold_camera_angle = false;
+    bool smooth_camera_framing = false;
+    int camera_speed = 100;
     mouse::Settings mouse;
     bool original_override = false, camera_reverse = false;
     int music_volume = 90, effects_volume = 90, speech_volume = 90;
     int audio_output = 1; // Mono / Stereo / Surround in Konfigure Recompilation.
     int brightness = brightness::DefaultPercent, versus_rounds = 3, versus_time = 120;
-    std::array<std::string,24> bindings = bindings::controller_defaults;
+    bindings::Controller bindings = bindings::controller_defaults;
     bindings::Keyboard keyboard;
     bool operator==(const Settings&) const = default;
 };

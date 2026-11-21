@@ -2,6 +2,7 @@
 #include "../src/recomp_settings.cpp"
 #include <array>
 #include <iostream>
+#include <tuple>
 
 static std::array<uint8_t,8<<20> memory{};
 static openshao::launcher::Settings settings;
@@ -12,7 +13,18 @@ static bool setup_popup=false;
 static bool survival_overlay=false;
 static bool survival_players=false;
 static unsigned survival_overlay_draws=0;
-namespace openshao::survival {void Open(X86Context&,uint8_t*){++survival_opens;} bool MainMenu(X86Context&){return false;} bool SetupPopup(){return setup_popup;}}
+static bool campaign_available=false,survival_input_consumed=false;
+static unsigned campaign_entries=0;
+namespace openshao::survival {void Open(X86Context&,uint8_t*){++survival_opens;} bool MainMenu(X86Context&){return false;}}
+namespace openshao::fighter_selection {
+uint32_t MainClip(uint32_t clip){return clip;}
+bool SetupPopup(){return setup_popup;}
+bool ReturnToMain(X86Context&,uint8_t*){return false;}
+bool CampaignInput(X86Context& ctx,uint8_t*){
+    if(!campaign_available || kernel::R32(0x598468)>1)return false;
+    ++campaign_entries;kernel::Return(ctx,0,2);return true;
+}
+}
 namespace openshao::survival {
 bool MedallionMenu(){return survival_overlay;}
 bool OverlayShown(){return survival_overlay;}
@@ -20,7 +32,7 @@ float OrnamentExtension(){return survival_players?-128.f:-156.f;}
 bool Transitioning(){return false;}
 bool HideMainCaption(std::string_view id){return survival_overlay && id.starts_with("main.") && id!="main.single_player";}
 void DrawMenu(X86Context&,unsigned){++survival_overlay_draws;}
-bool MenuInput(X86Context&,uint8_t*,bool){return false;}
+bool MenuInput(X86Context&,uint8_t*,bool){return survival_input_consumed;}
 }
 static bool persist_fails=false,prepare_fails=false,commit_fails=false;
 static unsigned persisted=0,prepared=0,committed=0,cancelled=0;
@@ -82,6 +94,9 @@ float NativeLabel(X86Context&,float x,float y,std::string_view text,float,unsign
     captions.push_back({std::string(text),x,y,alpha});return 100;
 }
 void NativeButton(X86Context&,int,int,Button){}
+void NativeFooter(X86Context& ctx,int y,std::span<const FooterHint> hints) {
+    for(const auto& hint:hints)NativeLabel(ctx,70,float(y),hint.text,.9f,254,false,true,550);
+}
 void TitleWidth(float){}
 unsigned MainHighlight(uint32_t state,unsigned selected){return state>=1 && state<=6?state-1:std::min(selected,5u);}
 void MainRowAnchor(uint32_t,uint32_t){}
@@ -125,6 +140,23 @@ int main() {
     kernel::W32(0x59843C,0x5000);kernel::W32(0x5000+0x2A0,6);kernel::W32(0x5000+0x33C,77);
     kernel::W32(0x598468,5);kernel::W32(ctx.esp+4,0x4000);kernel::W32(ctx.esp+8,0x4004);
     kernel::W32(0x6CA3C0,0x100100);kernel::W32(0x6CA3B8,0x100200);kernel::W32(0x6CA3BC,0x100300);
+    {
+        campaign_available=true;kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
+        kernel::W32(0x598468,0);kernel::W32(0x4004,0x40);
+        kernel::W32(0x5000+0x2E4,3);
+        check(!MainInput(ctx,memory.data()) && campaign_entries==0,"Main animation guards run before campaign interception");
+        kernel::W32(0x5000+0x2E4,0);survival_input_consumed=true;
+        ctx.esp=0x3000;check(MainInput(ctx,memory.data()) && campaign_entries==0,"Survival overlay guards run before campaign interception");
+        survival_input_consumed=false;
+        for(unsigned row:{0u,1u}){
+            ctx.esp=0x3000;kernel::W32(0x598468,row);
+            check(MainInput(ctx,memory.data()) && ctx.esp==0x300C && campaign_entries==row+1,
+                  "settled original campaign rows route to the shared selector before native Main accepts");
+        }
+        ctx.esp=0x3000;kernel::W32(0x598468,2);
+        check(!MainInput(ctx,memory.data()) && campaign_entries==2,"ordinary Versus retains its original Main callback");
+        campaign_available=false;ctx.esp=0x3000;kernel::W32(0x598468,5);kernel::W32(0x4004,0);
+    }
     survival_overlay=true;kernel::W32(0x59847C,0x5000);
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     Quad(90,163,256,60);
@@ -170,8 +202,7 @@ int main() {
     check(!Graphic(ctx,0x5000,0x4599E8C7,0,2) && kernel::R32(0x63F5E0)==2 &&
           std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-survival_upper)<.01f,
           "Both short Survival pages retain the identical retail upper medallion placement");
-    // The small bronze bitmap is not part of the complete carved emblem. Only
-    // the native white glint marks the focused row on either short page.
+    // The bronze bitmap is not part of the emblem; only the white glint marks the focused row.
     for(unsigned row=0;row<4;++row) {
         kernel::W32(0x598468,row);
         Quad(106,23.f+6.f*row,48,60);
@@ -326,6 +357,60 @@ int main() {
                   "Main-menu movie glints must stay hidden on every row, including native rows 0-5");
         }
     }
+    for(unsigned row:{6u,7u,8u}) {
+        main_gold_anchor={};active=false;extra_selected=true;return_row=row;
+        kernel::W32(0x598468,row);kernel::W32(0x5000+0x2A0,6);
+        Quad(52,328,64,64);
+        Graphic(ctx,0x5000,0x59FB5186,0,2);
+        const float focused_top=std::bit_cast<float>(kernel::R32(0x63F5E4+0x14));
+        check(main_gold_anchor.row==row && std::abs(main_gold_anchor.top-focused_top)<.01f,
+              "Each synthetic row must remember its actual focused gold pointer position");
+        active=true;kernel::W32(0x5000+0x2A0,15);
+        for(float native_top:{328.f,280.f,220.f,188.f}) {
+            Quad(52,native_top,64,64,127);
+            check(!Graphic(ctx,0x5000,0x59FB5186,0,2) && kernel::R32(0x63F5E0)==2 &&
+                  std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-focused_top)<.01f &&
+                  std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x10))-52.f)<.01f &&
+                  kernel::R32(0x63F5E4+0x58)>>24==127,
+                  "Synthetic Main exit must hold the gold marker on its selected row as the native Options quad moves, preserving x and alpha");
+        }
+        kernel::W32(0x6C930C,0x5985E8);
+        Quad(52,188,64,64,127);
+        check(Graphic(ctx,0x5000,0x59FB5186,0,2) && main_gold_anchor.row==row,
+              "Opening custom Options must retain Main's marker anchor for the return trip");
+        kernel::W32(0x6C930C,0x598430);main_return_pending=true;closing=true;
+        kernel::W32(0x5000+0x2A0,16);
+        for(float native_top:{188.f,220.f,280.f,328.f}) {
+            Quad(52,native_top,64,64,127);
+            Graphic(ctx,0x5000,0x59FB5186,0,2);
+            check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-focused_top)<.01f &&
+                  kernel::R32(0x63F5E4+0x58)>>24==127,
+                  "Native Main return clip16 must not move the gold pointer to the upper Options row");
+        }
+        active=closing=false;kernel::W32(0x5000+0x2A0,6);kernel::G<uint8_t>(0x5000+0x340)=0;
+        for(float native_top:{188.f,245.f,310.f}) {
+            Quad(52,native_top,64,64,127);
+            Graphic(ctx,0x5000,0x59FB5186,0,2);
+            check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-focused_top)<.01f,
+                  "Main's unfinished focus movie must keep the selected synthetic marker aligned after returning");
+        }
+        kernel::G<uint8_t>(0x5000+0x340)=1;Quad(52,328,64,64);
+        Graphic(ctx,0x5000,0x59FB5186,0,2);
+        check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-focused_top)<.01f,
+              "Main's completed focus clip must join the normal selected position without a final jump");
+        main_return_pending=false;
+        active=false;Quad(52,188,64,64,127);Graphic(ctx,0x5000,0x59FB5186,0,2);
+        check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-focused_top)>10,
+              "Ordinary native exit must not use the synthetic marker anchor");
+    }
+    active=false;closing=false;main_return_pending=false;return_row=6;main_gold_anchor={};
+    for(const auto [row,clip,expected_offset]:{std::tuple{2u,11u,-34.f},std::tuple{4u,15u,-24.f}}) {
+        kernel::W32(0x598468,row);kernel::W32(0x5000+0x2A0,clip);extra_selected=false;
+        Quad(52,200,64,64,127);Graphic(ctx,0x5000,0x59FB5186,0,2);
+        check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x14))-(200+expected_offset))<.01f,
+              "Retail Versus and Options keep their native gold placement without any synthetic exit anchor");
+    }
+    extra_selected=true;
     for(unsigned clip:{0u,7u,8u,15u,18u}) {
         kernel::W32(0x5000+0x2A0,clip);
         Quad(52,188,64,64,127);
@@ -341,12 +426,16 @@ int main() {
     ctx.esp=0x3000;ctx.ecx=0x598430;kernel::W32(0x4000,0);kernel::W32(0x4004,0x40);
     kernel::W32(0x598468,7);kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     check(MainInput(ctx,memory.data()) && Active() && model.CurrentPage()==Page::Enhancements &&
-          Snapshot().rows.size()==6 && !exit_prompt,
+          Snapshot().rows.size()==4 && !exit_prompt,
           "The new main-menu Enhancements row must open its standalone list rather than Exit");
     ctx.esp=0x3000;ctx.ecx=0x5985E8;release=false;Process(ctx,0,0x20);
-    check(closing,"Leaving unchanged Enhancements must close the native Options scene");
+    check(closing && MainReturning(),"Leaving unchanged Enhancements must close native Options and preserve Main's return anchor");
+    kernel::W32(0x5000+0x2A0,16);kernel::G<uint8_t>(0x5000+0x340)=0;
     ctx.esp=0x3000;ctx.ecx=0x598430;kernel::W32(0x4004,0);MainInput(ctx,memory.data());
     check(!Active() && kernel::R32(0x598468)==7,"Closing Enhancements must restore its main-menu row");
+    check(MainReturning(),"Main keeps its return anchor while the restored focus clip is still unfinished");
+    kernel::G<uint8_t>(0x5000+0x340)=1;ctx.esp=0x3000;MainInput(ctx,memory.data());
+    check(!MainReturning(),"Main releases the return anchor only after its selected focus clip finishes");
     check(kernel::R32(0x592D20+0xC)==1,
           "Returning from the native Options or Exit dialog must restore the white selection star before the next frame");
     model.Open(settings);active=true;closing=false;release=false;selection=0;
@@ -378,7 +467,7 @@ int main() {
     release=false;Process(ctx,0,0x20);
     check(model.CurrentPage()==Page::Home && kernel::R32(0x6000+0x2A0)==34,"Returning from a custom category must use the original Audio-to-Options clip");
     animation.running=false;kernel::G<uint8_t>(0x6000+0x340)=1;
-    for(const auto [page,extension]:{std::pair{Page::Home,72.f},std::pair{Page::Display,24.f},std::pair{Page::Graphics,48.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-48.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,48.f}}) {
+    for(const auto [page,extension]:{std::pair{Page::Home,48.f},std::pair{Page::Display,72.f},std::pair{Page::Graphics,24.f},std::pair{Page::Interface,-48.f},std::pair{Page::Controls,24.f},std::pair{Page::Controller,72.f},std::pair{Page::Keyboard,72.f},std::pair{Page::KeyboardAlternate,72.f},std::pair{Page::Mouse,72.f},std::pair{Page::Audio,-48.f},std::pair{Page::Language,-48.f},std::pair{Page::Enhancements,0.f},std::pair{Page::EnhancedCamera,-24.f}}) {
         model.Go(page);selection=0;LowerCap(ctx,0x6000,20,250);
         const float top=std::bit_cast<float>(kernel::R32(0x63F5E4+0x14)),bottom=std::bit_cast<float>(kernel::R32(0x63F5E4+0x24));
         check(std::abs(top-250-extension)<.01f && std::abs(bottom-top-120)<.01f,"Every settings category must size its ornament to the visible rows while preserving the carved cap proportions");
@@ -387,15 +476,15 @@ int main() {
     kernel::W32(0x6000+0x33C,4);
     check(std::abs(LowerCap(ctx,0x6000,48,230)-230)<.01f,"Custom Options must begin its added height collapsed with the retail entrance");
     kernel::W32(0x6000+0x33C,13);
-    check(std::abs(LowerCap(ctx,0x6000,48,230)-302)<.01f,"Custom Options must reach the complete seven-row height at the end of its entrance");
+    check(std::abs(LowerCap(ctx,0x6000,48,230)-278)<.01f,"Custom Options must reach the complete six-row height at the end of its entrance");
     const auto home=Snapshot();model.Go(Page::Audio);animation.Start(ctx,home,false);
-    float previous_custom=72;
+    float previous_custom=48;
     for(unsigned movie_frame=284;movie_frame<=291;++movie_frame) {
         kernel::W32(0x6000+0x33C,movie_frame);
         const float extension=LowerCap(ctx,0x6000,48,230)-230;
         check(extension<=previous_custom+.01f && previous_custom-extension<30,
-              "Changing from seven rows to two must contract continuously during the native submenu clip");
-        if(movie_frame==284)check(std::abs(extension-72)<.01f,"A category transition must start at the previous ornament height");
+              "Changing from six rows to two must contract continuously during the native submenu clip");
+        if(movie_frame==284)check(std::abs(extension-48)<.01f,"A category transition must start at the previous ornament height");
         previous_custom=extension;
     }
     check(std::abs(previous_custom+48)<.01f,"The completed Audio transition must enclose exactly its two rows");
@@ -412,7 +501,7 @@ int main() {
     bool exiting=false;for(const auto& c:captions)if(c.text=="Display" && c.alpha==127)exiting=true;
     check(exiting,"Closing settings after a native return must preserve the outer exit clip's original row opacity");
     animation.running=false;
-    for(unsigned category=0;category<5;++category) {
+    for(unsigned category=0;category<6;++category) {
         model.Open(settings);selection=category;release=false;Process(ctx,0,0x40);
         kernel::G<uint8_t>(0x6000+0x340)=1;release=false;Process(ctx,0,0x20);
         check(model.CurrentPage()==Page::Home && selection==category,"Returning from each category must restore its selected home row");
@@ -420,13 +509,14 @@ int main() {
     }
     model.Open(settings);selection=2;release=false;Process(ctx,0,0x40);
     kernel::G<uint8_t>(0x6000+0x340)=1;selection=1;release=false;Process(ctx,0,0x40);
-    kernel::G<uint8_t>(0x6000+0x340)=1;selection=24;release=false;Process(ctx,0,0x40);
+    constexpr unsigned alternate_row=openshao::bindings::Count;
+    kernel::G<uint8_t>(0x6000+0x340)=1;selection=alternate_row;release=false;Process(ctx,0,0x40);
     kernel::G<uint8_t>(0x6000+0x340)=1;selection=15;release=false;Process(ctx,0,0x20);
-    check(model.CurrentPage()==Page::Keyboard && selection==24,"Returning from alternate bindings must restore the paginated alternate menu row");
+    check(model.CurrentPage()==Page::Keyboard && selection==alternate_row,"Returning from alternate bindings must restore the paginated alternate menu row");
     kernel::G<uint8_t>(0x6000+0x340)=1;release=false;Process(ctx,0,0x20);
     check(model.CurrentPage()==Page::Controls && selection==1,"Returning from keyboard bindings must restore Keyboard on the Controls page");
     kernel::G<uint8_t>(0x6000+0x340)=1;release=false;Process(ctx,0,0x40);
-    check(model.CurrentPage()==Page::Keyboard && selection==24,"Reentering a page must retain its last selected row and pagination");
+    check(model.CurrentPage()==Page::Keyboard && selection==alternate_row,"Reentering a page must retain its last selected row and pagination");
     kernel::G<uint8_t>(0x6000+0x340)=1;animation.running=false;model.Go(Page::Home);
     for(unsigned row:{0u,1u,3u,6u,8u,24u})for(float authored_y:{188.f,216.f,244.f}) {
         selection=row;Quad(52,authored_y,64,64);Graphic(ctx,0x6000,0x59FB5186,0,2);
@@ -434,6 +524,13 @@ int main() {
         check(std::abs(y-(188+24*(row%8)))<.01f,"The ornament pointer must align with all eight home rows after every native submenu return");
         check(std::abs(std::bit_cast<float>(kernel::R32(0x63F5E4+0x24))-y-64)<.01f,"Pointer alignment must preserve the original sprite height");
     }
+    kernel::W32(0x6000+0x2A0,0);kernel::W32(0x6000+0x24,4);kernel::W32(0x6000+0x28,13);selection=0;
+    for(const auto [movie,authored]:{std::pair{4u,248.f},std::pair{8u,216.f},std::pair{13u,191.296875f}}) {
+        kernel::W32(0x6000+0x33C,movie);Quad(52,authored,64,64);Graphic(ctx,0x6000,0x59FB5186,0,2);
+        const float y=std::bit_cast<float>(kernel::R32(0x63F5E4+0x14));
+        check(std::abs(y-(188+authored-191.296875f))<.01f,"The ornament pointer must slide in with the native Options entrance instead of snapping to its row");
+    }
+    kernel::W32(0x6000+0x33C,13);
     raw::Active(true);raw::Controller("",0);release=false;selection=0;
     raw::Controller("",0x4000);Process(ctx,0,0);Process(ctx,0,0);Process(ctx,0x4000,0);
     check(selection==1,"A raw controller edge followed by its native menu edge must advance only one row");
@@ -445,16 +542,25 @@ int main() {
     raw::Controller("",0x2000);Process(ctx,0,0);Process(ctx,0x2000,0);
     check(model.Draft().language=="fr","A language change must not skip an autonym when both input routes report the same press");
     raw::Controller("",0);Process(ctx,0,0);
-    model.Go(Page::Controller);selection=0;release=false;
-    raw::Begin(raw::Device::Controller);raw::Controller("",0);raw::Controller("b",0);
+    model.Revert();model.Go(Page::Controller);selection=0;release=false;
+    const auto capture_time=Clock::now();
+    raw::Begin(raw::Device::Controller);raw::Controller("",0,capture_time);
+    raw::Controller("b",0x20,capture_time);raw::Controller("",0,capture_time+std::chrono::milliseconds(120));
     auto count=sounds.size();Process(ctx,0,0);
     check(model.Draft().bindings[0]=="a" && notice=="settings.shared" && sounds.size()==count+1 && sounds.back()==0x100300,
           "Rejecting an occupied captured controller input must preserve A, show the conflict and play the native back sound");
     raw::Begin(raw::Device::Controller);raw::Controller("",0);raw::Controller("touchpad",0);
     count=sounds.size();Process(ctx,0,0);
     check(model.Draft().bindings[0]=="touchpad" && sounds.size()==count+1 && sounds.back()==0x100200,"Accepting a free captured binding must use the native confirmation sound");
-    raw::Begin(raw::Device::Controller);release=false;count=sounds.size();Process(ctx,0,0x20);
-    check(sounds.size()==count+1 && sounds.back()==0x100300,"Cancelling input capture must use the native back sound");
+    raw::Begin(raw::Device::Controller);capture_pending=true;release=false;count=sounds.size();
+    raw::Controller("",0,capture_time);raw::Controller("b",0x20,capture_time);Process(ctx,0,0x20);
+    check(capture_pending && sounds.size()==count,"The native Back event must not cancel a short B press during controller capture");
+    raw::Controller("b",0x20,capture_time+std::chrono::seconds(1));Process(ctx,0,0);
+    check(!capture_pending && notice=="settings.capture_cancelled" && sounds.size()==count+1 && sounds.back()==0x100300 &&
+          model.Draft().bindings[0]=="touchpad","Holding B must keep the binding and use the native back sound");
+    Process(ctx,0x4000,0x20);
+    check(model.CurrentPage()==Page::Controller && selection==0,"A held cancel must keep the same controller row");
+    raw::Controller("",0);Process(ctx,0,0);
     trial=true;trial_until=Clock::now()+std::chrono::seconds(15);release=false;count=sounds.size();Process(ctx,0,0x40);
     check(sounds.size()==count+1 && sounds.back()==0x100200,"Keeping a display trial must use the native confirmation sound");
     // A language restart must be prepared before persistence and committed only after a successful write.
@@ -495,33 +601,44 @@ int main() {
     commit_fails=false;prepared=committed=cancelled=persisted=0;
     check(Save(ctx) && prepared==1 && committed==1,
           "Saving again after a failed shutdown must retry the still-pending language change");
-    settings={};model.Open(settings);model.Edit().language="de";model.Edit().aspect_ratio="16:9";
-    model.Go(Page::Home);selection=5;release=false;closing=false;trial=false;
-    prepared=committed=cancelled=persisted=0;Process(ctx,0,0x40);
-    check(trial && prepared==0 && persisted==0,"A combined display and language change must wait for the display confirmation before preparing any restart");
+    settings={};model.Open(settings);model.Go(Page::Display);selection=0;release=false;closing=false;trial=false;
+    prepared=committed=cancelled=persisted=0;const auto original_display=settings;
+    Process(ctx,0x2000,0);
+    check(!trial && settings==original_display && persisted==0 && model.Dirty(),
+          "Editing the display mode must leave the window and saved settings unchanged until Apply");
+    selection=6;release=false;Process(ctx,0,0x40);
+    check(settings==original_display && !model.Dirty() && model.CurrentPage()==Page::Display,
+          "Discard must clear pending display edits in place");
+    selection=0;release=false;Process(ctx,0x2000,0);
+    selection=5;release=false;Process(ctx,0,0x40);
+    check(trial && settings.display_mode!=original_display.display_mode && persisted==0,
+          "Apply must preview the completed display draft before persisting it");
     release=false;Process(ctx,0,0x20);
-    check(!trial && prepared==0 && committed==0 && persisted==0 && settings.aspect_ratio=="original",
-          "Rejecting the display trial must restore the display without saving or restarting for the pending language");
-    model.Edit().aspect_ratio="16:9";release=false;Process(ctx,0,0x40);
-    check(trial && prepared==0 && persisted==0,"Retrying the combined draft must still wait for confirmation");
+    check(!trial && settings==original_display && !model.Dirty(),"Reverting a display preview must restore the prior window");
+    selection=3;release=false;Process(ctx,0x2000,0);
+    selection=5;release=false;Process(ctx,0,0x40);release=false;Process(ctx,0,0x40);
+    check(!trial && persisted==1 && !closing && model.CurrentPage()==Page::Display && !model.Dirty(),
+          "Confirming an applied display draft must save it and stay on the page");
+    model.Go(Page::Graphics);selection=0;release=false;const auto old_scale=settings.render_percent;
+    Process(ctx,0x2000,0);
+    check(!trial && settings.render_percent==old_scale+5 && persisted==2 && notice.empty(),
+          "Render scale must apply and save directly without a display confirmation or saved message");
+    settings={};model.Open(settings);model.Go(Page::Language);selection=0;release=false;closing=false;
+    prepared=committed=cancelled=persisted=0;Process(ctx,0x2000,0);
+    check(model.Dirty() && prepared==0 && persisted==0,"Changing language must wait for confirmation on its page");
     release=false;Process(ctx,0,0x40);
-    check(!trial && prepared==1 && persisted==1 && committed==1 && closing &&
-          last_saved.language=="de" && last_saved.aspect_ratio=="16:9",
-          "Confirming the combined display and language draft must save both changes and commit exactly one restart");
-    // Exit is a separate confirmation, never a settings save or language restart.
+    check(prepared==1 && persisted==1 && committed==1 && closing,"Confirming the language must save and restart once");
     settings={};model.Open(settings);model.Go(Page::Enhancements);selection=0;release=false;closing=false;trial=false;animation.running=false;
     Process(ctx,0,0x80);
-    check(previews==std::vector<bool>{false} && !model.Dirty(),"X must preview the normal pair without changing or saving the draft");
+    check(previews==std::vector<bool>{false} && !model.Dirty(),"X must preview the normal pair without changing settings");
+    const auto prior_persisted=persisted;
     release=false;Process(ctx,0x2000,0);release=false;Process(ctx,0,0x80);
-    check(previews==std::vector<bool>{false,true},"The preview must follow the unsaved Scorpion toggle");
+    check(previews==std::vector<bool>{false,true} && persisted==prior_persisted+1 && !model.Dirty(),
+          "Toggling Scorpion voices applies immediately and its preview follows the saved option");
     preview_succeeds=false;release=false;Process(ctx,0,0x80);
     check(notice=="settings.preview_error" && !closing,"A preview failure must keep the settings screen usable");
     const auto stopped=preview_stops;release=false;Process(ctx,0,0x20);
-    check(!closing && selection==4 && notice=="settings.unsaved" && preview_stops==stopped,
-          "Unsaved Enhancements must select Save Changes before leaving");
-    release=false;Process(ctx,0x4000,0);release=false;Process(ctx,0,0x40);
-    check(closing && preview_stops>stopped,
-          "Discarding standalone Enhancements must stop its preview and close back to the main menu");
+    check(closing && preview_stops>stopped,"Leaving Enhancements must stop its preview and close without a save prompt");
     preview_succeeds=true;
     settings={};model.Open(settings);model.Edit().scorpion_unfiltered=true;native_preferences_applied=0;
     check(Save(ctx) && native_preferences_applied==0,
@@ -538,60 +655,97 @@ int main() {
     bool output_selected=false,stereo_selected=false;
     for(const auto& caption:captions) {
         output_selected|=caption.text=="Saída de áudio" && caption.y==235 && caption.alpha==254;
-        stereo_selected|=caption.text=="Estéreo" && caption.y==235 && caption.alpha==254;
+        stereo_selected|=caption.text=="<  Estéreo  >" && caption.y==235 && caption.alpha==254;
     }
     check(output_selected && stereo_selected && SelectorY()==212,
           "Audio Output and its localized mode must share the selected row's highlight and native selector position");
+    for(const auto page:{Page::Home,Page::Display,Page::Graphics,Page::Controls,Page::Controller,
+                         Page::Keyboard,Page::Mouse,Page::Audio,Page::Language,Page::Enhancements,Page::EnhancedCamera,Page::Interface}) {
+        model.Go(page);selection=0;captions.clear();Draw(ctx);
+        check(std::any_of(captions.begin(),captions.end(),[](const auto& caption){return caption.text=="Navegar";}),
+              "Every navigable settings page must advertise Up/Down navigation");
+    }
+    trial=true;trial_until=Clock::now()+std::chrono::seconds(15);captions.clear();Draw(ctx);
+    check(std::none_of(captions.begin(),captions.end(),[](const auto& caption){return caption.text=="Navegar";}),
+          "A display confirmation must not advertise navigation that its input handler ignores");
+    trial=false;capture_pending=true;raw::Begin(raw::Device::Keyboard);captions.clear();Draw(ctx);
+    check(std::none_of(captions.begin(),captions.end(),[](const auto& caption){return caption.text=="Navegar";}),
+          "Binding capture must hide the navigation hint while it consumes directional keys");
+    raw::Cancel();capture_pending=false;
+    model.Go(Page::Controller);selection=1;capture_pending=true;raw::Begin(raw::Device::Controller);
+    captions.clear();Draw(ctx);
+    std::vector<std::string> controller_footer;
+    for(const auto& caption:captions)if(caption.y==410)controller_footer.push_back(caption.text);
+    check(controller_footer==std::vector<std::string>{"Segure B para cancelar"},
+          "Controller capture must display just the localized hold-to-cancel instruction in the footer");
+    raw::Cancel();capture_pending=false;
+    for(const auto [page,row,adjust,listen]:std::array<std::tuple<Page,unsigned,bool,bool>,10>{{
+        {Page::Enhancements,0,true,true},{Page::Enhancements,1,true,false},
+        {Page::Enhancements,3,false,false},{Page::Home,0,false,false},
+        {Page::Controls,0,false,false},{Page::Controller,0,false,false},
+        {Page::Keyboard,0,false,false},{Page::Graphics,4,false,false},
+        {Page::EnhancedCamera,1,true,false},{Page::Display,5,false,false}}}) {
+        model.Go(page);selection=row;captions.clear();Draw(ctx);
+        bool shows_adjust=false,shows_listen=false;
+        for(const auto& caption:captions)if(caption.y==410) {
+            shows_adjust|=caption.text=="Ajustar";shows_listen|=caption.text=="Ouvir";
+        }
+        if(shows_adjust!=adjust || shows_listen!=listen)
+            std::cerr<<"Footer page="<<unsigned(page)<<" row="<<row<<" adjust="<<shows_adjust<<" listen="<<shows_listen<<" trial="<<trial<<" exit="<<exit_prompt<<'\n';
+        check(shows_adjust==adjust && shows_listen==listen,
+              "Main settings show Adjust only for Left/Right values and retain Scorpion's separate Listen action");
+    }
+    for(const auto [page,row]:std::array<std::pair<Page,unsigned>,9>{{
+        {Page::Graphics,0},{Page::Graphics,2},{Page::EnhancedCamera,0},
+        {Page::EnhancedCamera,1},{Page::Mouse,0},{Page::Display,0},{Page::Audio,0},
+        {Page::Enhancements,0},{Page::Enhancements,1}}}) {
+        model.Open(settings);model.Go(page);selection=row;release=false;
+        const auto before=settings;const auto saved=persisted;
+        Process(ctx,0,0x40);
+        check(settings==before && !model.Dirty() && !trial && persisted==saved,
+              "A on a value row must not adjust, preview or save settings");
+    }
     model.Go(Page::Language);selection=0;notice="settings.pack_required";
     captions.clear();Draw(ctx);
     bool missing_pack_visible=false;
     for(const auto& caption:captions)
         missing_pack_visible|=caption.text==openshao::menu::Catalog::Builtin().Get("pt-BR","settings.pack_required");
     check(missing_pack_visible,"Language screen must show the missing-pack warning instead of hiding it behind the restart hint");
+    const auto shown=[&](std::string_view key) {
+        const auto text=openshao::menu::Catalog::Builtin().Get("pt-BR",key);
+        return std::any_of(captions.begin(),captions.end(),[&](const auto& caption){return caption.text==text;});
+    };
     notice.clear();captions.clear();Draw(ctx);
-    bool restart_hint_visible=false;
-    for(const auto& caption:captions)
-        restart_hint_visible|=caption.text==openshao::menu::Catalog::Builtin().Get("pt-BR","settings.restart");
-    check(restart_hint_visible,"Language screen must retain its restart hint when no error notice exists");
-    model.Go(Page::Audio);selection=1;
-    Process(ctx,0x2000,0);
-    check(model.Draft().audio_output==2 && applied_audio_modes.empty(),"Editing output must remain a draft until Save");
+    check(!model.Dirty() && !shown("settings.restart") && !shown("settings.apply_changes"),
+          "With the applied languages selected, the Language screen must hide the restart notice and Apply");
+    model.Edit().language=model.Draft().language=="en"?"fr":"en";captions.clear();Draw(ctx);
+    check(shown("settings.restart") && shown("settings.apply_changes"),
+          "Choosing another language must offer Apply Changes and explain that applying restarts the game");
+    model.Revert();captions.clear();Draw(ctx);
+    check(!shown("settings.restart") && !shown("settings.apply_changes"),
+          "Returning to the applied language must hide the restart notice and Apply again");
+    model.Go(Page::Audio);selection=1;release=false;
+    const auto previous_mode=settings.audio_output;
     persist_fails=true;
-    check(!Save(ctx) && applied_audio_modes.empty(),"A failed settings write must not apply the new output mode");
-    persist_fails=false;
-    check(Save(ctx) && applied_audio_modes==std::vector<int>{2} && last_saved.audio_output==2 && native_preferences_applied==0,
-          "Saving Audio Output must apply the selected layout without resetting retail audio volumes");
+    Process(ctx,0x2000,0);
+    check(model.Draft().audio_output==previous_mode && applied_audio_modes.empty() && !model.Dirty() &&
+          notice=="settings.error" && model.CurrentPage()==Page::Audio && !closing,
+          "A failed immediate write must restore the value and keep the audio page usable");
+    persist_fails=false;release=false;Process(ctx,0x2000,0);
+    check(applied_audio_modes==std::vector<int>{2} && last_saved.audio_output==2 && native_preferences_applied==0 &&
+          model.CurrentPage()==Page::Audio && selection==1 && !model.Dirty() && !closing,
+          "Changing Audio Output must persist and apply on the same row without resetting retail volumes");
     check(Save(ctx) && applied_audio_modes.size()==1,"An unchanged save must not reapply audio routing");
-    model.Go(Page::Audio);model.Change(1,1);model.Discard();
-    check(model.Draft().audio_output==2 && applied_audio_modes.size()==1,"Discard must preserve the saved output mode and current routing");
-    // Successful Save must close through the retail Options teardown; an
-    // unsuccessful write must keep the custom screen active for a retry.
-    settings={};model.Open(settings);model.Edit().scorpion_unfiltered=true;
-    model.Go(Page::Home);selection=5;release=false;closing=false;trial=false;exit_prompt=false;animation.running=false;
-    native_close_calls.clear();const auto first_save=persisted;const auto first_stops=preview_stops;
-    Process(ctx,0,0x40);
-    check(closing && persisted==first_save+1 && last_saved.scorpion_unfiltered &&
-          native_close_calls==std::vector<uint32_t>{0x14CFA,0x166DB,0x11EAB} && preview_stops==first_stops+1,
-          "Saving an enhancement must persist it and immediately run native Options teardown");
-    model.Open(settings);model.Edit().scorpion_unfiltered=false;selection=5;
-    closing=false;release=false;persist_fails=true;native_close_calls.clear();
-    const auto rejected_save=persisted;
-    Process(ctx,0,0x40);
-    check(!closing && persisted==rejected_save && model.Dirty() && native_close_calls.empty(),
-          "A failed save must keep the unsaved settings screen open");
-    persist_fails=false;
-    // Display changes first require user confirmation, and then close only
-    // after the confirmed setting has been persisted.
-    settings={};model.Open(settings);model.Edit().aspect_ratio="16:9";
-    selection=5;closing=false;release=false;trial=false;native_close_calls.clear();
-    Process(ctx,0,0x40);
-    check(trial && !closing && native_close_calls.empty(),
-          "A display change must not close before the confirmation");
-    const auto confirmed_save=persisted;
-    release=false;Process(ctx,0,0x40);
-    check(!trial && closing && persisted==confirmed_save+1 && last_saved.aspect_ratio=="16:9" &&
-          native_close_calls==std::vector<uint32_t>{0x14CFA,0x166DB,0x11EAB},
-          "Confirming a display change must save and close through native Options");
+    model.Go(Page::Audio);model.Change(1,1);model.Revert();
+    check(model.Draft().audio_output==2 && applied_audio_modes.size()==1,"Reverting a draft must preserve the saved output mode and current routing");
+    settings={};settings.language="pt-BR";
+    auto saved_locale=settings;saved_locale.language="en";model.Open(saved_locale);model.Go(Page::EnhancedCamera);
+    selection=1;release=false;closing=false;trial=false;
+    const auto before_speed=persisted,before_restart=prepared;
+    Process(ctx,0x2000,0);
+    check(persisted==before_speed+1 && last_saved.camera_speed==110 && model.CurrentPage()==Page::EnhancedCamera &&
+          selection==1 && !model.Dirty() && !closing && prepared==before_restart && settings.language=="pt-BR",
+          "Camera speed must save in place without restarting for a startup language override");
     native_close_calls.clear();exit_prompt=false;closing=false;
     Close(ctx);
     check(native_close_calls==std::vector<uint32_t>{0x14CFA,0x166DB,0x11EAB},

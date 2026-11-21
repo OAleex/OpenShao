@@ -1,7 +1,9 @@
 #include "difficulty.h"
-#include "survival_mode.h"
+#include "fighter_selection.h"
 #include "survival_unlock.h"
 #include "save_pages.h"
+#include "file_ops.h"
+#include "restart.h"
 #include "ed_nexus.h"
 #include "launcher.h"
 #include "menu_renderer.h"
@@ -20,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <unordered_map>

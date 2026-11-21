@@ -1,7 +1,7 @@
 #include "game_preferences.h"
 #include "recomp_settings.h"
 #include "ed_nexus.h"
-#include "survival_mode.h"
+#include "fighter_selection.h"
 // Native mode: 0 solo, 1 Ko-op, 2 Versus; read from the guest stack before Poll.
 void SyncRetailFrontendMode() {
     // Effects are gated per player at this mask: use the saved host preference.
@@ -13,9 +13,9 @@ void SyncRetailFrontendMode() {
     const uint32_t top=kernel::R32(0x6C9308+depth*4);
     if (top==0x598430 || top==0x5967C0) openshao::controller::SetMultiplayer(false);
     else if (top==0x598DF0) {
-        // Survival keeps Main on Versus (2) for the roster, also while its popup opens (else ports remap and Back closes the roster).
-        const bool survival=openshao::survival::CharacterSelection() || openshao::survival::SetupPopup();
-        const uint32_t selected=survival?openshao::survival::PlayerMode():kernel::R32(0x598430+0x38);
+        // The shared selector keeps Main on Versus (2) for the roster, also while its popup opens (else ports remap and Back closes the roster).
+        const bool shared=openshao::fighter_selection::CharacterSelection() || openshao::fighter_selection::SetupPopup();
+        const uint32_t selected=shared?openshao::fighter_selection::PlayerMode():kernel::R32(0x598430+0x38);
         openshao::controller::SetMultiplayer(selected==1 || selected==2);
     }
     // Ko-op saves need a second Start source until the native mode setter runs.
@@ -46,11 +46,11 @@ X86_FUNC(sub_00015C86) {
 X86_EXTERN_FUNC(__imp__sub_0001670D);
 X86_EXTERN_FUNC(__imp__sub_001B5070);
 X86_FUNC(sub_001B5070) {
-    // The Versus roster entry needs two devices; Survival solo relaxes only this query.
+    // The Versus roster entry needs two devices; shared solo selection relaxes only this query.
     const auto depth=kernel::R32(0x6C9308);
     const auto top=depth && depth<=16?kernel::R32(0x6C9308+depth*4):0;
     const bool solo_entry=kernel::R32(ctx.esp)==0x48EBD &&
-        openshao::survival::CharacterSelection() && openshao::survival::PlayerMode()==0 &&
+        openshao::fighter_selection::CharacterSelection() && openshao::fighter_selection::PlayerMode()==0 &&
         top==0x598430;
     __imp__sub_001B5070(ctx,base);
     if(solo_entry && ctx.eax<2)ctx.eax=2;

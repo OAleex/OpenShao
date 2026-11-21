@@ -1,7 +1,6 @@
 #include "app/app.h"
-#include "keyboard.h"
+#include "photo_mode.h"
 #include "controller.h"
-#include "performance_overlay.h"
 #include "launcher.h"
 #include "brightness.h"
 
@@ -17,6 +16,6 @@ const app::GameInfo app::kGame = {
     .options = {},
     .load = openshao::launcher::Load, .save = openshao::launcher::Save, .init = nullptr,
     .loaded = [] { openshao::brightness::Initialize(openshao::launcher::Current().brightness); },
-    .window = openshao::controller::Window, .message = openshao::controller::Message, .ui = openshao::performance::Draw,
-    .pad = openshao::keyboard::Poll, .rumble = nullptr,
+    .window = openshao::controller::Window, .message = openshao::controller::Message, .ui = openshao::photo_mode::Ui,
+    .pad = openshao::photo_mode::Poll, .rumble = nullptr,
 };

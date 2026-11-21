@@ -30,8 +30,7 @@ def main():
                                      '--register-disc' if register else '--validate-disc', str(image)],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', timeout=30,
                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
-            # The independent report worker can outlive a normal command briefly.
-            # Wait for its owned mappings before TemporaryDirectory removes them.
+            # Wait for the report worker's mappings before TemporaryDirectory removes them.
             support = data / 'cache/support'
             deadline = time.monotonic() + 5
             while list(support.glob('worker-*')) and time.monotonic() < deadline:

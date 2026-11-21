@@ -1,4 +1,5 @@
 #include "pipeline_assets.h"
+#include "pipeline_catalog.h"
 #include "pipeline_source_cache.h"
 #include "core/log.h"
 #include <cstdarg>
@@ -29,8 +30,7 @@ namespace logx {
 void Write(Level, const char* format, ...) {
     char line[4096];va_list args;va_start(args,format);
     std::vsnprintf(line,sizeof line,format,args);va_end(args);
-    // Observe the production workload diagnostic; the real asset/parser and
-    // precompiler still run against the synthetic guest geometry below.
+    // Observe the workload diagnostic; parser and precompiler run on the synthetic geometry below.
     const std::string text=line;
     if(text.starts_with("asset pipelines: ")) {
         const auto field=text.find(", candidates ");
@@ -62,12 +62,40 @@ bool SnapshotPipelineShaders(uint32_t vertex, uint32_t pixel, gpu::State& s) {
     s.vs->stream_stride[0] = vertex==0xABCD1 ? 20 : 24;
     return true;
 }
+void SnapshotPipelinePixelPrograms(openshao::pipelines::PixelPrograms&) {}
 }
 
 using namespace openshao::pipelines;
 void Require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 int main() {
     try {
+        gpu::PixelKey authored{};
+        authored.programmable = 1;
+        authored.count = 2;
+        authored.a_in[0] = 0x01234567;
+        authored.rgb_out[1] = 0x01020304;
+        authored.dot_mapping = 7;
+        auto render_state = authored;
+        render_state.tex_modes = 0x21;
+        render_state.tex[0].kind = gpu::kTex2D;
+        render_state.alphakill = 4;
+        const auto program = PixelProgramFingerprint(authored);
+        Require(program && program == PixelProgramFingerprint(render_state),
+                "texture bindings must not alter the installed shader fingerprint");
+        auto other_shader = authored;
+        other_shader.a_in[0] ^= 1;
+        Require(PixelProgramFingerprint(other_shader) != program,
+                "different combiner inputs must select different installed shaders");
+        RestorePixelProgram(render_state, {});
+        Require(render_state.count == 0 && render_state.rgb_out[1] == 0 && render_state.dot_mapping == 0,
+                "shipped hints must exclude the original combiner program");
+        RestorePixelProgram(render_state, authored);
+        Require(render_state.count == 2 && render_state.a_in[0] == 0x01234567 &&
+                render_state.rgb_out[1] == 0x01020304 && render_state.dot_mapping == 7 &&
+                render_state.tex_modes == 0x21 && render_state.tex[0].kind == gpu::kTex2D &&
+                render_state.alphakill == 4,
+                "rebuilding a recipe combines the installed program with the captured render state");
+
         SourceHashes sources;
         VertexRecipe vertex{};
         gpu::PixelKey pixel_key{};

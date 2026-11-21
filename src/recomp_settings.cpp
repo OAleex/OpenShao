@@ -11,21 +11,23 @@
 #include "host.h"
 #include "scorpion_voice.h"
 #include "survival_mode.h"
+#include "fighter_selection.h"
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
 #include <bit>
 #include <chrono>
-#include <charconv>
 
 X86_EXTERN_FUNC(__imp__sub_00015C86);
 namespace openshao::recomp {
 namespace {
 Model model;
-bool extra_selected=false,active=false,closing=false,release=true,exit_prompt=false;
+bool extra_selected=false,active=false,closing=false,release=true,exit_prompt=false,main_return_pending=false;
 constexpr unsigned MainRecompRow=6,MainEnhancementsRow=7,MainExitRow=8,MainRows=9;
 unsigned return_row=6;
+struct MainGoldAnchor {unsigned row=MainRows;float top=0;};
+MainGoldAnchor main_gold_anchor;
 unsigned selection=0;
-std::array<unsigned,size_t(Page::Enhancements)+1> selections{};
+std::array<unsigned,size_t(Page::Interface)+1> selections{};
 uint32_t pending_directions=0;
 std::string notice;
 launcher::Settings trial_previous;
@@ -101,18 +103,7 @@ void Sound(X86Context& ctx,uint32_t slot) {
 }
 uint32_t Top(){const auto depth=kernel::R32(0x6C9308);return depth<32?kernel::R32(0x6C9308+depth*4):0;}
 std::string Translate(std::string_view key) {
-    const auto text=menu::Catalog::Builtin().Get(launcher::Current().language,key);
-    if(text.empty() && key.starts_with("key.")) {
-        int code=0;const auto digits=key.substr(4);
-        const auto parsed=std::from_chars(digits.data(),digits.data()+digits.size(),code);
-        if(parsed.ec==std::errc{} && parsed.ptr==digits.data()+digits.size()) {
-            auto label=bindings::KeyLabel(code);
-            if(label.starts_with("Numpad "))return Translate("key.numpad")+" "+label.substr(7);
-            if(label.starts_with("Key "))return Translate("key.generic")+" "+std::to_string(code);
-            return label;
-        }
-    }
-    return text.empty()?std::string(key):std::string(text);
+    return menu::Caption(launcher::Current().language,key);
 }
 void State(X86Context& ctx,unsigned selected) {
     kernel::W32(0x598468,selected);
@@ -128,7 +119,7 @@ void Close(X86Context& ctx) {
     scorpion::StopPreview(ctx);
     if(exit_prompt)LOGR("Exit to desktop confirmation dismissed");
     if(trial){std::string error;launcher::ApplyInGame(trial_previous,false,error);trial=false;}
-    closing=true;raw::Active(false);
+    closing=true;main_return_pending=true;raw::Active(false);
     const auto saved=ctx;
     // Retail Options Back: stop its music, commit state, clear selection, restart the main track (0x11EAB alone orphaned the loop).
     kernel::CallGuest(ctx,0x14CFA,{});ctx=saved;
@@ -138,14 +129,14 @@ void Close(X86Context& ctx) {
 }
 void RevertTrial() {
     std::string error;launcher::ApplyInGame(trial_previous,false,error);
-    auto& draft=model.Edit();draft.display_mode=trial_previous.display_mode;draft.width=trial_previous.width;draft.height=trial_previous.height;
-    draft.aspect_ratio=trial_previous.aspect_ratio;draft.render_percent=trial_previous.render_percent;
+    model.Revert();
     trial=false;notice="settings.reverted";
 }
-bool Save(X86Context& ctx) {
+bool Save(X86Context& ctx,bool restart_on_language_change=true) {
     std::string error;const auto& desired=model.Draft();
     const bool audio_changed=desired.audio_output!=launcher::Current().audio_output;
-    const bool restart=desired.language!=launcher::Current().language || desired.voice_language!=launcher::Current().voice_language;
+    const bool restart=restart_on_language_change &&
+        (desired.language!=launcher::Current().language || desired.voice_language!=launcher::Current().voice_language);
     if(restart && !restart::Prepare(desired,error)) {
         LOGE("Language restart preparation: %s",error.c_str());notice="settings.error";return false;
     }
@@ -155,14 +146,39 @@ bool Save(X86Context& ctx) {
     }
     if(audio_changed)audio::options::Apply(ctx,desired.audio_output);
     // Reapplying retail music/effects/rules on an unrelated save restarts native audio state.
-    model.Open(desired);
+    model.Commit();
     if(restart) {
         if(!restart::Commit(error)) {
             restart::Cancel();LOGE("Language restart: %s",error.c_str());notice="settings.restart_error";return false;
         }
         notice="settings.restarting";closing=true;raw::Active(false);
-    } else notice="settings.saved";
+    } else notice.clear();
     return true;
+}
+bool DisplayChanged(const launcher::Settings& before,const launcher::Settings& after) {
+    return before.display_mode!=after.display_mode || before.width!=after.width || before.height!=after.height ||
+        before.aspect_ratio!=after.aspect_ratio;
+}
+bool RestartPending() {
+    const auto& current=launcher::Current();
+    return model.Draft().language!=current.language || model.Draft().voice_language!=current.voice_language;
+}
+void ApplyEdit(X86Context& ctx) {
+    if(!model.Dirty()){if(trial)RevertTrial();return;}
+    if(model.CurrentPage()==Page::Language) {notice="settings.restart";return;}
+    if(model.CurrentPage()==Page::Display){notice.clear();return;}
+    if(!Save(ctx,false))model.Revert();
+}
+void PreviewDisplay() {
+    const auto current=launcher::Current();
+    if(DisplayChanged(current,model.Draft())) {
+        std::string error;
+        if(!launcher::ApplyInGame(model.Draft(),false,error)) {
+            model.Edit()=current;notice="settings.error";LOGE("Recomp display: %s",error.c_str());return;
+        }
+        if(!trial)trial_previous=current;
+        trial=true;trial_until=std::chrono::steady_clock::now()+std::chrono::seconds(15);notice="settings.keep_display";
+    }
 }
 void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
     if(closing)return;
@@ -177,14 +193,23 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
     directions|=fixed&0xF000;pressed|=fixed&0xFF;
     if(animation.Busy()){release=true;return;}
     const auto captured=raw::Take();
+    if(captured.cancelled) {
+        capture_pending=false;notice="settings.capture_cancelled";
+        Sound(ctx,0x6CA3BC);release=true;return;
+    }
     if(captured.device!=raw::Device::None) {
         capture_pending=false;
         const bool accepted=captured.device==raw::Device::Controller?model.ControllerBinding(selection,captured.source):
             model.KeyboardBinding(selection,model.CurrentPage()==Page::KeyboardAlternate?1:0,captured.key);
-        notice=accepted?"settings.bound":"settings.shared";Sound(ctx,accepted?0x6CA3B8:0x6CA3BC);release=true;return;
+        notice=accepted?"settings.bound":"settings.shared";
+        if(accepted)ApplyEdit(ctx);
+        Sound(ctx,accepted?0x6CA3B8:0x6CA3BC);release=true;return;
     }
-    if(raw::Capturing()!=raw::Device::None) {
-        if(pressed&0x20){raw::Cancel();capture_pending=false;notice="settings.capture_cancelled";Sound(ctx,0x6CA3BC);release=true;}
+    if(raw::ControllerCancelHeld())return;
+    if(const auto device=raw::Capturing();device!=raw::Device::None) {
+        if(device==raw::Device::Keyboard && (pressed&0x20)) {
+            raw::Cancel();capture_pending=false;notice="settings.capture_cancelled";Sound(ctx,0x6CA3BC);release=true;
+        }
         return;
     }
     if(capture_pending){capture_pending=false;notice="settings.capture_cancelled";release=true;}
@@ -204,8 +229,7 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
     if(trial) {
         if(pressed&0x40){
             Sound(ctx,0x6CA3B8);trial=false;
-            if(!Save(ctx)){std::string error;launcher::ApplyInGame(trial_previous,false,error);}
-            else if(!closing)Close(ctx);
+            if(!Save(ctx,false)){std::string error;launcher::ApplyInGame(trial_previous,false,error);model.Revert();}
             release=true;
         }
         else if(pressed&0x20){Sound(ctx,0x6CA3BC);RevertTrial();release=true;}
@@ -214,8 +238,8 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
     const auto rows=model.Rows();if(rows.empty())return;
     const auto previous_view=Snapshot();
     selection=std::min(selection,unsigned(rows.size()-1));
-    if(directions&0x1000){selection=(selection+unsigned(rows.size())-1)%unsigned(rows.size());if(selection!=previous_view.selected)Sound(ctx,0x6CA3C0);}
-    else if(directions&0x4000){selection=(selection+1)%unsigned(rows.size());if(selection!=previous_view.selected)Sound(ctx,0x6CA3C0);}
+    if(directions&0x1000){notice.clear();selection=(selection+unsigned(rows.size())-1)%unsigned(rows.size());if(selection!=previous_view.selected)Sound(ctx,0x6CA3C0);}
+    else if(directions&0x4000){notice.clear();selection=(selection+1)%unsigned(rows.size());if(selection!=previous_view.selected)Sound(ctx,0x6CA3C0);}
     else if(directions&0xA000){
         const int direction=directions&0x8000?-1:1;
         const auto previous=model.Draft();
@@ -225,15 +249,15 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
             else model.Edit().voice_language=previous.voice_language;
             notice="settings.pack_required";
         }
+        if(notice.empty())ApplyEdit(ctx);
         Sound(ctx,0x6CA3C0);
     }
     else if(pressed&0x20) {
         Sound(ctx,0x6CA3BC);
         if(model.CurrentPage()==Page::Home || model.CurrentPage()==Page::Enhancements) {
-            if(model.Dirty()){notice="settings.unsaved";selection=unsigned(rows.size())-2;}
-            else Close(ctx);
+            Close(ctx);
         } else {
-            if(model.CurrentPage()==Page::Enhancements)scorpion::StopPreview(ctx);
+            if(model.CurrentPage()==Page::Language || model.CurrentPage()==Page::Display)model.Revert();
             model.Back();notice.clear();
         }
         release=true;
@@ -242,27 +266,30 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
             if(!scorpion::Preview(ctx,model.Draft().scorpion_unfiltered))notice="settings.preview_error";
             else notice.clear();
             release=true;
-        } else if(selection<24 && (model.CurrentPage()==Page::Controller || model.CurrentPage()==Page::Keyboard || model.CurrentPage()==Page::KeyboardAlternate)) {
+        } else if(selection<bindings::Count && (model.CurrentPage()==Page::Controller || model.CurrentPage()==Page::Keyboard || model.CurrentPage()==Page::KeyboardAlternate)) {
             if(model.CurrentPage()==Page::Controller)model.ControllerBinding(selection,"none");
             else model.KeyboardBinding(selection,model.CurrentPage()==Page::KeyboardAlternate?1:0,0);
+            ApplyEdit(ctx);
             Sound(ctx,0x6CA3C0);
         }
     } else if(pressed&0x40) {
+        const bool confirm_language=model.CurrentPage()==Page::Language && (model.Dirty() || RestartPending());
+        if(!rows[selection].action && !confirm_language){release=true;return;}
         Sound(ctx,0x6CA3B8);
-        if((model.CurrentPage()==Page::Home || model.CurrentPage()==Page::Enhancements) && rows[selection].key=="settings.save") {
-            const auto& current=launcher::Current();const auto& desired=model.Draft();
-            const bool display=desired.display_mode!=current.display_mode || desired.width!=current.width || desired.height!=current.height || desired.aspect_ratio!=current.aspect_ratio || desired.render_percent!=current.render_percent;
-            if(display) {
-                trial_previous=current;std::string error;
-                if(launcher::ApplyInGame(desired,false,error)){trial=true;trial_until=std::chrono::steady_clock::now()+std::chrono::seconds(15);notice="settings.keep_display";}
-                else {LOGE("Recomp display: %s",error.c_str());notice="settings.error";}
-            } else if(Save(ctx) && !closing)Close(ctx);
-        } else if((model.CurrentPage()==Page::Home || model.CurrentPage()==Page::Enhancements) && rows[selection].key=="settings.discard"){model.Discard();Close(ctx);}
-        else if(selection<24 && (model.CurrentPage()==Page::Controller || model.CurrentPage()==Page::Keyboard || model.CurrentPage()==Page::KeyboardAlternate)) {
+        if(model.CurrentPage()==Page::Display && selection==5) {
+            PreviewDisplay();
+        } else if(model.CurrentPage()==Page::Display && selection==6) {
+            model.Revert();notice.clear();
+        } else if(model.CurrentPage()==Page::Language && (model.Dirty() || RestartPending())) {
+            if(!Save(ctx))model.Revert();
+        }
+        else if(selection<bindings::Count && (model.CurrentPage()==Page::Controller || model.CurrentPage()==Page::Keyboard || model.CurrentPage()==Page::KeyboardAlternate)) {
             raw::Begin(model.CurrentPage()==Page::Controller?raw::Device::Controller:raw::Device::Keyboard);capture_pending=true;notice="settings.capture";
         } else {
             const auto previous=model.CurrentPage();model.Enter(selection);
-            if(previous==model.CurrentPage() && !rows[selection].action)model.Change(selection,1);
+            if(previous==model.CurrentPage()) {
+                ApplyEdit(ctx);
+            }
         }
         release=true;
     }
@@ -274,13 +301,16 @@ void Process(X86Context& ctx,uint32_t directions,uint32_t pressed) {
 }
 }
 bool Active(){return active;}
+bool MainReturning(){return main_return_pending;}
 bool ExtraSelected(){return extra_selected;}
 bool CustomScene(uint32_t scene){return active && scene && scene==kernel::R32(0x5985F4);}
 unsigned Selection(){return selection;}
+// Options' own ornament at rest: marker top on its first row, and top of the fixed upper shaft section.
+constexpr float OptionsMarkerTop=191.296875f,OptionsShaftUpperTop=193.f;
 unsigned SelectorY(){const auto view=Snapshot();return 188+24*(view.selected-FirstRow(view));}
 std::string Title(){return Snapshot().title;}
 void RestoreMainSelector(){
-    if(Top()!=0x598430 || active || survival::Transitioning() || survival::SetupPopup())return;
+    if(Top()!=0x598430 || active || survival::Transitioning() || fighter_selection::SetupPopup())return;
     const auto scene=kernel::R32(0x59843C);
     const auto clip=scene?kernel::R32(scene+0x2A0):0;
     if(clip>=1 && clip<=6)kernel::W32(0x592D20+0xC,1);
@@ -300,10 +330,14 @@ bool MainInput(X86Context& ctx,uint8_t* base) {
     }
     const auto directions=kernel::R32(kernel::R32(ctx.esp+4)),pressed=kernel::R32(kernel::R32(ctx.esp+8));
     const auto panel=kernel::R32(0x59843C),status=panel?kernel::R32(panel+0x2E4):UINT32_MAX;
+    if(main_return_pending && !closing && panel && kernel::R32(panel+0x2A0)>=1 &&
+       kernel::R32(panel+0x2A0)<=6 && kernel::G<uint8_t>(panel+0x340))main_return_pending=false;
     // Consume input during Main's row-focus animation, before Main accepts another mode.
     if(survival::MenuInput(ctx,base,enter_pressed))return true;
     if(status!=0 && status!=2)return false;
     if(survival::MainMenu(ctx)){kernel::Return(ctx,0,2);return true;}
+    if(fighter_selection::ReturnToMain(ctx,base)){kernel::Return(ctx,0,2);return true;}
+    if(fighter_selection::CampaignInput(ctx,base))return true;
     const bool accept=!!(pressed&0x40) || enter_pressed;
     const auto selected=kernel::R32(0x598468);
     extra_selected=selected>=MainRecompRow;
@@ -328,7 +362,7 @@ bool MainInput(X86Context& ctx,uint8_t* base) {
             auto settings=launcher::Current();preferences::ReadActive(settings);settings.show_fps=performance::Visible();
             settings.language=launcher::Saved().language;settings.voice_language=launcher::Saved().voice_language;model.Open(settings);
             if(selected==MainEnhancementsRow)model.Go(Page::Enhancements);
-            selection=0;selections={};pending_directions=0;notice.clear();release=true;active=true;closing=false;animation.running=false;frame={};raw::Active(true);
+            selection=0;selections={};pending_directions=0;notice.clear();release=true;active=true;closing=false;main_return_pending=false;animation.running=false;frame={};raw::Active(true);
             kernel::W32(0x598468,4);__imp__sub_00015C86(ctx,base);kernel::W32(0x598468,selected);return true;
         }
         kernel::Return(ctx,0,2);return true;
@@ -356,36 +390,43 @@ void Draw(X86Context& ctx) {
             // Same caption style as Main: the halo label for every row, dimmed when not focused.
             menu::NativeLabel(ctx,x,row_y,Translate(row.key),1.05f,
                 opacity(index==view.selected?menu::MainSelectedAlpha:menu::MainIdleAlpha),false,false,row.value.empty()?500:267);
-            if(!row.value.empty())menu::NativeLabel(ctx,375+x-93,row_y,Translate(row.value),.85f,opacity(index==view.selected?254:130),false,true,225);
+            if(!row.value.empty()) {
+                auto value=Translate(row.value);
+                if(index==view.selected && !row.action && !(view.page==Page::Graphics && index==4 && model.Draft().vsync))
+                    value="<  "+value+"  >";
+                menu::NativeLabel(ctx,375+x-93,row_y,value,.85f,opacity(index==view.selected?254:130),false,true,225);
+            }
         }
         if(rows.size()>limit)menu::NativeLabel(ctx,556+f.x,183+f.y,std::to_string(view.selected+1)+" / "+std::to_string(rows.size()),.7f,opacity(180),false,true,70);
     }
     if(visible<127 || animation.Busy())return;
     const int footer_y=!exit_prompt && model.CurrentPage()==Page::Home?430:410;
-    menu::NativeButton(ctx,70,footer_y,menu::Button::Back);
-    menu::NativeLabel(ctx,92,float(footer_y),Translate(trial?"settings.revert":"settings.back_hint"),.9f,254,false,true,145);
     const auto rows=Snapshot().rows;const auto page=model.CurrentPage();
-    const bool binding=(page==Page::Controller || page==Page::Keyboard || page==Page::KeyboardAlternate) && selection<24;
+    const bool capturing=capture_pending || raw::Capturing()!=raw::Device::None;
+    const bool controller_capture=capturing && page==Page::Controller;
+    const auto back_caption=controller_capture?"settings.hold_cancel":capturing?"footer.cancel":trial?"settings.revert":"settings.back_hint";
+    std::vector<menu::FooterHint> hints{{controller_capture?menu::Button::None:menu::Button::Back,Translate(back_caption)}};
+    if(!trial && !capturing && rows.size()>1)hints.push_back({menu::Button::Navigate,Translate("footer.navigate")});
     const bool preview=page==Page::Enhancements && selection==0 && !trial;
-    const bool adjustable=selection<rows.size() && (!rows[selection].action || binding) && !preview &&
-        !(page==Page::Graphics && selection==5 && model.Draft().vsync);
-    if(preview) {
-        menu::NativeButton(ctx,250,footer_y,menu::Button::Preview);
-        menu::NativeLabel(ctx,272,float(footer_y),Translate("settings.listen_hint"),.9f,254,false,true,160);
-    } else if(!trial && adjustable) {
-        menu::NativeButton(ctx,250,footer_y,menu::Button::Adjust);
-        menu::NativeLabel(ctx,300,float(footer_y),Translate("settings.adjust_hint"),.7f,254,false,true,132);
-    }
-    menu::NativeButton(ctx,450,footer_y,menu::Button::Accept);
-    menu::NativeLabel(ctx,472,float(footer_y),Translate(trial?"settings.keep":"settings.edit_hint"),.9f,254,false,true,136);
+    const bool adjustable=selection<rows.size() && !rows[selection].action &&
+        !(page==Page::Graphics && selection==4 && model.Draft().vsync);
+    if(!trial && !capturing && adjustable)hints.push_back({menu::Button::Adjust,Translate("settings.adjust_hint")});
+    const bool restart_confirmation=page==Page::Language && (model.Dirty() || RestartPending());
+    if(!capturing && preview)hints.push_back({menu::Button::Preview,Translate("settings.listen_hint")});
+    else if(!capturing && (trial || restart_confirmation || (selection<rows.size() && rows[selection].action)))
+        hints.push_back({menu::Button::Accept,Translate(trial?"settings.keep":restart_confirmation?"settings.apply_changes":"settings.edit_hint")});
+    menu::NativeFooter(ctx,footer_y,hints);
     auto message=notice;
     if(trial)message=Translate("settings.keep_display")+" "+std::to_string(std::max(0,int(std::chrono::duration_cast<std::chrono::seconds>(trial_until-std::chrono::steady_clock::now()).count())));
-    else if(!exit_prompt && page==Page::Language && message.empty())message="settings.restart";
+    // The restart notice belongs to a pending change; it disappears again with the applied languages.
+    else if(!exit_prompt && page==Page::Language && message.empty() && restart_confirmation)message="settings.restart";
     else if(!exit_prompt && page==Page::Enhancements && message.empty()) {
         if(selection==0)message="settings.scorpion_hint";
         else if(selection==1)message="settings.restore_dialogue_hint";
         else if(selection==2)message="settings.cinematic_bars_hint";
-        else if(selection==3)message="settings.improved_difficulty_hint";
+        else if(selection==3)message="settings.enhanced_camera_hint";
+    } else if(!exit_prompt && page==Page::Interface && message.empty()) {
+        message=selection==0?"settings.fps_hint":"settings.notifications_hint";
     }
     if(!message.empty())menu::NativeLabel(ctx,55,453,Translate(message),.72f,254,false,true,550);
 }
@@ -404,7 +445,7 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
         survival::DrawMenu(ctx,clip>=1 && clip<=6?255:alpha);
     }
     if(!main && !custom)return false;
-    if(main && survival::SetupPopup() && (id.starts_with("main.") || key==0x59FB5186 ||
+    if(main && fighter_selection::SetupPopup() && (id.starts_with("main.") || key==0x59FB5186 ||
        key==0x4599E8C7 || key==0x49B7A657 || key==0x71960991)) {
         kernel::W32(0x63F5E0,first);return true;
     }
@@ -455,8 +496,9 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
     }
     if(key==0x59FB5186 && (custom || main)) {
         // Gold marker beside the sparkle: keep its authored alpha during Main's clips 0..18.
-        if(main && (Top()!=0x598430 || (survival::Transitioning() && !survival::MedallionMenu()) || survival::SetupPopup() ||
+        if(main && (Top()!=0x598430 || (survival::Transitioning() && !survival::MedallionMenu()) || fighter_selection::SetupPopup() ||
             kernel::R32(scene+0x2A0)>18)) {
+            if(!active && !main_return_pending)main_gold_anchor={};
             kernel::W32(0x63F5E0,first);return true;
         }
         const auto status=kernel::R32(scene+0x2E4);
@@ -470,9 +512,23 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
         const auto selected=kernel::R32(0x598468);
         const auto visual=menu::MainVisualRow(selected);
         const float pitch=float(kernel::R32(0x4DF4DC)+(kernel::R32(0x5CE864)==1?2:0));
-        const float offset=custom?float(SelectorY())-top:
+        const auto clip=kernel::R32(scene+0x2A0);
+        // During the Options entrance, translate the native marker so it slides in; afterwards pin it to the selected row,
+        // because native return clips leave it on their own row.
+        const bool entering=clip==0 && ClipProgress(scene)<1;
+        const float normal_offset=custom?float(SelectorY())-(entering?OptionsMarkerTop:top):
             (extra_selected?pitch*(float(visual)-5):selected>=3?pitch:0)-
             menu::MainMenuRise+menu::MainListAdjustment(visual);
+        if(main && clip>=1 && clip<=6 && (!main_return_pending || kernel::G<uint8_t>(scene+0x340))) {
+            if(selected>=MainRecompRow && selected<=MainExitRow && std::isfinite(top))
+                main_gold_anchor={selected,top+normal_offset};
+            else main_gold_anchor={};
+        }
+        // The retail Options exit animates its own row-4 quad; keep synthetic rows on their last focused row instead.
+        const bool synthetic_exit=main && ((active && !closing && clip==15) ||
+            (main_return_pending && (clip==16 || (clip>=1 && clip<=6)))) && selected==return_row &&
+            selected>=MainRecompRow && selected<=MainExitRow && main_gold_anchor.row==selected;
+        const float offset=synthetic_exit?main_gold_anchor.top-top:normal_offset;
         for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
             const auto address=0x63F5E4+i*0x6C+0x14+v*16;
             const float y=std::bit_cast<float>(kernel::R32(address));
@@ -498,7 +554,8 @@ bool Graphic(X86Context& ctx,uint32_t scene,uint32_t key,uint32_t first,uint32_t
     const uint32_t record=0x63F5E4+first*0x6C;
     const bool cap=key==0x4599E8C7 && std::bit_cast<float>(kernel::R32(record+0x4C))>std::bit_cast<float>(kernel::R32(record+0x50));
     const bool joint=key==0x49B7A657;
-    const bool shaft=key==0x71960991 && std::abs(top-shaft_start)<1;
+    // The lower shaft section rises while the ornament closes and reopens between pages; it must still follow its cap.
+    const bool shaft=key==0x71960991 && (main?std::abs(top-shaft_start)<1:top>OptionsShaftUpperTop+8);
     if(cap || joint || shaft)for(auto i=first;i<end;++i)for(unsigned v=0;v<3;++v) {
         const auto a=0x63F5E4+i*0x6C+0x14+v*16;
         const float y=std::bit_cast<float>(kernel::R32(a)),shaft_top=std::min(top,bottom+extension-8);
@@ -569,7 +626,8 @@ X86_FUNC(sub_001B2200) {
     // Survival keeps Game Mode selected; its roster still returns through Main's clips 8 and 10.
     const bool bounded=openshao::recomp::ExtraSelected() && !openshao::survival::OverlayShown() &&
         ctx.ecx==kernel::R32(0x59843C) && value>=7 && value<=10;
-    if(bounded)kernel::W32(pointer,6);
+    const auto clip=ctx.ecx==kernel::R32(0x59843C)?openshao::fighter_selection::MainClip(value):value;
+    if(pointer)kernel::W32(pointer,bounded?6:clip);
     __imp__sub_001B2200(ctx,base);
-    if(bounded)kernel::W32(pointer,value);
+    if(pointer)kernel::W32(pointer,value);
 }

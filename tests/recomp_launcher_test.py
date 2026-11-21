@@ -1,9 +1,4 @@
-"""Drive the launcher through its automation channel and check the files it changes.
-
-The executable runs with --launcher-test, which keeps the real launcher logic and drawing but opens no window.
-On Windows the processes run on a private desktop, so error dialogs never reach the user's desktop.
-Other systems run without display access or external desktop commands.
-"""
+"""Drive the launcher through its automation channel on a private desktop and check its files."""
 import argparse
 import hashlib
 import io
@@ -117,8 +112,7 @@ class Desktop:
 
 
 class Launcher:
-    # Every started launcher, so a failed check still ends them. A process left on the private desktop
-    # keeps the test's output handles open and CTest would wait for it indefinitely.
+    # Every started launcher, ended even after a failure; a stray process would hang CTest.
     started = []
 
     def __init__(self, exe, arguments, root, name, desktop):

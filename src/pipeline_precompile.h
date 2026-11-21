@@ -80,6 +80,8 @@ uint32_t CurrentRoom();
 // The title created a vertex shader: recipes that wait for this program can be built.
 void RegisterProgram(std::span<const uint32_t> words);
 uint64_t ProgramHash(std::span<const uint32_t> words);
+bool HasRegisteredProgram(uint64_t hash);
+uint64_t ActiveRecipeLayout();
 // The title is loading a room's assets: its recipes go first.
 void RoomLoading(uint32_t room);
 // Waits once per room for its recipes, up to OPENSHAO_PIPELINE_WAIT_MS (default 2000, 0 = never).

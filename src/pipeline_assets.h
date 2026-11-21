@@ -169,6 +169,7 @@ void WarmShaderLibraryPipelines();
 // Read/copy only on the asset-loading thread. No guest pointer is sent to workers.
 void CapturePipelineObject(uint32_t object, uint32_t source_type = 0);
 void BeginPipelineLoad();
+void PrepareCatalogPipelines(uint32_t room);
 void SealPipelineLoad();
 bool PipelineLoadPending();
 void EndPipelineLoad();

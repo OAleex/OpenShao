@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct X86Context;
@@ -22,6 +23,8 @@ std::string EncodePage(uint32_t page, std::span<const uint8_t> region);
 bool DecodePage(std::span<const uint8_t> file, uint32_t page, std::vector<uint8_t>& region);
 uint32_t Step(uint32_t page, int delta);  // wraps around 1..PageCount
 uint32_t GlobalSlot(uint32_t page, uint32_t slot);  // 1..PageCount*SlotsPerPage, 0 when invalid
+// The retail font maps # and $ to the left and right trigger icons.
+std::string PageIndicator(std::string_view label,unsigned page,unsigned count,std::string_view group={});
 // Turns one slot of a page region into a never-used native record.
 bool ClearSlot(std::span<uint8_t> region, uint32_t slot);
 

@@ -50,16 +50,14 @@ int main() {
         }
         return assembled.vertex_count == 3 && assembled.regs == ((1u << 0) | (1u << 3) | (1u << 9));
     };
-    // EndPrimitive preserves the source FVF bits and tags its synthetic FLOAT4
-    // declaration with bit zero. The original 0x144 FVF means XYZRHW.
+    // EndPrimitive keeps the FVF bits and tags its FLOAT4 declaration with bit 0; 0x144 is XYZRHW.
     if (!check(0x145, true, "immediate XYZRHW")) return 1;
     if (assembled.buffers[0].stride != 48 || std::memcmp(assembled.buffers[0].src, vertices, sizeof(vertices))) return 1;
     if (!check(0x143, false, "immediate XYZ")) return 1;
     if (!check(0xB0000001, false, "declaration-only shader")) return 1;
     state.vs->program = {0, 0, 0, 0};
     if (!check(0x145, false, "programmable shader")) return 1;
-    // Three SHORTN components occupy six bytes, so the raw eight-byte host
-    // format cannot read them at this stride. Exercise real conversion.
+    // Three SHORTN components take six bytes, so this stride needs real conversion.
     const auto packed = mem::AllocContiguous(128 * 6, 0, 0xFFFFFFFF, 16);
     if (!packed) return 2;
     auto* values = static_cast<int16_t*>(kernel::HostPtr(packed));

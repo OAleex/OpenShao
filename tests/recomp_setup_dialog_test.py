@@ -1,8 +1,4 @@
-"""Check game selection: the launcher opens on its game page until a usable game is chosen.
-
-The launcher runs with --launcher-test, which keeps the real launcher logic and drawing but opens no window.
-On Windows the processes run on a private desktop. --setup keeps the system dialog for runs without the launcher.
-"""
+"""Check that the launcher stays on its game page until a usable game is chosen."""
 import argparse
 from pathlib import Path
 import sys

@@ -17,7 +17,9 @@ X86_FUNC(sub_0048E398) {
     caps[3]=0xFF; // D-pad, START/BACK and both thumb clicks
     for (int i=5;i<13;++i) caps[i]=255; // A/B/X/Y/black/white/LT/RT
     for (int i=13;i<21;i+=2) {caps[i]=255;caps[i+1]=127;}
-    if (openshao::controller::HasRumble(int(port))) for(int i=21;i<25;++i) caps[i]=255;
+    // The game reads motors only when a port appears. The keyboard keeps port 0 connected, so a
+    // controller detected later never refreshes them; the host drops vibration without a motor.
+    for(int i=21;i<25;++i) caps[i]=255;
     std::memcpy(kernel::HostPtr(destination),caps,sizeof(caps));
     LOG_FIRST(4,"openshao input: capabilities port=%u motors=%u",port,unsigned(caps[21]));
     kernel::Return(ctx,0,2);

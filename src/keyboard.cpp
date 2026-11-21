@@ -21,6 +21,13 @@ namespace {
 std::mutex lock;
 std::bitset<256> keys;
 bindings::Keyboard settings;
+bool Down(int key) {
+    if(key<=0 || key>=256)return false;
+    if(key==VK_SHIFT)return keys[key] || keys[VK_LSHIFT] || keys[VK_RSHIFT];
+    if(key==VK_CONTROL)return keys[key] || keys[VK_LCONTROL] || keys[VK_RCONTROL];
+    if(key==18)return keys[key] || keys[164] || keys[165];
+    return keys[key];
+}
 }
 void Configure(const bindings::Keyboard& value) {
     std::lock_guard guard(lock);settings=value;keys.reset();
@@ -43,6 +50,11 @@ void ReleaseAll() {
     std::lock_guard guard(lock);
     keys.reset();
 }
+bool CameraRecenterDown() {
+    std::lock_guard guard(lock);
+    const auto& shortcut=settings.keys[bindings::RecenterCamera];
+    return std::any_of(shortcut.begin(),shortcut.end(),Down);
+}
 #ifdef _WIN32
 bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
     std::lock_guard guard(lock);
@@ -50,14 +62,16 @@ bool Message(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
         keys.reset();
         return false;
     }
+    const bool key_message=msg==WM_KEYDOWN || msg==WM_KEYUP || msg==WM_SYSKEYDOWN || msg==WM_SYSKEYUP;
+    // Use the physical position unless this layout's virtual key already has a binding.
+    if(key_message && ((uintptr_t(lp)>>16)&0x1FF)==0x29 && !Mapped(unsigned(wp)))wp=bindings::KeyBelowEscape;
     if(wp==VK_SHIFT)if(const auto side=MapVirtualKeyW((unsigned(lp)>>16)&255,MAPVK_VSC_TO_VK_EX))wp=side;
     if(wp==VK_CONTROL)wp=(lp&(intptr_t(1)<<24))?VK_RCONTROL:VK_LCONTROL;
     if(wp==VK_MENU)wp=(lp&(intptr_t(1)<<24))?VK_RMENU:VK_LMENU;
     // A key pressed before opening the custom menu must release even when that menu consumes key-up.
     if((msg==WM_KEYUP || msg==WM_SYSKEYUP) && wp<keys.size())keys.reset(wp);
-    if((msg==WM_KEYDOWN || msg==WM_KEYUP || msg==WM_SYSKEYDOWN || msg==WM_SYSKEYUP) &&
-       recomp::raw::Key(unsigned(wp),msg==WM_KEYDOWN || msg==WM_SYSKEYDOWN)){*result=0;return true;}
-    if ((msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) && wp < keys.size() && Mapped(unsigned(wp))) {
+    if(key_message && recomp::raw::Key(unsigned(wp),msg==WM_KEYDOWN || msg==WM_SYSKEYDOWN)){*result=0;return true;}
+    if (key_message && wp < keys.size() && Mapped(unsigned(wp))) {
         keys.set(wp, msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
         LOGI("openshao input: window key=%u down=%u", unsigned(wp), (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) ? 1u : 0u);
         *result = 0;
@@ -75,13 +89,8 @@ void Poll(int port, input::Pad& pad) {
     pad.connected = true;
     bindings::Values values{};
     const bool native_enter_accept=recomp::raw::NativeEnterAccept();
-    for(unsigned i=0;i<values.size();++i)for(int key:settings.keys[i]) {
-        if(key<=0 || key>=256 || (native_enter_accept && key==VK_RETURN))continue;
-        bool down=keys[key];
-        if(key==VK_SHIFT)down=down || keys[VK_LSHIFT] || keys[VK_RSHIFT];
-        if(key==VK_CONTROL)down=down || keys[VK_LCONTROL] || keys[VK_RCONTROL];
-        if(key==18)down=down || keys[164] || keys[165];
-        if(down)values[i]=1;
+    for(unsigned i=0;i<bindings::RecenterCamera;++i)for(int key:settings.keys[i]) {
+        if((!native_enter_accept || key!=VK_RETURN) && Down(key))values[i]=1;
     }
     // Enter is Start in gameplay but Accept on the medallion pages.
     if(native_enter_accept && keys[VK_RETURN]){

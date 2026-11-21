@@ -8,8 +8,7 @@
 #include "difficulty.h"
 #include "core/log.h"
 
-// Debug Player 2: game mode at state+0x88 (0 solo, 1 Ko-op, 2 Versus); 0xCB690 shows the second hero from it.
-// Switching changes the mode, player count (0x633038), ports (0xD46D0) and health split (0xD4790) at the next map load.
+// Debug Player 2: mode at state+0x88 (0 solo, 1 Ko-op, 2 Versus); count 0x633038, ports 0xD46D0, health 0xD4790 at next map.
 namespace openshao::ed_nexus {
 namespace {
 constexpr uint32_t LiveState = 0x5ACEBC, PlayerCount = 0x633038;

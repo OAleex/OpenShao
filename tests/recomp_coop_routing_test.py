@@ -1,8 +1,4 @@
-"""Isolated real-XBE regression: a gamepad enters Ko-op, then keyboard is P1.
-
-Uses only a hidden game window and an SDL virtual controller. Never reads or
-changes the user's physical controllers, installed game, or personal saves.
-"""
+"""Isolated real-XBE regression: a gamepad enters Ko-op, then keyboard is P1."""
 import argparse
 import ctypes
 from ctypes import wintypes

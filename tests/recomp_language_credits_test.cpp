@@ -1,6 +1,13 @@
 #include "cpu/x86_ops.h"
 #include "difficulty.h"
 namespace openshao::difficulty { void PopupFooter(X86Context&) {} }
+namespace openshao::difficulty {
+bool SaveListText(X86Context& ctx, uint8_t*, TextCall, void (*)(X86Context&, uint8_t*)) {
+    PopupFooter(ctx);
+    return false;
+}
+}
+namespace openshao::campaign_moves { bool FitReferenceList(X86Context&) { return false; } }
 #include <array>
 #include <cstdio>
 #include <cstdlib>

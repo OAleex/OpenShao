@@ -2,8 +2,7 @@
 
 
 def adapt_vertex(vertex, replace_once):
-    # This code shares the implementation-local helpers with Assemble. It never
-    # reads a vertex/index buffer or calls the data-producing assembly paths.
+    # Shares Assemble's helpers but never reads buffers or runs the assembly paths.
     describe = r'''
 bool DescribePipelineLayout(const State& s, uint32_t prim, Assembled& out) {
     out = Assembled{};

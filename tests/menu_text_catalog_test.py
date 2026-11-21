@@ -6,27 +6,37 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 LANGUAGES = {"en", "fr", "de", "es", "it", "pt-BR"}
 REQUIRED = {
+    "footer.navigate",
+    "settings.hold_cancel",
     "settings.cinematic_bars", "settings.cinematic_bars_hint", "value.display_refresh",
+    "settings.enhanced_camera", "settings.enhanced_camera_hint", "binding.camera_recenter", "key.192",
+    "settings.camera_enabled", "settings.camera_speed", "settings.camera_smoothing",
+    "settings.apply_changes",
     "main.single_player", "main.koop", "main.versus", "main.load_game", "main.options", "main.kontent",
     "main.exit_desktop", "main.exit_confirm", "main.exit_error", "debug.menu", "debug.player_damage", "debug.restore_health", "debug.player2", "debug.next_map",
     "debug.unlock_kontent", "debug.kontent_unlocked", "settings.bloom_effect",
-    "recomp.enhancements", "settings.improved_difficulty", "settings.improved_difficulty_hint",
+    "recomp.enhancements",
     "audio.output", "audio.mono", "audio.stereo", "audio.surround",
     "single_player.monk", "difficulty.easy_1", "difficulty.easy_2", "difficulty.normal_1", "difficulty.normal_2",
     "difficulty.hard_1", "difficulty.hard_2", "difficulty.monk_1", "difficulty.monk_2", "difficulty.monk_3", "difficulty.monk_4",
     "load.player", "load.level", "load.progress", "load.time", "load.difficulty", "save.page", "save.delete", "save.delete_prompt",
     "settings.scorpion_unfiltered", "settings.restore_dialogue", "settings.restore_dialogue_hint", "settings.listen_hint", "settings.preview_error",
-    "recomp.title", "recomp.display", "recomp.graphics", "recomp.controls", "recomp.audio", "settings.language",
+    "recomp.title", "recomp.display", "recomp.graphics", "recomp.controls", "recomp.audio", "settings.language", "recomp.interface", "settings.notifications", "settings.fps_hint", "settings.notifications_hint",
     "options.title", "options.brightness", "options.audio", "options.gameplay", "audio.title",
     "audio.music", "audio.effects", "audio.speech", "gameplay.title", "gameplay.rounds", "gameplay.time",
     "gameplay.camera", "kontent.title", "footer.back", "footer.enter", "footer.cancel",
     "footer.default", "footer.accept",
+    "fighter.close", "fighter.find_coin", "fighter.finish_liu_kang", "fighter.finish_kung_lao",
+    "fighter.unlock_sub_zero", "fighter.unlock_scorpion",
     "character_select.title", "level_select.title", "load.title",
     "source.none", "source.leftx-", "source.righty+", "source.touchpad",
     "main.game_mode", "game_mode.survival", "survival.rules_1", "survival.rules_2",
     "survival.locked_hint", "survival.unlock_new", "survival.unlock_pending", "survival.unlock_saved",
-    "survival.complete",
+    "survival.complete", "campaign.fatality_compartment", "campaign.ally_fatality_compartment",
     "key.0", "key.32", "key.37", "key.38", "key.39", "key.40", "key.46",
+    "photo.mode", "photo.take", "photo.hide", "photo.saved", "photo.failed",
+    "photo.move", "photo.look", "photo.zoom", "photo.height",
+    "photo.options", "photo.options_title", "photo.close", "photo.filter", "photo.filter_none", "photo.filter_bw", "photo.filter_sepia", "photo.filter_vintage", "photo.filter_contrast", "photo.amount", "photo.vignette", "photo.vignette_off", "photo.vignette_light", "photo.vignette_strong", "photo.tilt", "photo.quality", "photo.quality_screen", "photo.quality_high", "photo.quality_max", "photo.reach", "photo.reach_normal", "photo.reach_large", "photo.reach_free", "photo.reset", "photo.saving", "photo.saved_high",
 }
 
 
@@ -77,11 +87,14 @@ class MenuCatalogTest(unittest.TestCase):
                 with self.subTest(language=language, key=key):
                     self.assertIsInstance(label, str)
                     self.assertTrue(label.strip())
-                    multiline = key.startswith("survival.unlock_") or key == "survival.complete"
+                    survival_frame = key.startswith("survival.unlock_") or key == "survival.complete"
+                    multiline = survival_frame or key in (
+                        "campaign.fatality_compartment", "campaign.ally_fatality_compartment")
                     self.assertLessEqual(len(label), 255 if key.startswith("system.") else 127 if multiline else 95)
                     self.assertNotIn("\x00", label)
                     if multiline:
-                        self.assertIn("\n", label, "Survival frames must use the native framed multiline format")
+                        if survival_frame:
+                            self.assertIn("\n", label, "Survival frames must use the native framed multiline format")
                         self.assertTrue(all(0 < len(line) <= 95 for line in label.split("\n")))
                     else:
                         self.assertNotIn("\n", label)
@@ -99,11 +112,12 @@ class MenuCatalogTest(unittest.TestCase):
         self.assertEqual(portuguese["main.kontent"], "Konteúdo")
         self.assertNotIn("ö", portuguese["main.options"])
         self.assertEqual(portuguese["footer.default"], "Padrão")
+        self.assertEqual(portuguese["settings.cinematic_bars"], "Tarja nas Cenas")
+        self.assertNotIn("cutscene", portuguese["settings.cinematic_bars_hint"].lower())
         self.assertEqual(portuguese["recomp.title"], "Konfigurar Recompilação")
 
     def test_pause_translations_preserve_accents_in_utf8_json(self):
-        # A Windows text-insertion path once replaced non-ASCII source glyphs
-        # with literal '?'. The native font cannot recover missing characters.
+        # A Windows insertion path once turned non-ASCII glyphs into '?', which the native font cannot recover.
         expected = {
             "pt-BR": {
                 "pause.video": "V\u00eddeo e Tela",

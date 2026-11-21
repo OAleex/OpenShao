@@ -40,6 +40,38 @@ inline Routing BuildRouting(uint32_t channels, uint32_t count, const uint8_t* bi
     }
     return routing;
 }
+// Stereo fold weights: centre and rear at -3 dB; LFE, I3DL2 and effect sends are not speaker feeds.
+inline bool StereoFoldWeights(uint8_t bin, float& left, float& right) {
+    constexpr float side = .70710678f;
+    left = right = 0;
+    switch (bin) {
+    case 0: case 6: left = 1; return true;
+    case 1: case 7: right = 1; return true;
+    case 4: case 8: left = side; return true;
+    case 5: case 9: right = side; return true;
+    case 2: left = right = side; return true;
+    default: return false;
+    }
+}
+// Mono copies on several speaker bins must not add up in the fold: the louder side equals the loudest send.
+inline void NormalizeStereoFold(Routing& routing, uint32_t channels) {
+    if (channels != 1) return;
+    float left = 0, right = 0, peak = 0;
+    for (uint32_t i = 0; i < routing.count; ++i) {
+        float l, r;
+        if (!StereoFoldWeights(routing.slots[i].bin, l, r)) continue;
+        left += routing.slots[i].gain * l;
+        right += routing.slots[i].gain * r;
+        peak = std::max(peak, routing.slots[i].gain);
+    }
+    const float fold = std::max(left, right);
+    if (fold <= peak || fold <= 0) return;
+    const float scale = peak / fold;
+    for (uint32_t i = 0; i < routing.count; ++i) {
+        float l, r;
+        if (StereoFoldWeights(routing.slots[i].bin, l, r)) routing.slots[i].gain *= scale;
+    }
+}
 inline void Accumulate(Frame& frame, uint32_t sample, const Routing& routing,
                        const float* input, const Headroom& headroom, bool spatial_voice = false,
                        const float* wet_input = nullptr) {

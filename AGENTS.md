@@ -33,6 +33,7 @@ Follow `CONTRIBUTING.md` and `AI_POLICY.md` for contribution scope and AI use.
 - Keep package formats, update instructions and project links in `resources/readme.txt`.
 - Preserve intentional localization and character-encoding tests.
 - Write comments that explain constraints or non-obvious behavior. Avoid comments that repeat the code.
+- Keep each comment to one line. Do not comment functions whose name and code already show their purpose.
 - Document implemented features. Do not describe full campaign compatibility as verified without gameplay evidence.
 - The maintainer reports a completed campaign playthrough. Most graphical issues are fixed. Some can still appear.
 - Mention tools and dependencies in project documentation. Avoid comparisons or credits to other game recompilation projects.
