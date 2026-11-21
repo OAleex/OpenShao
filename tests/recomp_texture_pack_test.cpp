@@ -1,4 +1,5 @@
 #include "texture_pack.h"
+#include "texture_pack_stats.h"
 #include "core/log.h"
 #include <cstdint>
 #include <cstring>
@@ -75,6 +76,23 @@ int main() try {
     Check(!texpack::Load(0xa3, blocks), "A file that is not DXT5 is refused");
     Check(!texpack::Load(0xa4, blocks), "A missing file is refused");
     Check(!texpack::Load(0xdead, blocks), "An unknown hash is refused");
+
+    const auto before = texpack::GetStats();
+    {
+        texpack::Resident one_texture(1000);
+        const auto held = texpack::GetStats();
+        Check(held.resident == before.resident + 1 && held.resident_bytes == before.resident_bytes + 1000,
+              "A held replacement counts as resident");
+    }
+    const auto released = texpack::GetStats();
+    Check(released.resident == before.resident && released.resident_bytes == before.resident_bytes,
+          "A released replacement stops counting");
+    texpack::NoteLoad(300, 700, true);
+    texpack::NoteLoad(50, 0, false);
+    const auto noted = texpack::GetStats();
+    Check(noted.loads == before.loads + 1 && noted.failures == before.failures + 1 &&
+              noted.disk_us == before.disk_us + 350 && noted.upload_us == before.upload_us + 700,
+          "Loads and failures add their times");
 
     texpack::SetPacks({});
     Check(!texpack::Enabled() && !texpack::Find(0xa1), "An empty list turns the replacement off");
