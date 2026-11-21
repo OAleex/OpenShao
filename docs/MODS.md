@@ -118,6 +118,9 @@ video memory from the start.
 b1ef1733100d3dea
 ```
 
+To try a texture pack without packaging and installing it, set `OPENSHAO_HD_PACK_DIR` to the folder that holds its `index.txt`. That folder is
+read before the packs of the enabled mods.
+
 Only the Vulkan renderer replaces textures for now.
 
 ## Routine scripts
