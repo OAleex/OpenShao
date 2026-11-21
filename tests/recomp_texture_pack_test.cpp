@@ -1,4 +1,6 @@
 #include "texture_pack.h"
+#include "texture_dev_folder.h"
+#include "png_writer.h"
 #include "texture_pack_stats.h"
 #include "texture_pack_builder.h"
 #include "core/log.h"
@@ -222,6 +224,33 @@ int main() try {
         Check(e && e->first_level == 1, "A pack file in Medium starts its textures at the second level");
         texpack::SetPacks({{root / "c.ostp", texpack::Quality::High}});
         Check(texpack::Source()->Find(0xf1)->first_level == 0, "A pack file in High starts at the first level");
+        // A folder of pictures, the developer mode's: only the edited one counts, and it comes before the pack file
+        {
+            const auto dev = root / "dev";
+            fs::create_directories(dev);
+            Bytes edited(64 * 32 * 4), original(16 * 8 * 4);
+            for (size_t i = 0; i < edited.size(); ++i) edited[i] = uint8_t(i * 3);
+            for (size_t i = 0; i < original.size(); ++i) original[i] = uint8_t(i * 5);
+            const auto write = [&](const std::string& name, const Bytes& b) {
+                std::ofstream o(dev / name, std::ios::binary);
+                o.write(reinterpret_cast<const char*>(b.data()), std::streamsize(b.size()));
+            };
+            write("00000000000000a1_DXT5_16x8.png", pngtest::Png(64, 32, edited));
+            write("00000000000000f1_DXT5_16x8.png", pngtest::Png(16, 8, original));  // as extracted
+            const std::string manifest = "{\"00000000000000a1\":{\"pixels\":\"" + texpack::PixelSignature(16, 8, original.data()) +
+                                         "\"},\"00000000000000f1\":{\"pixels\":\"" + texpack::PixelSignature(16, 8, original.data()) + "\"}}";
+            write("manifest.json", Bytes(manifest.begin(), manifest.end()));
+            texpack::SetPacks({dev, root / "c.ostp", root / "a"});
+            source = texpack::Source();
+            e = source->Find(0xa1);
+            Check(e && e->format == texpack::BcFormat::Rgba8 && e->width == 64 && e->height == 32 && e->levels == 7,
+                  "The edited picture of a developer folder comes before the pack file's texture");
+            const auto f = source->Find(0xf1);
+            Check(f && f->format != texpack::BcFormat::Rgba8, "A picture left as extracted is not a replacement: the pack file's texture is read");
+            std::vector<uint8_t> out;
+            Check(source->ReadLevels(*e, 0, out) && out.size() == size_t(64 * 32 + 32 * 16 + 16 * 8 + 8 * 4 + 4 * 2 + 2 + 1) * 4 && out[5] == edited[5],
+                  "It reads through the combined source");
+        }
         texpack::SetPacks({root / "junk.ostp"});
         Check(texpack::Source() == nullptr && !texpack::Enabled(), "Only a file that is not a pack turns the replacement off");
     }
