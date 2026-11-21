@@ -300,6 +300,16 @@ public:
         StoreProgram(hash, words, false);
     }
 
+    bool HasRegisteredProgram(uint64_t hash) {
+        std::lock_guard lock(mutex_);
+        return !hash || programs_.count(hash);
+    }
+
+    uint64_t ActiveRecipeLayout() {
+        std::lock_guard lock(mutex_);
+        return builder_ ? layout_ : 0;
+    }
+
     void RoomLoading(uint32_t room) {
         std::lock_guard lock(mutex_);
         if (builder_ && room != current_room_) PrioritizeRoom(room);
@@ -654,6 +664,8 @@ void ReleaseBatch(Batch batch) { Instance().ReleaseBatch(batch); }
 void RegisterProgram(std::span<const uint32_t> words) {
     if (!words.empty()) Instance().RegisterProgram(ProgramHash(words), words);
 }
+bool HasRegisteredProgram(uint64_t hash) { return Instance().HasRegisteredProgram(hash); }
+uint64_t ActiveRecipeLayout() { return Instance().ActiveRecipeLayout(); }
 void RoomLoading(uint32_t room) { Instance().RoomLoading(room); }
 void WaitForRoom(uint32_t room) { Instance().WaitForRoom(room); }
 

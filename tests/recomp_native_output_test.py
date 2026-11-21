@@ -51,6 +51,7 @@ namespace logx {void Write(Level,const char*,...) {}}
 namespace openshao::frames {int Target(){return target_rate.load();}}
 namespace openshao::dialogue {void AuditTick() {}}  // scene audio audit lives in dialogue_restore.cpp
 namespace openshao::survival {void DrawRulesBackdrop(X86Context&) {}}
+namespace openshao::photo_mode {void BeforeText() {}}  // photo mode scene effects, covered by its own checks
 
 X86_FUNC(__imp__sub_00011069) {
     ++fixture::logic;
@@ -304,13 +305,19 @@ X86_FUNC(__imp__sub_00011069) {
     auto render=ctx;sub_00114CD0(render,base);
     ctx.eax=0;ctx.esp+=4;
 }
-X86_FUNC(__imp__sub_00114CD0) {
-    // CEngineRenderer::Render -> UpdateCharacters -> cPxCharacter::Update.
-    // Pose capture therefore happens INSIDE the render, after its entry hook.
+X86_FUNC(__imp__sub_0012DA10) {
+    // UpdateCharacters -> cPxCharacter::Update: pose rebuild, then the physics that follows it.
     auto update=ctx;update.esp=0x2000;
     kernel::W32(0x2000,0x12B8E4);kernel::W32(0x2004,pose_flow::Model);
     kernel::G<uint8_t>(pose_flow::Bones+0x210)=0;
     sub_00107880(update,base);
+    fixture::Check(std::abs(kernel::G<float>(pose_flow::Bones+0x390+0x50)-(101.f+float(fixture::logic)))<.001f,
+                   "Character physics after the pose rebuild must see the simulated pose, not an interpolated one");
+    ctx.esp+=4;
+}
+X86_FUNC(__imp__sub_00114CD0) {
+    // CEngineRenderer::Render -> UpdateCharacters, then drawing.
+    auto update=ctx;sub_0012DA10(update,base);
     pose_flow::drawn.push_back(kernel::G<float>(pose_flow::Bones+0x390+0x50));
     ++fixture::presents;
     if(extra)++fixture::outputs;
@@ -382,6 +389,68 @@ class NativeOutputTest(unittest.TestCase):
         for rate in (120,144,165,240):
             with self.subTest(rate=rate):
                 self.run_fixture(MAIN.replace("Configure(120,false)",f"Configure({rate},false)"))
+
+    def test_late_output_runs_one_rendered_update_instead_of_catch_up(self):
+        # cPxCharacter::Update only runs inside the renderer; native updates without it let characters leave the map.
+        for rate in (120,144,165,240):
+            with self.subTest(rate=rate):
+                self.run_fixture(r"""
+int main() {
+  try {
+    using fixture::Check;
+    openshao::frames::Configure(RATE,false);
+    kernel::W32(0x510B74,0x700000);kernel::W32(0x700000,0x710000);
+    kernel::W32(0x639750,0x720000);kernel::W32(0x639224,0x730000);
+    kernel::W32(0x505970,0xC4);kernel::W32(0x4EF42C,1);
+    const auto call=[] {X86Context ctx{};ctx.esp=0x1000;sub_00011069(ctx,kernel::g_base);Check(ctx.esp==0x1004,"The gameplay callback must keep the guest call convention");};
+    for(unsigned i=0;i<=60;++i){fixture::now=(int64_t(i)*1000000000+59)/60;call();}
+    for(const int64_t stall:{34000000ll,120000000ll,240000000ll}) {
+        const auto logic=fixture::logic,presents=fixture::presents,outputs=fixture::outputs;
+        fixture::now+=stall;call();
+        Check(fixture::logic==logic+1,"A late output must run exactly one native gameplay update");
+        Check(fixture::presents-presents-(fixture::outputs-outputs)==1,"Every native gameplay update must run the renderer");
+        Check(kernel::R32(0x5AFC60)==fixture::logic,"The simulation counter must match the rendered updates");
+        fixture::now+=4000000;call();
+        Check(fixture::logic==logic+1,"Dropped steps must not be replayed on the next output");
+        fixture::now+=16666667;call();
+        Check(fixture::logic==logic+2,"Gameplay must resume at one update per interval");
+    }
+    return 0;
+  } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
+}
+""".replace("RATE",str(rate)))
+
+    def test_rooms_start_with_native_updates_before_interpolating(self):
+        self.run_fixture(r"""
+int main() {
+  try {
+    using fixture::Check;
+    openshao::frames::Configure(240,false);
+    kernel::W32(0x510B74,0x700000);kernel::W32(0x700000,0x710000);
+    kernel::W32(0x639750,0x720000);kernel::W32(0x639224,0x730000);
+    kernel::W32(0x505970,0x47);kernel::W32(0x4EF42C,1);
+    const auto call=[] {X86Context ctx{};ctx.esp=0x1000;sub_00011069(ctx,kernel::g_base);};
+    const auto settles=[&](const char* message) {
+        const auto logic=fixture::logic,outputs=fixture::outputs;
+        for(unsigned i=0;i<3;++i){fixture::now+=4166667;call();}
+        Check(fixture::logic==logic+3 && fixture::outputs==outputs,message);
+    };
+    const auto interpolates=[&](const char* message) {
+        const auto outputs=fixture::outputs;
+        for(unsigned i=0;i<40;++i){fixture::now+=4166667;call();}
+        Check(fixture::outputs>outputs,message);
+    };
+    settles("The first updates of a room must run natively, without interpolated output");
+    interpolates("Interpolation must resume after the room start");
+    kernel::W32(0x505970,0xC1);
+    settles("A room change must start with native updates again");
+    interpolates("Interpolation must resume in the new room");
+    kernel::G<uint8_t>(0x5ACEDC)=1;
+    settles("A pending room change must run natively");
+    return 0;
+  } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
+}
+""", settle=3)
 
     def test_menus_stay_at_sixty_and_restore_the_gameplay_target(self):
         self.run_fixture(MENU_MAIN)
@@ -498,14 +567,18 @@ int main() {
 }
 ''', threaded=True)
 
-    def run_fixture(self, main, native="", renderer_in_main=False, threaded=False):
-        source = (ROOT / "src/native_frames.cpp").read_text(encoding="utf-8")
+    def run_fixture(self, main, native="", renderer_in_main=False, threaded=False, settle=0):
+        # Rooms start with native updates (issue 59); fixtures that are not about it interpolate at once.
+        source = f"#define OPENSHAO_ROOM_SETTLE_UPDATES {settle}\n" + (ROOT / "src/native_frames.cpp").read_text(encoding="utf-8")
         source = source.replace("using Clock=std::chrono::steady_clock;", "using Clock=fixture::Clock;")
         imports = re.findall(r"X86_EXTERN_FUNC\((\w+)\);", source)
         supplied = {"__imp__sub_00011069", "__imp__sub_00114CD0"}
         supplied.update(re.findall(r"X86_FUNC\((__imp__\w+)\)", native + main))
         stubs = "\n".join(f"X86_FUNC({name}) {{ctx.eax=0;ctx.esp+=4;}}"
                           for name in imports if name not in supplied)
+        # Covered by recomp_fighter_proportions_test.
+        stubs += ("\nnamespace openshao::fighter_proportions {"
+                  "void BeforePoseRebuild(const X86Context&,uint32_t,uint32_t){} }\n")
         env = os.environ.copy()
         if os.name == "nt":
             setup = ROOT / "build/vs_env.cmd"

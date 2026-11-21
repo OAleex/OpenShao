@@ -123,5 +123,25 @@ int main() {
     Check(Fingerprint(record.data(), record.size(), 0xD4) == print, "the fingerprint ignores the difficulty marker");
     record[0x10] ^= 1;
     Check(Fingerprint(record.data(), record.size(), 0xD4) != print, "the fingerprint follows the saved record");
+
+    std::vector<MonkSlot> slots{{1, 0x1122334455667788ull, rooms, {150, -1}}, {90, 7, {}, {-1, -1}}};
+    const auto encoded = EncodeMonkSlots(slots);
+    const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size());
+    std::vector<MonkSlot> decoded;
+    Check(DecodeMonkSlots(bytes, decoded) && decoded == slots, "Monk progress round-trips through the binary file");
+    Check(encoded.find("150") == std::string::npos && encoded.substr(0, 8) == "OSMONK01", "the binary file is not plain text");
+    auto edited = encoded; edited[30] ^= 1;
+    decoded = {{5, 5, {}, {1, 1}}};
+    Check(!DecodeMonkSlots({reinterpret_cast<const uint8_t*>(edited.data()), edited.size()}, decoded) && decoded.size() == 1 && decoded[0].slot == 5,
+          "an edited Monk file is rejected and leaves the slots unchanged");
+    Check(!DecodeMonkSlots(bytes.first(bytes.size() - 1), decoded), "a truncated Monk file is rejected");
+    Check(DecodeMonkSlots({reinterpret_cast<const uint8_t*>(EncodeMonkSlots({}).data()), 20}, decoded) && decoded.empty(),
+          "an empty Monk file is valid");
+    std::vector<MonkSlot> legacy;
+    Check(ParseMonkText("1 1234605616436508552 0,42,511 150 -1\r\n90 7 -\n\n", legacy), "a valid text file reads completely");
+    Check(legacy.size() == 2 && legacy[0].slot == 1 && legacy[0].print == 1234605616436508552ull && legacy[0].rooms == rooms &&
+          legacy[0].health == std::array<int32_t, 2>{150, -1} && legacy[1].rooms.none() && legacy[1].health == std::array<int32_t, 2>{-1, -1},
+          "the earlier text file converts, including lines without health");
+    Check(!ParseMonkText("1 7 -\nbroken\n", legacy) && legacy.size() == 1, "an unreadable line keeps the text file");
     return failures ? 1 : 0;
 }

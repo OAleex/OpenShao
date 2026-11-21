@@ -12,8 +12,10 @@ void ResetMixOutput() { g_mix_reset.store(true, std::memory_order_release); }
 mix::Routing VoiceRouting(const Voice& v) {
     const float voice_gain = v.volume * v.headroom;
     auto routing = mix::BuildRouting(v.channels, v.nbins, v.bin, v.bin_mb, 1.f);
+    const bool surround=openshao::audio::output::Current().EffectiveMode()==openshao::audio::output::Mode::Surround;
     if (!v.is3d || v.mode == 2) {
         for (uint32_t i = 0; i < routing.count; ++i) routing.slots[i].gain *= voice_gain;
+        if (!surround) mix::NormalizeStereoFold(routing, v.channels);
         return routing;
     }
     const bool relative = v.mode == 1;
@@ -36,7 +38,6 @@ mix::Routing VoiceRouting(const Voice& v) {
     const float side = relative ? d[0] : d[0]*right[0] + d[1]*right[1] + d[2]*right[2];
     const float pan = distance > 1e-3f ? side/distance : 0.f;
     const float forward=relative ? d[2] : d[0]*g_front[0]+d[1]*g_front[1]+d[2]*g_front[2];
-    const bool surround=openshao::audio::output::Current().EffectiveMode()==openshao::audio::output::Mode::Surround;
     std::array<float,5> speakers{};
     if (surround) {
         bool centre=false;
@@ -66,6 +67,7 @@ mix::Routing VoiceRouting(const Voice& v) {
         }
         slot.gain *= std::min(spatial, 1.f)*voice_gain;
     }
+    if (!surround) mix::NormalizeStereoFold(routing, v.channels);
     return routing;
 }
 
@@ -126,10 +128,15 @@ void FillMixFrame(mix::Frame& buses) {
             }
             float samples[8]{};
             const float t = float(v.pos-f);
-            for (uint32_t c = 0; c < channels; ++c) {
-                const float a = Sample(v, data, f, int(c));
-                const float b = Sample(v, next_data, next, int(c));
-                samples[c] = a + (b-a)*t;
+            // Avoid an adjacent ADPCM fetch when its interpolation weight is zero.
+            if (t == 0.f) {
+                for (uint32_t c = 0; c < channels; ++c) samples[c] = Sample(v, data, f, int(c));
+            } else {
+                for (uint32_t c = 0; c < channels; ++c) {
+                    const float a = Sample(v, data, f, int(c));
+                    const float b = Sample(v, next_data, next, int(c));
+                    samples[c] = a + (b-a)*t;
+                }
             }
             float dry[8]{}, wet[8]{};
             AudioI3DL2Samples(environment, samples, dry, wet, channels);

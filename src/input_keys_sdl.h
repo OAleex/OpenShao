@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL3/SDL_scancode.h>
+#include "input_bindings.h"
 namespace openshao::bindings {
 inline unsigned VirtualKey(SDL_Scancode scan) {
     if(scan>=SDL_SCANCODE_A && scan<=SDL_SCANCODE_Z)return 'A'+scan-SDL_SCANCODE_A;
@@ -24,7 +25,7 @@ inline unsigned VirtualKey(SDL_Scancode scan) {
     case SDL_SCANCODE_NUMLOCKCLEAR:return 144;case SDL_SCANCODE_SCROLLLOCK:return 145;
     case SDL_SCANCODE_SEMICOLON:return 186;case SDL_SCANCODE_EQUALS:return 187;case SDL_SCANCODE_COMMA:return 188;
     case SDL_SCANCODE_MINUS:return 189;case SDL_SCANCODE_PERIOD:return 190;case SDL_SCANCODE_SLASH:return 191;
-    case SDL_SCANCODE_GRAVE:return 192;case SDL_SCANCODE_LEFTBRACKET:return 219;case SDL_SCANCODE_BACKSLASH:return 220;
+    case SDL_SCANCODE_GRAVE:return KeyBelowEscape;case SDL_SCANCODE_LEFTBRACKET:return 219;case SDL_SCANCODE_BACKSLASH:return 220;
     case SDL_SCANCODE_RIGHTBRACKET:return 221;case SDL_SCANCODE_APOSTROPHE:return 222;case SDL_SCANCODE_NONUSBACKSLASH:return 226;
     default:return 0;
     }

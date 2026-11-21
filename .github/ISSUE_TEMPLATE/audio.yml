@@ -3,6 +3,10 @@ description: Missing, cut, repeated, wrong-language or distorted music, effects,
 title: "[Audio] "
 labels: ["audio", "needs triage"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        You can include multiple modes, screens or locations in one report. Group the details by mode, screen or location.
   - type: textarea
     id: environment
     attributes:
@@ -30,8 +34,9 @@ body:
   - type: dropdown
     id: output
     attributes:
-      label: Audio output
-      description: Konfigure Recompilation > Audio.
+      label: Audio outputs
+      description: Select the outputs you tested in Konfigure Recompilation > Audio.
+      multiple: true
       options:
         - Mono
         - Stereo
@@ -61,16 +66,16 @@ body:
         - Kitana
         - Reptile
         - Other (modded character)
-  - type: input
+  - type: textarea
     id: location
     attributes:
-      label: In-game location
-      description: Enter the chapter, room, cutscene, arena or Survival level if relevant.
+      label: In-game locations, cutscenes or menus
+      description: List the chapters, rooms, cutscenes, arenas, Survival levels or menus covered by this report, if relevant.
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: Describe what you hear, what you expected and how to reach that moment.
+      description: For each mode, screen or location, describe what you hear or see, what you expected and how to reach that moment.
     validations:
       required: true
   - type: textarea

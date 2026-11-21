@@ -33,8 +33,10 @@ std::recursive_mutex g_lock;
 std::map<uint32_t, Voice> g_voices;
 float g_listener[3]{}, g_front[3]{0,0,1}, g_top[3]{0,1,0};
 unsigned completed = 0, effect_blocks = 0;
+unsigned source_reads = 0;
 uint32_t FramesOf(const Voice&, uint32_t bytes) { return bytes / 4; }
 float Sample(Voice&, uint32_t, uint32_t frame, int channel) {
+    ++source_reads;
     return (channel ? -.2f : .1f) + float(frame) * .001f;
 }
 void Complete(Voice&, Packet&, uint32_t) { ++completed; }
@@ -74,6 +76,7 @@ static void Check(bool ok, const char* message) {
 static void Reset() {
     g_voices.clear(); g_voices.emplace(1, Voice{});
     g_mix_output_at = 32; effect_blocks = completed = 0;
+    source_reads = 0;
     g_mix_peak_limiter.Reset();
 }
 int main() {
@@ -90,6 +93,28 @@ int main() {
     Reset();
     Render(split.data(), 7); Render(split.data()+14, 10); Render(split.data()+34, 47);
     Check(whole == split && effect_blocks == 2, "host callback boundaries do not reset effect blocks or lose samples");
+    Reset();
+    Render(split.data(), 32);
+    Check(source_reads == 64,
+          "integer-position stereo playback must fetch only the 32 contributing source frames");
+    Reset();
+    g_voices[1].freq = 24000;
+    Render(split.data(), 32);
+    Check(source_reads == 96,
+          "half-rate playback must fetch adjacent frames only for fractional positions");
+    Check(std::abs(split[2] - .1005f) < 1e-6f && std::abs(split[3] + .1995f) < 1e-6f,
+          "fractional positions must retain linear interpolation on both channels");
+    Reset();
+    g_voices[1].freq = 96000;
+    Render(split.data(), 32);
+    Check(source_reads == 64 && std::abs(split[2] - .102f) < 1e-6f,
+          "double-rate playback must preserve frame stepping without fetching unused neighbours");
+    Reset();
+    g_voices[1].pos = 63.5;
+    g_voices[1].freq = 24000;
+    Render(split.data(), 32);
+    Check(std::abs(split[0] - .1315f) < 1e-6f && std::abs(split[2] - .1f) < 1e-6f,
+          "fractional playback must interpolate across a loop boundary before returning to its start");
     Reset();
     g_voices[1].is3d = true;
     Render(split.data(), 1);
@@ -152,5 +177,25 @@ int main() {
     openshao::audio::output::SetMode(openshao::audio::output::Mode::Mono);
     Render(switched.data(),1);
     Check(switched[0]==switched[1],"a live mono selection must immediately combine both sides");
+    // The game's positionless 3D effects: one mono sound sent at 0 mB to every speaker bin.
+    openshao::audio::output::SetMode(openshao::audio::output::Mode::Stereo);
+    Reset();
+    auto& effect=g_voices[1]; effect.channels=1; effect.is3d=true; effect.volume=.197f;
+    constexpr uint8_t effect_bins[]={6,8,7,9,2,10,3};
+    effect.nbins=7; std::copy_n(effect_bins,7,effect.bin); effect.min_dist=1000;
+    float effect_levels[2][2]; Levels(effect,effect_levels);
+    Check(std::abs(effect_levels[0][0]-.197f)<1e-5f && std::abs(effect_levels[0][1]-.197f)<1e-5f,
+          "a mono effect on every speaker bin must fold to its requested level, not the sum of its copies");
+    const auto effect_routing=VoiceRouting(effect);
+    Check(std::abs(effect_routing.slots[5].gain-.197f)<1e-5f && effect_routing.slots[5].bin==10,
+          "the reverb send keeps its requested level");
+    openshao::audio::output::SetDeviceLayout(6,6);
+    openshao::audio::output::SetMode(openshao::audio::output::Mode::Surround);
+    const auto effect_surround=VoiceRouting(effect);
+    float speaker_sum=0;
+    for (uint32_t i=0;i<effect_surround.count;++i) if (effect_surround.slots[i].bin!=10 && effect_surround.slots[i].bin!=3) speaker_sum+=effect_surround.slots[i].gain;
+    Check(std::abs(speaker_sum-.197f)<1e-5f && std::abs(effect_surround.slots[4].gain-.197f)<1e-5f,
+          "in 5.1 the same effect plays once, from the centre speaker, at its requested level");
+    openshao::audio::output::SetDeviceLayout(2,2);
     std::puts("PASS: real mixer rendering, callback continuity, bin sends, voice sums and packet lifecycle");
 }

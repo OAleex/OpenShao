@@ -38,8 +38,7 @@ def main():
     if args.accept:
         actions.extend([(31, 32, True), (31.4, 32, False)])
         actions.sort()
-    # Cold pipeline preparation and original-disc I/O can outlast the old
-    # startup watchdog on slower CPUs. Retain the Reset and controller checks.
+    # Cold pipelines and disc I/O can outlast the old watchdog on slow CPUs.
     seconds = 40 if args.start else 45
     environment = os.environ.copy()
     if args.start:
@@ -64,7 +63,9 @@ def main():
             return True
         observer = callback_type(observe)
         began = time.monotonic()
-        deadline = began + seconds + 10
+        # The watchdog counts from the game's own start; under a parallel CTest load the process can take 20 s
+        # or more before it logs anything, so the outer deadline leaves room beyond that.
+        deadline = began + seconds + 60
         while process.poll() is None:
             user.EnumWindows(observer, 0)
             if visible or time.monotonic() > deadline:

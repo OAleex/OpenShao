@@ -53,7 +53,6 @@ void Prepare(float scale) {
     for (int w = 0; w < 3; ++w)
         for (int i = 0; i < kSizeCount; ++i) {
             ImFontConfig config;
-            // The data is static; the atlas must not free it.
             config.FontDataOwnedByAtlas = false;
             config.OversampleH = 2;
             config.PixelSnapH = false;
@@ -193,14 +192,55 @@ void BrushDash(const Canvas& c, float x, float y, float length) {
     }
 }
 
+namespace {
+bool Code(std::string_view language, std::string_view code) {
+    if (language.size() != code.size()) return false;
+    for (size_t i = 0; i < code.size(); ++i) {
+        const char a = language[i] >= 'A' && language[i] <= 'Z' ? char(language[i] - 'A' + 'a') : language[i];
+        const char b = code[i] >= 'A' && code[i] <= 'Z' ? char(code[i] - 'A' + 'a') : code[i];
+        if (a != b) return false;
+    }
+    return true;
+}
+// Three equal bands, vertical or horizontal; Spain uses a 1:2:1 horizontal split.
+void Bands(const Canvas& c, float x0, float y0, float w, float h, const uint32_t (&colors)[3], bool vertical, float alpha,
+           const float (&weights)[3] = {1, 1, 1}) {
+    const float total = weights[0] + weights[1] + weights[2];
+    float at = 0;
+    for (int i = 0; i < 3; ++i) {
+        const float size = (vertical ? w : h) * weights[i] / total;
+        if (vertical) c.Rect(x0 + at, y0, x0 + at + size, y0 + h, Rgb(colors[i], alpha));
+        else c.Rect(x0, y0 + at, x0 + w, y0 + at + size, Rgb(colors[i], alpha));
+        at += size;
+    }
+}
+}
+
 bool LanguageFlag(const Canvas& c, ImVec2 center, float width, std::string_view language, float alpha) {
-    if (language != "pt-BR" && language != "pt-br") return false;
     const float w = width, h = width * 0.7f, x0 = center.x - w / 2, y0 = center.y - h / 2;
-    c.Rect(x0, y0, x0 + w, y0 + h, Rgb(0x009C3B, alpha), 3);
-    const float mx = w * 0.085f, my = h * 0.12f;
-    c.list->AddQuadFilled(c.P(center.x, y0 + my), c.P(x0 + w - mx, center.y), c.P(center.x, y0 + h - my), c.P(x0 + mx, center.y),
-                          Rgb(0xFFDF00, alpha));
-    c.list->AddCircleFilled(c.P(center.x, center.y), c.S(w * 0.175f), Rgb(0x002776, alpha), 32);
+    // Simplified national flags identify each language in the lists; the outline keeps light bands visible.
+    if (Code(language, "fr")) Bands(c, x0, y0, w, h, {0x0055A4, 0xFFFFFF, 0xEF4135}, true, alpha);
+    else if (Code(language, "it")) Bands(c, x0, y0, w, h, {0x009246, 0xFFFFFF, 0xCE2B37}, true, alpha);
+    else if (Code(language, "de")) Bands(c, x0, y0, w, h, {0x000000, 0xDD0000, 0xFFCE00}, false, alpha);
+    else if (Code(language, "es")) Bands(c, x0, y0, w, h, {0xAA151B, 0xF1BF00, 0xAA151B}, false, alpha, {1, 2, 1});
+    else if (Code(language, "en")) {
+        for (int i = 0; i < 13; ++i)
+            c.Rect(x0, y0 + h * float(i) / 13, x0 + w, y0 + h * float(i + 1) / 13, Rgb(i % 2 ? 0xFFFFFF : 0xB22234, alpha));
+        const float cw = w * 0.4f, ch = h * 7 / 13;
+        c.Rect(x0, y0, x0 + cw, y0 + ch, Rgb(0x3C3B6E, alpha));
+        for (int row = 0; row < 4; ++row)
+            for (int column = 0; column < 5; ++column)
+                c.list->AddCircleFilled(c.P(x0 + cw * (float(column) + 0.5f) / 5, y0 + ch * (float(row) + 0.5f) / 4),
+                                        c.S(std::max(0.6f, w * 0.018f)), Rgb(0xFFFFFF, alpha), 6);
+    } else if (Code(language, "pt-BR")) {
+        c.Rect(x0, y0, x0 + w, y0 + h, Rgb(0x009C3B, alpha), 3);
+        const float mx = w * 0.085f, my = h * 0.12f;
+        c.list->AddQuadFilled(c.P(center.x, y0 + my), c.P(x0 + w - mx, center.y), c.P(center.x, y0 + h - my), c.P(x0 + mx, center.y),
+                              Rgb(0xFFDF00, alpha));
+        c.list->AddCircleFilled(c.P(center.x, center.y), c.S(w * 0.175f), Rgb(0x002776, alpha), 32);
+        return true;
+    } else return false;
+    c.Outline(x0, y0, x0 + w, y0 + h, Rgb(color::Ink, 0.45f * alpha), 0, 1.f);
     return true;
 }
 

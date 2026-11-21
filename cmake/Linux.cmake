@@ -11,16 +11,16 @@ set(OPENSHAO_IMGUI_CORE
 set(OPENSHAO_SHARED_SOURCES
     src/host.cpp src/keyboard.cpp src/game_info.cpp src/game_files.cpp src/runtime_paths.cpp
     src/game_setup.cpp src/game_import.cpp src/save_storage.cpp src/performance_overlay.cpp
-    src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
+    src/voice_language.cpp src/scorpion_voice.cpp src/scorpion_preview_audio.cpp src/scorpion_preview_adx.cpp src/scorpion_preview_mix.cpp src/controller.cpp src/launcher.cpp src/launcher_text.cpp src/launcher_art.cpp src/updater.cpp "${OPENSHAO_LAUNCHER_FONTS}" src/launcher_settings.cpp src/game_preferences.cpp src/brightness.cpp
     src/menu_text.cpp src/menu_renderer.cpp src/system_text.cpp
-    src/model_instances.cpp src/audio_load_wait.cpp
-    src/recomp_settings_model.cpp src/recomp_settings.cpp src/native_frames.cpp src/frame_rate.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
-    src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp src/difficulty.cpp src/difficulty_progress.cpp src/save_pages.cpp src/save_pages_book.cpp src/audio_flags.cpp src/audio_options.cpp
-    src/survival_mode.cpp src/survival_session.cpp src/survival_levels.cpp src/survival_unlock.cpp
+    src/model_instances.cpp src/audio_load_wait.cpp src/shadow_light.cpp
+    src/recomp_settings_model.cpp src/recomp_settings.cpp src/native_frames.cpp src/frame_rate.cpp src/camera_angle.cpp src/photo_mode.cpp src/restart.cpp src/restart_process.cpp src/restart_boot.cpp
+    src/mouse_state.cpp src/raster_compat.cpp src/pipeline_precompile.cpp src/pipeline_room.cpp src/pipeline_assets.cpp src/ed_nexus.cpp src/ed_nexus_progress.cpp src/dialogue_restore.cpp src/pause_recomp.cpp src/versus_input.cpp src/strip_orientation.cpp src/strip_orientation_hooks.cpp src/survival5_recovery_hooks.cpp src/aspect_ratio.cpp src/aspect_hooks.cpp src/kontent_menu.cpp src/difficulty.cpp src/difficulty_progress.cpp src/save_pages.cpp src/save_pages_book.cpp src/audio_flags.cpp src/audio_options.cpp
+    src/survival_mode.cpp src/fighter_selection.cpp src/survival_session.cpp src/survival_levels.cpp src/survival_unlock.cpp src/campaign_moves_database.cpp src/campaign_moves.cpp
+    src/campaign_finishers.cpp src/fighter_proportions.cpp
     src/language_pack.cpp src/language_archive.cpp src/language_credits.cpp src/virtual_file.cpp src/mods/runtime.cpp)
 
-# Vulkan: pinned Khronos headers and glslang's HLSL front end; the loader is opened
-# through SDL at run time (no libvulkan link).
+# Vulkan: pinned headers and glslang HLSL; the loader is opened through SDL at run time.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Vulkan.cmake")
 
 set(OPENSHAO_LINUX_SOURCES
@@ -63,17 +63,25 @@ function(openshao_linux_test name)
 endfunction()
 add_test(NAME recomp_model_instances COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_model_instances_test.py"
     --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
+add_test(NAME recomp_shadow_light COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/recomp_shadow_light_test.py"
+    --compiler "${CMAKE_CXX_COMPILER}" --sdk "${OPENSHAO_RECOMP_SDK}" --generated "${GEN}")
 openshao_linux_test(recomp_virtual_file SOURCES tests/recomp_virtual_file_test.cpp src/virtual_file.cpp)
 openshao_linux_test(recomp_language_archive SOURCES tests/recomp_language_archive_test.cpp src/language_archive.cpp src/virtual_file.cpp LIBS miniz)
 openshao_linux_test(recomp_language_credits SOURCES tests/recomp_language_credits_test.cpp src/language_credits.cpp)
 openshao_linux_test(recomp_language_pack SOURCES tests/recomp_language_pack_test.cpp src/language_pack.cpp src/language_archive.cpp
     src/virtual_file.cpp "${OPENSHAO_RECOMP_SDK}/runtime/kernel/crypto.cpp" LIBS miniz openshao_mods)
 openshao_linux_test(recomp_launcher_settings SOURCES tests/recomp_launcher_settings_test.cpp src/launcher_settings.cpp LIBS tomlplusplus::tomlplusplus)
+openshao_linux_test(launcher_text SOURCES tests/launcher_text_test.cpp src/launcher_text.cpp src/mods/json.cpp LIBS tomlplusplus::tomlplusplus)
+target_include_directories(launcher_text_test PRIVATE "${GEN}")
+openshao_linux_test(recomp_pause_recomp_model SOURCES tests/recomp_pause_recomp_model_test.cpp src/pause_recomp.cpp src/menu_text.cpp src/mods/json.cpp src/save_pages_book.cpp LIBS tomlplusplus::tomlplusplus)
+target_include_directories(recomp_pause_recomp_model_test PRIVATE "${GEN}")
 openshao_linux_test(recomp_mouse SOURCES tests/recomp_mouse_test.cpp src/mouse_state.cpp)
 openshao_linux_test(recomp_sfd_lock SOURCES tests/recomp_sfd_lock_test.cpp)
 openshao_linux_test(recomp_vblank SOURCES tests/recomp_vblank_test.cpp)
 openshao_linux_test(recomp_input_mode SOURCES tests/recomp_input_mode_test.cpp)
 openshao_linux_test(recomp_versus_input SOURCES tests/recomp_versus_input_test.cpp src/versus_input.cpp)
+openshao_linux_test(recomp_camera_angle SOURCES tests/recomp_camera_angle_test.cpp src/camera_angle.cpp LIBS tomlplusplus::tomlplusplus)
+openshao_linux_test(recomp_photo_mode SOURCES tests/recomp_photo_mode_test.cpp)
 openshao_linux_test(recomp_aspect SOURCES tests/recomp_aspect_test.cpp)
 openshao_linux_test(recomp_aspect_hooks SOURCES tests/recomp_aspect_hooks_test.cpp src/aspect_ratio.cpp src/launcher_settings.cpp LIBS tomlplusplus::tomlplusplus)
 openshao_linux_test(recomp_menu_text SOURCES tests/recomp_menu_text_test.cpp src/menu_text.cpp src/mods/json.cpp)

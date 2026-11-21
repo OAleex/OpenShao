@@ -1,6 +1,12 @@
 #include "ed_nexus_sequence.h"
 #include "pause_recomp.h"
+#include "recomp_input.h"
 #include "difficulty.h"
+#include "campaign_moves.h"
+#include "photo_mode.h"
+#include <algorithm>
+#include <bit>
+#include <unordered_map>
 
 namespace openshao::ed_nexus {
 namespace {
@@ -27,21 +33,28 @@ unsigned damage_step = 0;
 constexpr uint32_t KontentListBytes = (DebugRows+1)*8;
 constexpr uint32_t DebugTextBytes = 24;
 constexpr uint32_t PauseLabelBase = 0xFFFFFF00;
-constexpr uint32_t PauseRootBytes = 7*8;
-// Six graphics controls plus Back need the largest native Select list.
+constexpr uint32_t PauseRootBytes = 9*8;
+// Reserve room for the settings rows and the native list terminator.
 constexpr uint32_t PauseSettingsBytes = (pause_recomp::MaxRows+1)*8;
 constexpr uint32_t PauseExitBytes = 3*8;
 constexpr uint32_t PauseListBytes = PauseRootBytes + PauseSettingsBytes + PauseExitBytes;
-constexpr uint32_t PauseTextBytes = 64;
 constexpr uint32_t PauseTextCount = uint32_t(pause_recomp::Item::Count)+pause_recomp::MaxRows;
-constexpr uint32_t PauseSettingsRow = 2, PauseDesktopExitRow = 4;
+constexpr uint32_t PauseSettingsRow = 2, PauseEnhancementsRow = 3, PausePhotoRow = 4;
 uint32_t pause_storage = 0;
+uint32_t pause_text_storage = 0, pause_text_stride = 0;
 bool EnsureMenuStorage();
 enum class PausePage { Root, Settings, Exit };
 struct PauseMenuState {
     uint32_t list = 0, original_rows = 0, original_count = 0;
     uint32_t root_count = 0;
     PausePage page = PausePage::Root;
+    uint32_t return_row = PauseSettingsRow;
+    uint32_t normal_scale = 0, selected_scale = 0;
+    bool back_release = false;
+    uint32_t initial_selection = 0;
+    uint32_t panel_padding = 0, footer_text = 0;
+    // Photo Mode follows Enhancements where the mode offers it; the rows after it move down.
+    uint32_t photo_row = ~0u, exit_row = 5;
 };
 PauseMenuState pause_menu;
 void WriteGuestText(uint32_t address, const char* text, unsigned bytes) {
@@ -57,24 +70,57 @@ void WriteMenuText(uint32_t address,const std::string& text,uint32_t bytes=Debug
 }
 bool EnsurePauseStorage() {
     if (pause_storage) return true;
-    pause_storage=mem::AllocSystem(PauseListBytes+PauseTextCount*PauseTextBytes);
+    pause_storage=mem::AllocSystem(PauseListBytes);
     if (!pause_storage) LOGI("Cannot allocate gameplay pause menu storage");
     return pause_storage!=0;
 }
 void PauseText() {
+    std::array<std::string,PauseTextCount> labels;
+    uint32_t stride=4;
     for(uint32_t i=0;i<PauseTextCount;++i) {
-        const auto label=i<uint32_t(pause_recomp::Item::Count)?
+        labels[i]=i<uint32_t(pause_recomp::Item::Count)?
             pause_recomp::Text(pause_recomp::Item(i)):
             pause_recomp::RowText(i-uint32_t(pause_recomp::Item::Count));
-        WriteGuestText(pause_storage+PauseListBytes+i*PauseTextBytes,label.c_str(),PauseTextBytes);
+        stride=std::max(stride,(uint32_t(labels[i].size())+4)&~3u);
     }
+    if(stride>pause_text_stride) {
+        const auto storage=mem::AllocSystem(PauseTextCount*stride);
+        if(!storage){LOGI("Cannot allocate gameplay pause text storage");return;}
+        if(pause_text_storage)mem::FreeSystem(pause_text_storage);
+        pause_text_storage=storage;pause_text_stride=stride;
+    }
+    for(uint32_t i=0;i<PauseTextCount;++i)
+        WriteGuestText(pause_text_storage+i*pause_text_stride,labels[i].c_str(),pause_text_stride);
+}
+void FitPauseList(X86Context& ctx) {
+    const auto list=pause_menu.list;
+    if(!list)return;
+    const auto saved=ctx;
+    const auto rows=kernel::R32(list+0x54),count=kernel::R32(list+0x64);
+    // Leave enough height for the ornate corners even when a page has one row.
+    const unsigned extra_padding=count==1?8:0;
+    kernel::W32(list+0x40,pause_menu.panel_padding+extra_padding);
+    uint32_t width=0;
+    for(unsigned row=0;row<count;++row) {
+        const auto text=kernel::CallGuest(ctx,0x16992,{kernel::R32(rows+row*8)});ctx=saved;
+        const auto measured=kernel::CallGuest(ctx,0x152DC0,{text,kernel::R32(list+0x78)});ctx=saved;
+        width=std::max(width,measured);
+    }
+    // Shrink both font scales together only when Select's ornament would reach the canvas edges.
+    const float normal=std::bit_cast<float>(pause_menu.normal_scale);
+    const float selected=std::bit_cast<float>(pause_menu.selected_scale);
+    const float largest=std::max(normal,selected);
+    const float available=544.f-4*extra_padding;
+    const float factor=width && width*largest>available?available/(width*largest):1.f;
+    kernel::W32(list+0x84,std::bit_cast<uint32_t>(normal*factor));
+    kernel::W32(list+0x88,std::bit_cast<uint32_t>(selected*factor));
 }
 void PausePair(uint32_t address,uint32_t label,uint32_t callback=0x135C1) {
     kernel::W32(address,label);
     kernel::W32(address+4,callback);
 }
 void PauseTerminator(uint32_t address) {PausePair(address,0xFFFFFFFF,0);}
-void RefreshSettingsPage(uint32_t row=0) {
+void RefreshSettingsPage(X86Context& ctx,uint32_t row=0) {
     if (!pause_menu.list || !pause_storage)return;
     const unsigned count=pause_recomp::RowCount();
     if (!count || count>pause_recomp::MaxRows)return;
@@ -86,8 +132,9 @@ void RefreshSettingsPage(uint32_t row=0) {
     kernel::W32(list+0x54,rows);
     kernel::W32(list+0x64,count);
     kernel::W32(list+0x6C,row<count?row:0);
+    FitPauseList(ctx);
 }
-void ShowPausePage(PausePage page) {
+void ShowPausePage(X86Context& ctx,PausePage page,pause_recomp::Page initial=pause_recomp::Page::Categories) {
     if (!pause_menu.list) return;
     const auto list=pause_menu.list;
     const auto previous=pause_menu.page;
@@ -96,15 +143,18 @@ void ShowPausePage(PausePage page) {
     if (page==PausePage::Root) {
         kernel::W32(list+0x54,pause_storage);
         kernel::W32(list+0x64,pause_menu.root_count);
-        kernel::W32(list+0x6C,previous==PausePage::Exit?PauseDesktopExitRow:PauseSettingsRow);
+        kernel::W32(list+0x6C,previous==PausePage::Exit?pause_menu.exit_row:pause_menu.return_row);
+        FitPauseList(ctx);
     } else if (page==PausePage::Settings) {
-        pause_recomp::Open();
-        RefreshSettingsPage();
+        pause_menu.return_row=initial==pause_recomp::Page::Enhancements?PauseEnhancementsRow:PauseSettingsRow;
+        pause_recomp::Open(initial);
+        RefreshSettingsPage(ctx);
     } else {
         PauseText();
         kernel::W32(list+0x54,pause_storage+PauseRootBytes+PauseSettingsBytes);
         kernel::W32(list+0x64,2);
         kernel::W32(list+0x6C,0); // No is the default; Yes explicitly warns about unsaved progress.
+        FitPauseList(ctx);
     }
 }
 bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
@@ -114,32 +164,57 @@ bool HandlePauseAction(X86Context& ctx,uint32_t list,uint32_t event) {
         pause_menu.page==PausePage::Settings?pause_storage+PauseRootBytes:
         pause_storage+PauseRootBytes+PauseSettingsBytes;
     if(rows!=expected)return false;
-    // Remapping reads raw input: the same captured event must not drive the native pause menu.
-    if(pause_menu.page==PausePage::Settings && pause_recomp::Capturing()) {
-        kernel::Return(ctx,0,0);
+    if(pause_menu.page==PausePage::Settings &&
+       (pause_recomp::CapturingController() || recomp::raw::ControllerCancelHeld())) {
+        // Physical B may also be mapped to a native menu action. Let capture decide what it means.
+        if(event==6 || event==8)pause_menu.back_release=true;
+        kernel::Return(ctx,1,0);
         return true;
     }
-    // B (8) and Back (6) close pause natively; in SETTINGS they go back one level instead.
+    if((event==6 || event==8) && pause_menu.back_release) {
+        kernel::Return(ctx,1,0);
+        return true;
+    }
+    // B (6) and Select (8) close pause natively; settings return one level instead.
     if ((event==6 || (event==8 && pause_menu.page==PausePage::Settings)) &&
         pause_menu.page!=PausePage::Root) {
-        if(pause_menu.page==PausePage::Settings && !pause_recomp::Back())RefreshSettingsPage();
-        else ShowPausePage(PausePage::Root);
+        pause_menu.back_release=true;
+        if(pause_menu.page==PausePage::Settings && !pause_recomp::Back())RefreshSettingsPage(ctx);
+        else ShowPausePage(ctx,PausePage::Root);
         // A zero result would let the same B close the Select menu.
         kernel::Return(ctx,1,0);
         return true;
     }
-    if (event!=4) return false;
+    // Zero lets the GUI run its fallback accept/back; consume captured input without closing Select.
+    if(pause_menu.page==PausePage::Settings && pause_recomp::Capturing()) {
+        kernel::Return(ctx,1,0);
+        return true;
+    }
     const auto row=kernel::R32(list+0x6C);
+    if(pause_menu.page==PausePage::Settings && (event==2 || event==3)) {
+        const auto previous=pause_recomp::CurrentPage();
+        if(!pause_recomp::Adjust(row,event==2?-1:1))return false;
+        RefreshSettingsPage(ctx,previous==pause_recomp::CurrentPage()?row:0);
+        kernel::Return(ctx,1,0);
+        return true;
+    }
+    if (event!=4) return false;
     if (pause_menu.page==PausePage::Root) {
-        if (row==PauseSettingsRow) ShowPausePage(PausePage::Settings);
-        else if (row==PauseDesktopExitRow) ShowPausePage(PausePage::Exit);
+        if (row==PauseSettingsRow) ShowPausePage(ctx,PausePage::Settings);
+        else if (row==PauseEnhancementsRow) ShowPausePage(ctx,PausePage::Settings,pause_recomp::Page::Enhancements);
+        else if (row==pause_menu.photo_row) openshao::photo_mode::OpenFromMenu();
+        else if (row==pause_menu.exit_row) ShowPausePage(ctx,PausePage::Exit);
         else return false;
     } else if (pause_menu.page==PausePage::Settings) {
+        if(!pause_recomp::CanChoose(row)) {
+            kernel::Return(ctx,1,0);
+            return true;
+        }
         const auto previous=pause_recomp::CurrentPage();
-        if(pause_recomp::Choose(row))ShowPausePage(PausePage::Root);
-        else RefreshSettingsPage(previous==pause_recomp::CurrentPage()?row:0);
+        pause_recomp::Choose(row);
+        RefreshSettingsPage(ctx,previous==pause_recomp::CurrentPage()?row:0);
     } else if (pause_menu.page==PausePage::Exit) {
-        if (row==0) ShowPausePage(PausePage::Root);
+        if (row==0) ShowPausePage(ctx,PausePage::Root);
         else if (row==1) pause_recomp::Exit();
     }
     // The retail Select-list handler returns zero for accept and back events.
@@ -173,12 +248,22 @@ bool InstallPauseList(X86Context& ctx) {
     }
     if (!EnsurePauseStorage()) return false;
     if (Unlocked() && !EnsureMenuStorage()) return false;
-    pause_menu={list,original_rows,original_count,5+unsigned(Unlocked()),PausePage::Root};
+    const auto initial_selection=pause_menu.initial_selection;
+    const auto back_release=pause_menu.back_release;
+    const bool photo=openshao::photo_mode::Available();
+    pause_menu={list,original_rows,original_count,6+unsigned(photo)+unsigned(Unlocked()),PausePage::Root,
+                PauseSettingsRow,kernel::R32(list+0x84),kernel::R32(list+0x88),back_release};
+    pause_menu.photo_row=photo?PausePhotoRow:~0u;
+    const uint32_t exit_game_row=photo?PausePhotoRow+1:PausePhotoRow;
+    pause_menu.exit_row=exit_game_row+1;
+    pause_menu.panel_padding=kernel::R32(list+0x40);
     for (unsigned i=0;i<4;++i) kernel::W32(pause_storage+i*4,kernel::R32(original_rows+i*4));
     PausePair(pause_storage+PauseSettingsRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenSettings));
-    PausePair(pause_storage+24,kernel::R32(original_rows+16),kernel::R32(original_rows+20));
-    PausePair(pause_storage+PauseDesktopExitRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenExit));
-    if (Unlocked()) PausePair(pause_storage+40,MenuLabel,0x135C6);
+    PausePair(pause_storage+PauseEnhancementsRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenEnhancements));
+    if (photo) PausePair(pause_storage+PausePhotoRow*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenPhotoMode));
+    PausePair(pause_storage+exit_game_row*8,kernel::R32(original_rows+16),kernel::R32(original_rows+20));
+    PausePair(pause_storage+pause_menu.exit_row*8,PauseLabelBase+uint32_t(pause_recomp::Item::OpenExit));
+    if (Unlocked()) PausePair(pause_storage+(pause_menu.exit_row+1)*8,MenuLabel,0x135C6);
     PauseTerminator(pause_storage+pause_menu.root_count*8);
     PausePair(pause_storage+PauseRootBytes+PauseSettingsBytes,PauseLabelBase+uint32_t(pause_recomp::Item::No));
     PausePair(pause_storage+PauseRootBytes+PauseSettingsBytes+8,PauseLabelBase+uint32_t(pause_recomp::Item::Yes));
@@ -186,6 +271,8 @@ bool InstallPauseList(X86Context& ctx) {
     PauseText();
     kernel::W32(list+0x54,pause_storage);
     kernel::W32(list+0x64,pause_menu.root_count);
+    kernel::W32(list+0x6C,initial_selection<pause_menu.root_count?initial_selection:0);
+    FitPauseList(ctx);
     LOGI("Gameplay pause expanded: list=%08X rows=%u",list,pause_menu.root_count);
     return true;
 }
@@ -234,7 +321,53 @@ void AddKontentAction(X86Context& ctx) {
     kernel::W32(kontent_menu+88,0xFFFFFFFF);kernel::W32(kontent_menu+92,0);
     kernel::W32(list+0x54,kontent_menu);kernel::W32(list+0x64,DebugRows);
 }
-bool in_pause = false, in_nexus = false;
+bool in_pause = false, in_nexus = false, deferred_hud = false;
+uint32_t CachedFooter(std::string text) {
+    // Native widgets retain caption pointers; cache each complete footer in owned guest storage.
+    static std::unordered_map<std::string,uint32_t> footers;
+    if(const auto found=footers.find(text);found!=footers.end())return found->second;
+    const auto bytes=(uint32_t(text.size())+4)&~3u;
+    const auto storage=mem::AllocSystem(bytes);
+    if(!storage)return 0;
+    WriteGuestText(storage,text.c_str(),bytes);
+    footers.emplace(std::move(text),storage);
+    return storage;
+}
+uint32_t BackFooter(uint32_t address,bool adjust,bool accept,bool navigate) {
+    std::string text;
+    for(unsigned i=0;i<256;++i) {
+        const auto at=address+i;
+        const char glyph=char(kernel::R32(at&~3u)>>((at%4)*8));
+        if(!glyph)break;
+        text.push_back(glyph);
+    }
+    if(text.size()==256)return address;
+    auto first=text.find('|');
+    if(first==std::string::npos)return address;
+    first=text.find_first_not_of(' ',first+1);
+    if(first==std::string::npos)return address;
+    auto last=text.find_first_of("=<>|{}",first);
+    if(last==std::string::npos)last=text.size();
+    while(last>first && text[last-1]==' ')--last;
+    text.replace(first,last-first,pause_recomp::Localized("footer.back"));
+    if(!accept) {
+        const auto button=text.find('=');
+        if(button!=std::string::npos && button<first)text.erase(button,text.find('|')-button);
+    }
+    if(!navigate) {
+        const auto arrows=text.find("{/}");
+        if(arrows!=std::string::npos) {
+            auto first=arrows;
+            while(first>0 && text[first-1]==' ')--first;
+            const auto next=text.find_first_of("=<>|{}",arrows+3);
+            text.erase(first,next==std::string::npos?next:next-first);
+            if(next!=std::string::npos)text.insert(first,"  ");
+        }
+    }
+    if(adjust)text+="  </> "+pause_recomp::Localized("settings.adjust_hint");
+    const auto storage=CachedFooter(std::move(text));
+    return storage?storage:address;
+}
 struct PauseScope {
     bool previous_pause = in_pause, previous_nexus = in_nexus;
     PauseMenuState previous_menu = pause_menu;
@@ -255,6 +388,9 @@ struct PauseScope {
                 kernel::W32(pause_menu.list+0x54,pause_menu.original_rows);
                 kernel::W32(pause_menu.list+0x64,pause_menu.original_count);
                 kernel::W32(pause_menu.list+0x6C,0);
+                kernel::W32(pause_menu.list+0x40,pause_menu.panel_padding);
+                kernel::W32(pause_menu.list+0x84,pause_menu.normal_scale);
+                kernel::W32(pause_menu.list+0x88,pause_menu.selected_scale);
             }
         }
         pause_menu=previous_menu;
@@ -284,6 +420,9 @@ void UpdateHeldInput(X86Context& ctx) {
 }
 bool Unlocked() { return sequence.Unlocked(); }
 bool GameplayPaused() { return in_pause; }
+bool PauseRootShown() {
+    return in_pause && !in_nexus && pause_menu.page==PausePage::Root && !pause_recomp::Capturing();
+}
 bool KontentUnlocked() { return kontent_unlocked; }
 float PlayerDamage() { return Unlocked() ? float(DamageSteps[damage_step]) : 1.f; }
 void FrontendInput(X86Context& ctx,uint8_t*) {
@@ -321,16 +460,45 @@ X86_FUNC(sub_001B5300) {
     __imp__sub_001B5300(ctx,base);
 }
 X86_FUNC(sub_00012BA8) {
-    openshao::ed_nexus::PauseScope pause;
-    __imp__sub_00012BA8(ctx,base);
+    const auto entry=ctx;
+    const auto previous_hud=openshao::ed_nexus::deferred_hud;
+    openshao::ed_nexus::deferred_hud=false;
+    bool return_from_options=false;
+    do {
+        ctx=entry;
+        openshao::ed_nexus::PauseScope pause;
+        openshao::ed_nexus::pause_menu.initial_selection=return_from_options?1:0;
+        openshao::ed_nexus::pause_menu.back_release=return_from_options;
+        __imp__sub_00012BA8(ctx,base);
+        // Retail leaves Select to run Options; rebuild Select in the same call so B returns without a gameplay frame.
+        return_from_options=(kernel::R32(0x4EFA5C)&0xFF)!=0;
+    } while(return_from_options);
+    if(openshao::ed_nexus::deferred_hud) {
+        const auto result=ctx;
+        kernel::CallGuest(ctx,0x15060,{});
+        ctx=result;
+    }
+    openshao::ed_nexus::deferred_hud=previous_hud;
+}
+X86_EXTERN_FUNC(__imp__sub_00015060);
+X86_FUNC(sub_00015060) {
+    // Options restores the gameplay HUD on exit. Keep it dormant until Select also closes.
+    if(openshao::ed_nexus::in_pause && (kernel::R32(0x4EFA5C)&0xFF)) {
+        openshao::ed_nexus::deferred_hud=true;
+        kernel::Return(ctx,0,0);
+        return;
+    }
+    __imp__sub_00015060(ctx,base);
 }
 X86_EXTERN_FUNC(__imp__sub_000142EB);
 X86_FUNC(sub_000142EB) {
     const bool gameplay_gui = ctx.ecx == 0x4EF3C8;
     __imp__sub_000142EB(ctx,base);
-    if(openshao::ed_nexus::in_pause && openshao::ed_nexus::pause_menu.page==openshao::ed_nexus::PausePage::Settings &&
+    // A held or repeated Back event must not traverse the newly displayed parent page.
+    if(gameplay_gui && !(kernel::R32(0x67C668)&0x120))openshao::ed_nexus::pause_menu.back_release=false;
+    if(gameplay_gui && openshao::ed_nexus::in_pause && openshao::ed_nexus::pause_menu.page==openshao::ed_nexus::PausePage::Settings &&
        openshao::pause_recomp::Update()) {
-        openshao::ed_nexus::RefreshSettingsPage(kernel::R32(openshao::ed_nexus::pause_menu.list+0x6C));
+        openshao::ed_nexus::RefreshSettingsPage(ctx,kernel::R32(openshao::ed_nexus::pause_menu.list+0x6C));
     }
     if (!gameplay_gui || openshao::ed_nexus::pause_menu.page!=openshao::ed_nexus::PausePage::Root ||
         !openshao::ed_nexus::OpenShortcut(openshao::ed_nexus::Unlocked(),
@@ -338,6 +506,20 @@ X86_FUNC(sub_000142EB) {
     const auto saved = ctx;
     kernel::CallGuest(ctx,0x135C6,{});
     ctx = saved;
+}
+void openshao::ed_nexus::DrawPausePageIndicator(X86Context& ctx) {
+    if(!in_pause || pause_menu.page!=PausePage::Settings || !pause_menu.footer_text ||
+       kernel::R32(ctx.esp+20)!=pause_menu.footer_text || kernel::R32(ctx.esp+4)!=320)return;
+    auto indicator=openshao::pause_recomp::PageIndicator();
+    if(indicator.empty())return;
+    const auto text=CachedFooter(std::move(indicator));
+    if(!text)return;
+    // Put the page indicator immediately above Select's native button legend.
+    const uint32_t footer_y=kernel::R32(ctx.esp+8);
+    constexpr auto scale=std::bit_cast<uint32_t>(.8f);
+    const auto saved=ctx;
+    kernel::CallGuest(ctx,0x152CE0,{320,footer_y-28,kernel::R32(ctx.esp+12),2,text,scale,scale});
+    ctx=saved;
 }
 X86_EXTERN_FUNC(__imp__sub_00013B4D);
 X86_EXTERN_FUNC(__imp__sub_00015687);
@@ -418,8 +600,8 @@ X86_FUNC(sub_00016992) {
     const uint32_t label=kernel::R32(ctx.esp+4);
     if(openshao::ed_nexus::pause_storage && label>=openshao::ed_nexus::PauseLabelBase &&
        label<openshao::ed_nexus::PauseLabelBase+openshao::ed_nexus::PauseTextCount) {
-        kernel::Return(ctx,openshao::ed_nexus::pause_storage+openshao::ed_nexus::PauseListBytes+
-                       (label-openshao::ed_nexus::PauseLabelBase)*openshao::ed_nexus::PauseTextBytes,0);
+        kernel::Return(ctx,openshao::ed_nexus::pause_text_storage+
+                       (label-openshao::ed_nexus::PauseLabelBase)*openshao::ed_nexus::pause_text_stride,0);
         return;
     }
     if(openshao::ed_nexus::kontent_menu && kernel::R32(ctx.esp+4)==openshao::ed_nexus::MenuLabel) {
@@ -448,5 +630,49 @@ X86_FUNC(sub_00016992) {
     }
     if(const uint32_t text=openshao::survival::Label(label)) {kernel::Return(ctx,text,0);return;}
     if(const uint32_t text=openshao::difficulty::Label(label,kernel::R32(ctx.esp))) { kernel::Return(ctx,text,0); return; }
+    std::string corrected;
+    if(openshao::campaign_moves::ReferenceCaption(label,corrected)) {
+        std::string title;
+        if(const auto key=openshao::campaign_moves::ReferenceTranslationKey(label);!key.empty())
+            title=openshao::pause_recomp::Localized(key);
+        if(const auto source=openshao::campaign_moves::ReferenceTitleSource(label)) {
+            const auto saved=ctx;
+            const auto native=kernel::CallGuest(ctx,0x16992,{source});
+            ctx=saved;
+            openshao::campaign_moves::LocalizedReferenceTitle(native,title);
+        }
+        if(!title.empty())corrected.replace(0,corrected.find('\n'),title);
+        if(const auto text=openshao::ed_nexus::CachedFooter(std::move(corrected))) {
+            kernel::Return(ctx,text,0);
+            return;
+        }
+        const auto argument=ctx.esp+4;
+        kernel::W32(argument,511);
+        __imp__sub_00016992(ctx,base);
+        kernel::W32(argument,label);
+        return;
+    }
     __imp__sub_00016992(ctx,base);
+    if(openshao::campaign_moves::CorrectCaption(label,ctx.eax,corrected))
+        if(const auto text=openshao::ed_nexus::CachedFooter(std::move(corrected)))ctx.eax=text;
+    const bool footer=(label>=0x58A && label<=0x58F) || label==0x591 ||
+                      (label==0x590 && openshao::ed_nexus::in_nexus);
+    const bool nested=openshao::ed_nexus::pause_menu.page!=openshao::ed_nexus::PausePage::Root ||
+                      openshao::ed_nexus::in_nexus || (kernel::R32(0x4EFA5C)&0xFF)!=0;
+    if(footer && openshao::ed_nexus::in_pause && nested && ctx.eax) {
+        const bool settings=openshao::ed_nexus::pause_menu.page==openshao::ed_nexus::PausePage::Settings;
+        const auto row=settings?kernel::R32(openshao::ed_nexus::pause_menu.list+0x6C):0;
+        if(settings && openshao::pause_recomp::Capturing()) {
+            const auto caption=openshao::pause_recomp::CapturingController()?
+                openshao::pause_recomp::Localized("settings.hold_cancel"):
+                "| "+openshao::pause_recomp::Localized("footer.cancel");
+            if(const auto text=openshao::ed_nexus::CachedFooter(caption))ctx.eax=text;
+        } else {
+            const bool adjust=settings && openshao::pause_recomp::CanAdjust(row);
+            const bool accept=!settings || openshao::pause_recomp::CanChoose(row);
+            const bool navigate=!settings || openshao::pause_recomp::RowCount()>1;
+            ctx.eax=openshao::ed_nexus::BackFooter(ctx.eax,adjust,accept,navigate);
+        }
+        if(settings)openshao::ed_nexus::pause_menu.footer_text=ctx.eax;
+    }
 }

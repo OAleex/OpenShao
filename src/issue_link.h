@@ -29,8 +29,8 @@ inline std::string IssueEnvironment(const launcher::Settings& s, std::string_vie
             ", aspect " + s.aspect_ratio + ", render scale " + std::to_string(s.render_percent) + "%\n";
     text += "Frame rate limit: " + std::to_string(s.fps_cap) + ", VSync " + on(s.vsync) + "\n";
     text += "Menu language: " + s.language + ", voices: " + s.voice_language + "\n";
-    text += "Improved difficulty " + std::string(on(s.improved_difficulty)) + ", restored dialogue " +
-            on(s.restore_dialogue) + ", bloom " + on(s.bloom_effect) + ", cinematic bars " + on(s.cinematic_bars) + "\n";
+    text += "Restored dialogue " + std::string(on(s.restore_dialogue)) + ", bloom " + on(s.bloom_effect) +
+            ", cinematic bars " + on(s.cinematic_bars) + "\n";
     return text;
 }
 

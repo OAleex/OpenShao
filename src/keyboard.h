@@ -9,5 +9,6 @@ void Key(unsigned virtual_key, bool down);
 void ReleaseAll();
 void Configure(const bindings::Keyboard& settings);
 bool Mapped(unsigned virtual_key);
+bool CameraRecenterDown();
 void Poll(int port, input::Pad& pad);
 }

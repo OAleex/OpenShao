@@ -72,6 +72,22 @@ float Measure(X86Context& ctx,uint32_t text) {
     const auto result=kernel::CallGuest(ctx,0x152DC0,{text,2});ctx=saved;
     return float(result);
 }
+uint32_t ButtonAddress(X86Context& ctx,Button button) {
+    if(button==Button::None)return 0;
+    if(button==Button::Adjust)return StringAddress("<>");
+    if(button==Button::Navigate)return StringAddress("{/}");
+    // The game font draws * as the X button and ~ as the Y button.
+    if(button==Button::X)return StringAddress("*");
+    if(button==Button::Y)return StringAddress("~");
+    // ] and ` are the sticks, # and $ the triggers, @ and ^ the white and black buttons (LB and RB).
+    if(button==Button::LeftStick)return StringAddress("]");
+    if(button==Button::RightStick)return StringAddress("`");
+    if(button==Button::Triggers)return StringAddress("#/$");
+    if(button==Button::Shoulders)return StringAddress("@/^");
+    const auto saved=ctx;
+    const auto text=kernel::CallGuest(ctx,0x16992,{button==Button::Accept?0x5B2u:button==Button::Preview?0x5B5u:0x5B3u});
+    ctx=saved;return text;
+}
 void Text(X86Context& ctx,float x,float y,uint32_t text,uint32_t abgr,float scale) {
     const auto saved=ctx;ctx.ecx=0x66C0E8;
     kernel::CallGuest(ctx,0x1EEF90,{std::bit_cast<uint32_t>(x),std::bit_cast<uint32_t>(y),abgr,text,0,
@@ -168,11 +184,35 @@ void DimMenuLabel(uint32_t first,uint32_t end,bool selected) {
 }
 void NativeButton(X86Context& ctx,int x,int y,Button button) {
     const auto saved=ctx;
-    // The native font maps '<' and '>' to the direction icons (glyphs 136/135).
-    const auto text=button==Button::Adjust?StringAddress("<>"):kernel::CallGuest(ctx,0x16992,{button==Button::Accept?0x5B2u:button==Button::Preview?0x5B5u:0x5B3u});
-    ctx=saved;
+    const auto text=ButtonAddress(ctx,button);
     if(text)kernel::CallGuest(ctx,0x152960,{uint32_t(x),uint32_t(y),0x60,2,text});
     ctx=saved;
+}
+void NativeFooter(X86Context& ctx,int y,std::span<const FooterHint> hints) {
+    if(hints.empty())return;
+    constexpr float left=55,right=608,label_gap=6,group_gap=18,preferred=.9f;
+    struct Width {float button,caption;};
+    std::vector<Width> widths; widths.reserve(hints.size());
+    float fixed=group_gap*float(hints.size()-1),total=0;
+    for(const auto& hint:hints) {
+        const auto icon=ButtonAddress(ctx,hint.button);
+        const auto caption=StringAddress(EncodeNative(hint.text,mods::SameLanguage(launcher::Current().language,"pt-BR")));
+        const float button=icon?Measure(ctx,icon):0,text=caption?Measure(ctx,caption)*preferred:0;
+        widths.push_back({button+(hint.button==Button::None?0:label_gap),text});
+        fixed+=widths.back().button;total+=text;
+    }
+    const float budget=std::max(0.f,right-left-fixed);
+    // Share the fitting scale so a long action does not become tiny beside larger captions.
+    const float fit=total>budget?budget/total:1;
+    total=fixed+total*fit;
+    float x=left+(right-left-total)*.5f;
+    for(size_t i=0;i<hints.size();++i) {
+        NativeButton(ctx,int(std::lround(x)),y,hints[i].button);
+        x+=widths[i].button;
+        const float available=widths[i].caption*fit;
+        NativeLabel(ctx,x,float(y),hints[i].text,preferred*fit,254,false,true,available);
+        x+=available+group_gap;
+    }
 }
 void MainControllerNotice(X86Context& ctx,uint32_t text,unsigned alpha,float scale) {
     if(!text)return;

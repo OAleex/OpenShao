@@ -25,7 +25,7 @@ def main():
     log = log.replace('size_t(tid), msg)', 'size_t(tid), safe.c_str())').replace(' : "", msg)', ' : "", safe.c_str())')
     (args.out / "log.cpp").write_text(log, encoding="utf-8")
     text = (args.sdk / "runtime/app/main.cpp").read_text(encoding="utf-8")
-    text = '#include "discord_presence.h"\n#include "support_report.h"\n#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
+    text = '#include "discord_presence.h"\n#include "support_report.h"\n#include "host.h"\n#include "launcher.h"\n#include "language_pack.h"\n#include "window.h"\n#include "performance_overlay.h"\n#include "photo_mode.h"\n#include "runtime_paths.h"\n#include <cstdlib>\n' + text
     text = replace_once(text, '#include <windows.h>', '#include <windows.h>\n#include <shobjidl.h>')
     text = replace_once(text, '    auto dir = ExeDir() / "CrashDumps";',
         '    logx::Flush();\n'
@@ -62,7 +62,8 @@ def main():
     text = replace_once(text, message_callback + '\n', '')
     text = replace_once(text, 'LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {',
         'LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {\n'
-        '    if (openshao::performance::Message(msg, wp, lp)) return 0;\n' + message_callback)
+        '    if (openshao::performance::Message(msg, wp, lp)) return 0;\n'
+        '    if (openshao::photo_mode::Message(msg, wp, lp)) return 0;\n' + message_callback)
     text = replace_once(text, "if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler", "if (!openshao::options.background && ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler")
     text = replace_once(text, "void ApplyNow() {", "void ApplyNow() {\n    if (openshao::options.background) return;")
     window_begin = text.index('    if (s.display_mode == DisplayMode::Windowed) {')
@@ -73,6 +74,15 @@ def main():
     text = replace_once(text, '    Mode out = Output();\n', '')
     text = replace_once(text, '    LONG_PTR visible = IsWindowVisible(g_hwnd) ? WS_VISIBLE : 0;  // a window held back for a splash or handover stays so\n', '')
     text = replace_once(text, "case WM_ACTIVATE:", "case WM_ACTIVATE:\n            if (openshao::options.background) return 0;")
+    text = replace_once(text, 'PostMessageW(hwnd, kApplyDisplay, 0, 0);',
+        'PostMessageW(hwnd, kApplyDisplay, 1, 0);')
+    text = replace_once(text, '        case kApplyDisplay:\n',
+        '        case kApplyDisplay:\n'
+        '            // A queued focus restore can outlive another Alt+Tab. Explicit settings use wp == 0.\n'
+        '            if (wp && GetForegroundWindow() != hwnd) {\n'
+        '                g_apply_posted = false;\n'
+        '                return 0;\n'
+        '            }\n')
     text = replace_once(text, "case kOpenWindow:", "case kOpenWindow:\n            if (openshao::options.background) return 0;")
     text = replace_once(text, "int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {", "int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {\n    const int configured = openshao::Configure();\n    if (configured) return configured == 1 ? 0 : configured;")
     text = replace_once(text, "app::Load();",
@@ -132,7 +142,10 @@ def main():
     text = replace_once(text, '    if (!app::PrepareGameCode(game)) return 1;\n', '')
     (args.out / "main.cpp").write_text(text, encoding="utf-8")
     settings = (args.sdk / "runtime/app/settings.cpp").read_text(encoding="utf-8")
-    settings = '#include "launcher.h"\n#include "runtime_paths.h"\n' + settings
+    settings = '#include "launcher.h"\n#include "photo_mode.h"\n#include "runtime_paths.h"\n' + settings
+    # A High or Max photo raises the render scale for a few frames.
+    settings = replace_once(settings, '    float h = CachedOutput().height * (Get().render_percent / 100.0f);\n',
+        '    float h = CachedOutput().height * (Get().render_percent / 100.0f);\n    h *= openshao::photo_mode::RenderBoost(h);\n')
     settings = replace_once(settings, 'return ExeDir() / kGame.settings;', 'return openshao::paths::Config();')
     wide_begin = settings.index('bool Widescreen() {')
     wide_end = settings.index('\n}', wide_begin) + 2
@@ -350,8 +363,7 @@ uint32_t OpenOnDisc(''')
     files = replace_once(files, '    if (t.disc) FillNetworkInfo(a[1], *t.entry);',
         '    if (t.virtual_file) FillNetworkInfo(a[1], 0, t.virtual_file->Size(), false);\n'
         '    else if (t.disc) FillNetworkInfo(a[1], *t.entry);')
-    # Missing guest files are logged in a form the diagnostic path filter keeps ("game:sound/x.adx"):
-    # guest names never contain host folders, and a drive letter or leading slash would be redacted.
+    # Log missing guest files as "game:sound/x.adx" so the diagnostic path filter keeps them.
     files = replace_once(files, 'uint32_t OpenOnDisc(const Disc::Entry* e,',
         'static std::string SafeGuestName(std::string name) {\n'
         '    for (char& c : name) if (c == \'\\\\\') c = \'/\';\n'
@@ -403,18 +415,18 @@ uint32_t OpenOnDisc(''')
     pads = replace_once(pads, "void Rumble(int port, uint16_t left, uint16_t right) {", "void Rumble(int port, uint16_t left, uint16_t right) {\n    if (openshao::options.background) return;")
     (args.out / "input.cpp").write_text(pads, encoding="utf-8")
     xapi = (args.sdk / "runtime/xdk/xapi.cpp").read_text(encoding="utf-8")
-    # Publish the initial insertion via the async poller: startup XGetDevices consumes an
-    # immediate one, and XGetDeviceChanges then never reports it.
+    # Publish the first insertion through the poller, or XGetDeviceChanges never reports it.
     xapi = replace_once(xapi, "    UpdatePorts();\n    if (!g_poller)", "    if (!g_poller)")
-    # The main-menu callback stops when the character selector opens; switch ports before
-    # XInputGetState returns the first state to the new player.
+    # Switch ports before XInputGetState returns the new player's first state.
     xapi = replace_once(xapi, "HLE_STDCALL(XInputGetState, 2) {",
         "void SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {\n    SyncRetailFrontendMode();")
     # The save-list delete question answers with A and B; the game must not see them meanwhile.
     xapi = replace_once(xapi, "void SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {",
         "namespace openshao::save_pages { void HoldAnswer(input::Pad& pad); }\nvoid SyncRetailFrontendMode();\nHLE_STDCALL(XInputGetState, 2) {")
-    xapi = replace_once(xapi, "    input::Pad p = input::Poll(int(port));\n    if (!p.connected) return 1167;",
-        "    input::Pad p = input::Poll(int(port));\n    openshao::save_pages::HoldAnswer(p);\n    if (!p.connected) return 1167;")
+    xapi = replace_once(xapi, "    input::Pad p = input::Poll(int(port));\n    if (!p.connected) return 1167;  // ERROR_DEVICE_NOT_CONNECTED",
+        "    input::Pad p = input::Poll(int(port));\n    openshao::save_pages::HoldAnswer(p);\n"
+        "    if (!p.connected) return 1167;  // ERROR_DEVICE_NOT_CONNECTED\n"
+        "    if (p.analog[5] && openshao::campaign_finishers::BlocksTutorialWhite(port)) p.analog[5] = 0;")
     xapi = replace_once(xapi, "    g_handles[h] = {port, 0, {}};", "    g_handles[h] = {port, 0, {}};\n    LOGI(\"openshao input: open port=%u handle=%08X caller=%08X\", port, h, R32(ctx.esp));")
     xapi = replace_once(xapi, "    h.last = p;", """    if (!h.last.connected || h.last.buttons != p.buttons ||
         std::memcmp(h.last.analog, p.analog, sizeof(p.analog)) ||
@@ -426,7 +438,7 @@ uint32_t OpenOnDisc(''')
     xapi += '\nX86_EXTERN_FUNC(__imp__sub_0048E2C9);\nX86_FUNC(sub_0048E2C9) {\n    const uint32_t ins = kernel::R32(ctx.esp + 8), rem = kernel::R32(ctx.esp + 12);\n    __imp__sub_0048E2C9(ctx, base);\n    static unsigned n = 0;\n    if (n++ < 3 || ctx.eax) LOGI("openshao input: changes result=%u insert=%u remove=%u initial=%u", ctx.eax, kernel::R32(ins), kernel::R32(rem), kernel::R32(0x50FA88) & 255);\n}\n'
     cap_begin = xapi.index('X86_FUNC(sub_0048E398) {')
     cap_end = xapi.index('\nX86_EXTERN_FUNC(__imp__sub_0048E2A7)', cap_begin)
-    xapi = '#include "controller.h"\n' + xapi[:cap_begin] + '#include "controller_compat.inl"\n' + xapi[cap_end:]
+    xapi = '#include "campaign_finishers.h"\n#include "controller.h"\n' + xapi[:cap_begin] + '#include "controller_compat.inl"\n' + xapi[cap_end:]
     # Reuse the actual override body in the synthetic packed-ABI regression.
     (args.out / "capabilities_test.inl").write_text('#include "controller_compat.inl"\n', encoding="utf-8")
     state_begin = xapi.index('HLE_STDCALL(XInputGetState, 2) {')
@@ -468,8 +480,7 @@ uint32_t OpenOnDisc(''')
         '    LOG_FIRST(4, "openshao sfd: soft display filter=%u", a[0]);\n'
         '    return 0;\n'
         '}')
-    # SFD playback performance: preserve the original guest frame counter and
-    # report actual swaps once per second. Do not alter playback timing.
+    # SFD playback: keep the guest frame counter and report real swaps once per second.
     d3d = replace_once(d3d, '    g_presents++;',
         '    g_presents++;\n'
         '    { static uint64_t last_tick=0; static uint32_t last_swap=0;\n'
@@ -481,8 +492,7 @@ uint32_t OpenOnDisc(''')
         '          last_tick=tick; last_swap=g_presents.load();\n'
         '      } }')
     d3d = replace_once(d3d, 'if (!(handle & 1) && (handle & 0xE) == 4) LOG_FIRST(1, "d3d: pretransformed immediate mode vertices are not supported");', 'if (!(handle & 1) && (handle & 0xE) == 4) LOG_FIRST(1, "openshao d3d: screen-coordinate immediate vertices");')
-    # The original SetRenderTarget reaches SetViewport through
-    # D3D_CommonSetMultiSampleModeAndScale. Match SetViewport's clipping reset.
+    # SetRenderTarget reaches SetViewport via D3D_CommonSetMultiSampleModeAndScale: match its clip reset.
     d3d = replace_once(d3d, '// SetRenderTarget resets the viewport to the whole target',
         '// SetRenderTarget resets the viewport and clipping to the whole target\n'
         '    g_state.scissor_count = 0;')
@@ -494,8 +504,7 @@ uint32_t OpenOnDisc(''')
     end = d3d.index('\nHLE_STDCALL(D3DDevice_CopyRects', begin)
     d3d = d3d[:begin] + '#include "d3d_reset.inl"\n' + d3d[end:]
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
-    # Compile the actual adapted API body in the state regression, with synthetic
-    # surface/refcount services. Keep this fixture tied to the pinned SDK source.
+    # Compile the adapted API body in the state regression, tied to the pinned SDK source.
     helper_begin = d3d.index('void ApplyRenderTarget(')
     helper_end = d3d.index('\n}', helper_begin) + 2
     begin = d3d.index('HLE_STDCALL(D3DDevice_SetRenderTarget, 2) {')
@@ -524,11 +533,20 @@ uint32_t OpenOnDisc(''')
         'openshao::aspect::WithCanvasClip(g_state, [&] { g_backend->Draw(g_state, prim, 0, count, nullptr); }, viewport_tint);')
     from prepare_pipeline_precompile import adapt_d3d8 as adapt_pipeline_programs
     d3d = adapt_pipeline_programs(d3d, replace_once)
+    from prepare_upstream_fixes import adapt_d3d8 as adapt_upstream_d3d8
+    d3d = adapt_upstream_d3d8(d3d, replace_once)
+    # Photo mode waits for the renderer to finish the 3D before it puts its effects under the controls.
+    d3d += ('\nnamespace openshao::photo_mode {\n'
+            'void FlushRenderer() {\n'
+            '    std::lock_guard<std::recursive_mutex> lock(d3d::Lock());\n'
+            '    if (d3d::g_backend) d3d::g_backend->Flush();\n'
+            '}\n'
+            '}\n')
     (args.out / "d3d8.cpp").write_text(d3d, encoding="utf-8")
     backend = (args.sdk / "runtime/gpu/d3d12.cpp").read_text(encoding="utf-8")
     from prepare_depth_compat import adapt_backend as adapt_depth
     backend = adapt_depth(backend, replace_once)
-    backend = '#include "aspect_ratio.h"\n#include "host.h"\n#include "launcher.h"\n#include "bloom_effect_runtime.h"\n#include "runtime_paths.h"\n#include "raster_compat.h"\n#include "sfd_filter_compat.h"\n#include "shadow_depth_format.h"\n' + backend
+    backend = '#include "aspect_ratio.h"\n#include "host.h"\n#include "launcher.h"\n#include "bloom_effect_runtime.h"\n#include "runtime_paths.h"\n#include "raster_compat.h"\n#include "sfd_filter_compat.h"\n#include "shadow_depth_format.h"\n#include "photo_mode.h"\n#include "photo_mode_effects.h"\n#include <cstdlib>\n' + backend
     backend = replace_once(backend,
         '    bool wide = app::Widescreen();\n    float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;',
         '    float aspect = openshao::aspect::Output(bb_w_, bb_h_);')
@@ -541,6 +559,47 @@ uint32_t OpenOnDisc(''')
         '    uint32_t last_presented_ = UINT32_MAX;\n    uint32_t bb_w_ = 0;')
     backend = replace_once(backend,'        float mul = 1;\n    };',
         '        float mul = 1;\n        bool direct = false;\n    };')
+    # Photo mode copies the game frame at render size, before the window letterbox and the overlay are drawn.
+    backend = replace_once(backend, '    if (t) Resolve(*t);\n    if (ramp_dirty_) UploadGammaRamp();',
+        '    if (t) Resolve(*t);\n'
+        '    if (t && openshao::photo_mode::ShotRequested()) {\n'
+        '        std::vector<uint8_t> photo;\n'
+        '        ComPtr<ID3D12Resource> down = Shrink(t->res.Get(), t->state, t->fmt, t->w, t->h, {.mul = t->range});\n'
+        '        if (!down || !ReadBack(down.Get(), t->w, t->h, photo)) photo.clear();\n'
+        '        openshao::photo_mode::SaveShot(std::move(photo), t->w, t->h, openshao::aspect::Output(bb_w_, bb_h_));\n'
+        '    }\n'
+        '    if (ramp_dirty_) UploadGammaRamp();')
+    # Photo mode effects go on the scene at the first 2D draw after the 3D, else on the frame before it is copied.
+    backend = replace_once(backend, '    ID3D12Resource* Feedback(Target& t) override;',
+        '    ID3D12Resource* Feedback(Target& t) override;\n    void PhotoScene(Target& t, float aspect, bool before_controls);\n    bool photo_scene_done_ = false;')
+    backend = replace_once(backend, '// a copy of the target to read while drawing to it\nID3D12Resource* D3D12Backend::Feedback(Target& t) {',
+        '// Photo mode colour effects on the target, read from a copy of it\n'
+        'void D3D12Backend::PhotoScene(Target& t, float aspect, bool before_controls) {\n'
+        '    float p[8];\n'
+        '    if (!openshao::photo_mode::SceneParams(p)) return;\n'
+        '    ID3D12Resource* copy = Feedback(t);\n'
+        '    if (!copy) return;\n'
+        '    Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_RENDER_TARGET);\n'
+        '    p[3] = aspect;\n'
+        '    p[4] = t.range;\n'
+        '    ID3D12Resource* const src[3] = {copy, nullptr, nullptr};\n'
+        '    const DXGI_FORMAT fmt[3] = {t.fmt, kBgra, kBgra};\n'
+        '    Pass(openshao::photo_mode::SceneShader(), "psmain", t.fmt, Cpu(rtv_heap_.Get(), t.view, rtv_inc_), t.w, t.h, src, fmt, p, -1);\n'
+        '    photo_scene_done_ = true;\n'
+        '    openshao::photo_mode::NoteSceneInFrame(before_controls);\n'
+        '}\n\n'
+        '// a copy of the target to read while drawing to it\nID3D12Resource* D3D12Backend::Feedback(Target& t) {')
+    backend = replace_once(backend, '    if (ext_ && ext_->Bound(*this, s, bound_rt_, bound_ds_, a.pretransformed) && !BindTargets(s)) return;\n',
+        '    if (ext_ && ext_->Bound(*this, s, bound_rt_, bound_ds_, a.pretransformed) && !BindTargets(s)) return;\n'
+        '    if (bound_rt_ && openshao::photo_mode::TakeSceneArm()) {\n'
+        '        PhotoScene(*bound_rt_, openshao::aspect::Output(bb_w_, bb_h_), true);\n'
+        '        if (!BindTargets(s)) return;\n'
+        '    }\n')
+    backend = replace_once(backend, '    if (t && openshao::photo_mode::ShotRequested()) {\n',
+        '    openshao::photo_mode::TakeSceneArm();\n'
+        '    if (t && !photo_scene_done_) PhotoScene(*t, openshao::aspect::Output(bb_w_, bb_h_), false);\n'
+        '    photo_scene_done_ = false;\n'
+        '    if (t && openshao::photo_mode::ShotRequested()) {\n')
     backend = replace_once(backend,'    DrawFrame(t, bi);',
         '    DrawFrame(t, bi);\n    last_presented_ = bi;')
     backend = replace_once(backend,'    CapStep(Surface{});',
@@ -642,8 +701,7 @@ uint32_t OpenOnDisc(''')
         '        }')
     backend = replace_once(backend, 'app::ExeDir() / diag::CaptureDir() / stamp',
         'openshao::paths::Captures() / diag::CaptureDir() / stamp')
-    # Immediate XYZRHW sprites remain 2D even when the title orders its menu
-    # layers with Z enabled. Their FLOAT4 UVs also need the unit-texture guard.
+    # XYZRHW sprites stay 2D even with Z enabled; their FLOAT4 UVs need the unit-texture guard.
     backend = replace_once(backend, 'sh.quad = count <= kQuadVertices && !s.rs[kRsZEnable] && !points;',
         'sh.quad = count <= kQuadVertices && (!s.rs[kRsZEnable] || (!sh.prog && a.pretransformed)) && !points;')
     backend = replace_once(backend, 'bool UnitTexcoords(const Assembled& a) {',
@@ -675,9 +733,9 @@ uint32_t OpenOnDisc(''')
         '        if (!gs) return nullptr;\n'
         '        d.GS = {gs->GetBufferPointer(), gs->GetBufferSize()};\n'
         '    }')
-    # The debug overlay's Win32 backend polls global keys/cursor in NewFrame.
-    # Hidden probes use only their own window messages and do not need this UI.
-    backend = replace_once(backend, "void D3D12Backend::RenderUi() {", "void D3D12Backend::RenderUi() {\n    if (openshao::options.background) return;")
+    # Hidden probes skip the overlay, whose Win32 backend polls global keys and cursor.
+    # Hidden runs skip the overlay; OPENSHAO_BACKGROUND_UI lets a photo mode check capture its controls.
+    backend = replace_once(backend, "void D3D12Backend::RenderUi() {", "void D3D12Backend::RenderUi() {\n    if (openshao::options.background && !std::getenv(\"OPENSHAO_BACKGROUND_UI\")) return;")
     backend = replace_once(backend, '    CaptureTextures(s, stages);',
         '    fprintf(cap_, " viewport %u %u %u %u scissors %u blendop %X\\n", s.viewport.x, s.viewport.y, s.viewport.w, s.viewport.h, s.scissor_count, k.op);\n'
         '    fprintf(cap_, "     raster_state front_face=%X cull_mode=%X fill=%X back_fill=%X two_sided=%u normalize_normals=%u host_cull=%u host_ccw=%u\\n",\n'
@@ -791,6 +849,8 @@ uint32_t OpenOnDisc(''')
         '        if (std::getenv("OPENSHAO_CAPTURE_NATIVE_PIXELS"))\n'
         '            CapSave({.res=f->res.Get(), .state=&f->state, .fmt=f->fmt, .w=f->w, .h=f->h, .mul=f->range}, "final_native");\n'
         '    }')
+    from prepare_upstream_fixes import adapt_backend as adapt_upstream_backend
+    backend = adapt_upstream_backend(backend, replace_once)
     if args.shadow_diagnostics:
         from prepare_shadow_diagnostics import adapt_backend
         backend = adapt_backend(backend, replace_once)
@@ -839,14 +899,12 @@ uint32_t OpenOnDisc(''')
     quad = replace_once(shaders[quad_begin:quad_end], '    return s;',
         '    return openshao::AtlasQuadHlsl(std::move(s));')
     shaders = shaders[:quad_begin] + quad + shaders[quad_end:]
-    # Guest pixel centers are integers, D3D12's are n+0.5: translate raster positions,
-    # keeping UVs (programmable shaders and XYZRHW vertices).
+    # Guest pixel centers are integers, D3D12's n+0.5: shift raster positions, keep UVs.
     shaders = replace_once(shaders, '    q.x = p.x * 2 / surf.x - 1;',
         '    q.x = (p.x + 0.5) * 2 / surf.x - 1;')
     shaders = replace_once(shaders, '    q.y = 1 - p.y * 2 / surf.y;',
         '    q.y = 1 - (p.y + 0.5) * 2 / surf.y;')
-    # A sprite at x/y zero covers the first console sample. Expand only the
-    # physical target border so upscaling does not expose the cleared column.
+    # Expand only the physical target border so upscaling hides the cleared column.
     shaders = replace_once(shaders,
         '    if (surf.w == 0 && abs(p.x - (surf.x - 0.5)) < 1e-3) p.x = surf.x;\n',
         '    if (surf.w == 0 && abs(p.x) < 1e-4) p.x = -0.5;\n'
@@ -858,12 +916,13 @@ uint32_t OpenOnDisc(''')
     shaders = replace_once(shaders,
         'sub("    if (surf.w == 0 && abs(p.x - (surf.x - 0.5)) < 1e-3) p.x = surf.x;\\n",',
         'sub("    if (surf.w == 0 && abs(p.x) < 1e-4) p.x = -0.5;\\n",')
-    # Fixed XYZ vertices already have clip coordinates; the same translation
-    # is one clip unit / target extent, multiplied by their homogeneous W.
+    # Fixed XYZ vertices are clip space: the shift is one clip unit / extent, times W.
     shaders = replace_once(shaders, '\n    o.pos = cp;\n',
         '\n    o.pos = cp;\n    o.pos.xy += float2(1 / surf.x, -1 / surf.y) * cp.w;\n')
     from prepare_pipeline_pixel_key import adapt_shaders as adapt_pipeline_pixel_key
     shaders = adapt_pipeline_pixel_key(shaders, replace_once)
+    from prepare_upstream_fixes import adapt_shaders as adapt_upstream_shaders
+    shaders = adapt_upstream_shaders(shaders, replace_once)
     (args.out / "shaders.cpp").write_text(shaders, encoding="utf-8")
 
 

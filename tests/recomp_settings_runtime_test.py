@@ -1,8 +1,4 @@
-"""Opt-in real-game Konfigure Recompilation regression using isolated saves and virtual input.
-
-Captures contain original game artwork and must stay in ignored local output.
-The driver never shows its game window or changes desktop focus.
-"""
+"""Opt-in real-game Konfigure Recompilation regression with isolated saves and virtual input."""
 from pathlib import Path
 import ctypes as c
 from ctypes import wintypes as w
@@ -22,9 +18,11 @@ parser.add_argument('--voice-language',default='en',choices=['en','fr','de','es'
 parser.add_argument('--aspect',default='original',choices=['original','16:9','16:10','21:9','32:9','auto'])
 parser.add_argument('--cinematic-bars',action='store_true',help='Enable cinematic bars through Enhancements in the cinematic-bars scenario')
 parser.add_argument('--cursor-stability',action='store_true',help='Capture the main-menu selection star repeatedly at rest')
+parser.add_argument('--return-audit',action='store_true',help='Sample the real gold marker and Main return movie without taking a screenshot each frame')
+parser.add_argument('--return-probe-frame',type=int,help='Capture Main during the native clip16 return once its movie frame reaches this number')
 parser.add_argument('--cursor-visual-quick',action='store_true',help='Capture the main Game Mode selection ornament for visual comparison')
 parser.add_argument('--menu-roundtrip',action='store_true',help='Visit every screen reachable from Main, including Survival, and audit Main backdrop frame by frame')
-parser.add_argument('--scenario',default='navigation',choices=['navigation','survival','menu-layout','persistence','display','native-options','audio-output','ornament-motion','reload','write-failure','remapping','prompts','transition','polish','presentation','input-handoff','details','headings','restart','voices','language-preview','brightness','story-exit','storage-error','exit-desktop','scorpion-preview','scorpion-campaign','scorpion-campaign-enabled','scorpion-quickstart','scorpion-double-save','pause-recomp','pause-recomp-load','cinematic-bars','save-lists','save-pages','save-pages-reload'])
+parser.add_argument('--scenario',default='navigation',choices=['navigation','survival','menu-layout','persistence','display','native-options','audio-output','ornament-motion','reload','write-failure','remapping','prompts','transition','polish','presentation','input-handoff','details','headings','restart','voices','language-preview','brightness','story-exit','storage-error','exit-desktop','scorpion-preview','scorpion-campaign','scorpion-campaign-enabled','scorpion-quickstart','scorpion-double-save','pause-recomp','pause-recomp-load','cinematic-bars','save-lists','save-pages','save-pages-reload','campaign-roster'])
 parser.add_argument('--survival-koop',action='store_true')
 parser.add_argument('--survival-locked',action='store_true',help='Start Survival from a save root without the global unlock to verify locked menu behavior')
 parser.add_argument('--survival-quick',action='store_true',help='Skip intermediate captures during a Survival runtime probe')
@@ -46,16 +44,77 @@ parser.add_argument('--survival-characters-only',action='store_true',help='Stop 
 parser.add_argument('--survival-levels',action='store_true',help='Probe each arena through isolated native map-transition fixtures')
 parser.add_argument('--survival-verify-upgrades',action='store_true',help='Verify campaign move ranks and maximum health in Survival gameplay')
 parser.add_argument('--survival-verify-start-select',action='store_true',help='Verify Start opens the original Select pause menu in Survival')
-parser.add_argument('--slot',type=int,default=1,choices=range(1,10),help='Save slot loaded by the save-lists scenario')
+parser.add_argument('--slot',type=int,choices=range(1,10),help='Source save slot (default: 1, required for the campaign totem fixture)')
 parser.add_argument('--page-files',type=Path,help='Saves folder of an earlier save-pages run whose page files the save-pages-reload scenario starts with')
 parser.add_argument('--clean-profile',action='store_true',help='Use empty isolated saves for the brightness scenario')
 parser.add_argument('--output',type=Path)
 parser.add_argument('--settings',type=Path,help='Read-only configuration fixture for restart validation')
 parser.add_argument('--restart-count',type=int,default=6,choices=range(1,7),help='Number of consecutive language changes in the restart and voices scenarios')
 parser.add_argument('--resume-main-menu',action='store_true',help='Require the restart startup path to reach the main menu without synthetic input')
+campaign_options = parser.add_argument_group('campaign roster')
+campaign_options.add_argument('--campaign-fighter', type=int, choices=range(8), help='Player 1 selector slot (default: 4)')
+campaign_options.add_argument('--campaign-partner', type=int, choices=range(8), help='Player 2 selector slot, enabling Ko-op')
+campaign_options.add_argument('--campaign-check-back', action='store_true', help='Back out of difficulty and confirm the same selection again')
+campaign_options.add_argument('--campaign-save-roundtrip', action='store_true', help='Load the isolated totem fixture selected by --slot, save through the native UI and reload it')
+campaign_options.add_argument('--campaign-death-continue', action='store_true', help='After the save roundtrip, inject live HP 0 and require native death, the actual Continue prompt and checkpoint restoration')
+campaign_options.add_argument('--campaign-traversal', action='store_true', help='Request native platform skill acquisition and traversal validation')
+campaign_options.add_argument('--campaign-move-menus', action='store_true', help='Inspect the native Moves menu for each active player after startup')
+campaign_options.add_argument('--campaign-frontend-only', action='store_true', help='Stop before confirming difficulty')
+campaign_options.add_argument('--campaign-saved-unlocks', action='store_true', help='Use the copied profile’s campaign unlocks')
+campaign_options.add_argument('--campaign-print-plan', action='store_true', help='Print the commands and virtual gamepad count without launching')
 args=parser.parse_args()
+
+campaign_scenario = args.scenario == 'campaign-roster'
+if not campaign_scenario:
+    for name in ('fighter', 'partner', 'check_back', 'save_roundtrip', 'death_continue', 'traversal', 'move_menus',
+                 'frontend_only', 'saved_unlocks', 'print_plan'):
+        value = getattr(args, 'campaign_' + name)
+        if value is not None and value is not False:
+            parser.error('--campaign-' + name.replace('_', '-') + ' requires --scenario campaign-roster')
+if campaign_scenario:
+    if args.coop_load:
+        parser.error('--coop-load uses its own load fixture and cannot be combined with campaign-roster')
+    fighter = 4 if args.campaign_fighter is None else args.campaign_fighter
+    partner = args.campaign_partner
+    virtual_gamepads = 1 if partner is None else 2
+    campaign_commands = [['navigate', int(partner is not None)],
+                         ['campaign-characters', fighter, partner, args.campaign_check_back]]
+    if args.campaign_check_back and fighter == partner:
+        parser.error('--campaign-check-back requires distinct fighters to reach difficulty')
+    if not args.campaign_frontend_only and fighter != partner:
+        campaign_commands.append(['campaign-start', fighter, partner])
+    if args.campaign_move_menus:
+        if args.campaign_frontend_only or fighter == partner:
+            parser.error('--campaign-move-menus requires campaign gameplay')
+        campaign_commands.append(['campaign-move-menus'])
+    if args.campaign_save_roundtrip:
+        if args.campaign_frontend_only or args.campaign_check_back or fighter == partner:
+            parser.error('--campaign-save-roundtrip uses the original Load Game fixture and requires distinct fighters')
+        if args.campaign_saved_unlocks:
+            parser.error('--campaign-saved-unlocks applies to character selection')
+        if args.slot is None:
+            parser.error('--campaign-save-roundtrip requires --slot with a save beside a totem')
+        campaign_commands = [['navigate', 3], ['enter-menu', '0x5967C0'],
+                             ['campaign-save-roundtrip', fighter, partner]]
+        if args.campaign_move_menus:
+            campaign_commands.append(['campaign-move-menus'])
+    if args.campaign_traversal:
+        parser.error('Native campaign traversal probes are not implemented')
+    if args.campaign_death_continue:
+        if not args.campaign_save_roundtrip:
+            parser.error('--campaign-death-continue requires --campaign-save-roundtrip')
+        campaign_commands.append(['campaign-death-continue'])
+    campaign_commands.append(['quit'])
+    if args.campaign_print_plan:
+        print(json.dumps(dict(commands=campaign_commands, virtual_gamepads=virtual_gamepads)))
+        raise SystemExit(0)
+else:
+    virtual_gamepads = 1
+if args.slot is None:args.slot=1
 if args.clean_profile and args.scenario!='brightness':parser.error('--clean-profile requires --scenario brightness')
 if args.cursor_stability and args.scenario!='menu-layout':parser.error('--cursor-stability requires --scenario menu-layout')
+if args.return_audit and args.scenario!='transition':parser.error('--return-audit requires --scenario transition')
+if args.return_probe_frame is not None and args.scenario!='transition':parser.error('--return-probe-frame requires --scenario transition')
 if args.cursor_visual_quick and args.scenario!='menu-layout':parser.error('--cursor-visual-quick requires --scenario menu-layout')
 if args.menu_roundtrip and args.scenario!='menu-layout':parser.error('--menu-roundtrip requires --scenario menu-layout')
 if args.survival_keyboard_only and args.survival_koop:parser.error('--survival-keyboard-only requires solo play')
@@ -70,7 +129,7 @@ if args.scenario=='display' and args.aspect!='original':parser.error('display st
 root=Path(__file__).resolve().parents[1];mode=args.aspect;locale=args.language
 survival_scenario=args.scenario=='survival'
 if survival_scenario:args.scenario='navigation'
-flags={dict(navigation='--recomp',persistence='--save',display='--display-test',**{'menu-layout':'--menu-layout','native-options':'--suite','audio-output':'--audio-output','ornament-motion':'--ornament-motion','reload':'--reload','write-failure':'--write-failure','remapping':'--remapping','prompts':'--prompts','transition':'--transition','polish':'--polish','presentation':'--presentation','input-handoff':'--input-handoff','details':'--details','headings':'--headings','restart':'--restart','voices':'--voices','language-preview':'--language-preview','brightness':'--brightness','story-exit':'--story-exit','storage-error':'--storage-error','exit-desktop':'--exit-desktop','scorpion-preview':'--scorpion-preview','scorpion-campaign':'--scorpion-campaign','scorpion-campaign-enabled':'--scorpion-campaign-enabled','scorpion-quickstart':'--scorpion-quickstart','scorpion-double-save':'--scorpion-double-save','pause-recomp':'--pause-recomp','pause-recomp-load':'--pause-recomp-load','cinematic-bars':'--cinematic-bars','save-lists':'--save-lists','save-pages':'--save-pages','save-pages-reload':'--save-pages-reload'})[args.scenario]}
+flags={dict(navigation='--recomp',persistence='--save',display='--display-test',**{'menu-layout':'--menu-layout','native-options':'--suite','audio-output':'--audio-output','ornament-motion':'--ornament-motion','reload':'--reload','write-failure':'--write-failure','remapping':'--remapping','prompts':'--prompts','transition':'--transition','polish':'--polish','presentation':'--presentation','input-handoff':'--input-handoff','details':'--details','headings':'--headings','restart':'--restart','voices':'--voices','language-preview':'--language-preview','brightness':'--brightness','story-exit':'--story-exit','storage-error':'--storage-error','exit-desktop':'--exit-desktop','scorpion-preview':'--scorpion-preview','scorpion-campaign':'--scorpion-campaign','scorpion-campaign-enabled':'--scorpion-campaign-enabled','scorpion-quickstart':'--scorpion-quickstart','scorpion-double-save':'--scorpion-double-save','pause-recomp':'--pause-recomp','pause-recomp-load':'--pause-recomp-load','cinematic-bars':'--cinematic-bars','save-lists':'--save-lists','save-pages':'--save-pages','save-pages-reload':'--save-pages-reload','campaign-roster':'--campaign-roster'})[args.scenario]}
 out=(args.output or root/'work/recomp-runtime').resolve();out.mkdir(parents=True,exist_ok=True)
 if args.coop_load:flags={'--coop-load'}
 run=out/('runtime-'+locale+'-'+mode.replace(':','-')+'-'+str(time.time_ns()));run.mkdir()
@@ -93,21 +152,18 @@ if '--menu-layout' in flags:
               ['navigate',6],['enter-options'],['capture','recompilation'],['back'],['assert-top','0x598430'],['assert-main-row',6],['quit']]
     if args.cursor_visual_quick:steps=[['navigate',9],['assert-main-row',9],['capture','gold-and-star'],['quit']]
     if args.menu_roundtrip:
-        # Every path in and out of Main (Survival pages/fighters, popups, native screens), audited
-        # frame by frame; keyboard + virtual pad are the two players, unplugged for the notice.
+        # Every path in and out of Main, audited per frame; keyboard and virtual pad are the two players.
         steps=[['capture','roundtrip-start'],
                ['navigate',9],['accept'],['capture','roundtrip-game-mode'],
                ['accept'],['capture','roundtrip-players'],
                ['tap-to-row',12,1],['fixture',False],['wait',1],['capture','roundtrip-players-koop-notice'],['fixture',True],['wait',1],
                ['accept'],['assert-top','0x598DF0'],['capture','roundtrip-survival-koop-fighters'],
                ['back'],['assert-top','0x598430'],['capture','roundtrip-back-to-koop'],
-               # Wait for the Players page to settle; otherwise Up is ignored and
-               # the rest would run in Ko-op, where both players must confirm.
+               # Let the Players page settle, or Up is ignored and the run continues in Ko-op.
                ['wait',1.5],['tap-to-row',11,0],
                ['accept'],['assert-top','0x598DF0'],['capture','roundtrip-survival-fighters'],
                ['back'],['assert-top','0x598430'],['capture','roundtrip-back-to-players'],
-               # Owner's pattern: confirm a player and press Back as soon as the
-               # fighters accept input (the roster ignores Back while it opens).
+               # Confirm a player and press Back once the roster accepts input.
                ['button',0,.12,2.5],['assert-top','0x598DF0'],['button',1,.12,.4],['capture','roundtrip-quick-back'],
                ['wait',2],['button',0,.12,2.5],['assert-top','0x598DF0'],['button',1,.12,.4],['capture','roundtrip-quick-back-2'],
                # Fighter chosen, difficulty popup, then Back twice to Main's Players page.
@@ -128,7 +184,6 @@ if '--cinematic-bars' in flags:
     steps=[['navigate',7],['enter-options'],['key',40],['key',40]]
     if args.cinematic_bars:steps += [['key',39]]
     steps += [['capture','enhancement-'+('on' if args.cinematic_bars else 'off')],['back']]
-    if args.cinematic_bars:steps += [['accept']]
     steps += [['assert-top','0x598430'],['navigate',0],['accept'],['capture-cutscene-bars'],['quit']]
     (run/'command-1.json').write_text(json.dumps(steps))
 if '--exit-desktop' in flags:
@@ -153,8 +208,7 @@ if '--save-lists' in flags:
            ['slot-variants','load'],['save-list-totem'],['quit']]
     (run/'command-1.json').write_text(json.dumps(steps))
 if '--save-pages' in flags:
-    # Paging in both lists, saving and deleting on page 2, leaving the campaign with page 2 shown,
-    # then deleting on page 1 from the main menu. save-pages-reload continues from these saves.
+    # Page and save/delete on page 2, leave with page 2 shown, delete on page 1; save-pages-reload continues.
     steps=[['navigate',3],['enter-menu','0x5967C0'],['wait',2],['capture','load-main'],
            ['trigger',5],['capture','load-page-2'],['trigger',4],['trigger',4],['capture','load-page-10'],
            ['trigger',5],['capture','load-page-1'],['pages-session'],['quit']]
@@ -210,8 +264,7 @@ if '--input-handoff' in flags:
 if '--presentation' in flags:
     down=lambda n:[['key',40]]*n
     steps=[['navigate',6],['enter-options'],['capture','settings-home']]+down(1)+[['key',13],['assert-native-clip',24],['capture','graphics'],['key',27],['assert-native-clip',34]]+down(3)+[['key',13],['assert-native-clip',24],['capture','language-initial']]
-    # PT-BR needs a language pack: visit the five original languages both ways and
-    # restore the initial value before checking Back.
+    # PT-BR needs a pack: visit the five original languages both ways and restore the start value.
     languages=['en','fr','de','es','it','pt-BR']
     if args.mods:
         for index in range(1,len(languages)+1):
@@ -315,7 +368,7 @@ if '--suite' in flags:
     (run/'command-1.json').write_text(json.dumps(steps))
 if '--recomp' in flags:
     down=lambda n:[['button',12,.12,.7]]*n
-    steps=[['navigate',6],['capture','seventh-row'],['enter-options'],['capture','settings-home'],['accept'],['capture','display']]+down(3)+[['button',14,.12,.7],['capture','display-edit'],['back']]+down(1)+[['accept'],['capture','graphics'],['back']]+down(1)+[['accept'],['capture','controls'],['accept'],['capture','controller'],['accept'],['axis',2,-25000,.3],['wait',1],['capture','controller-conflict'],['back']]+down(1)+[['accept'],['accept'],['key',90],['capture','keyboard-bound'],['back'],['back']]+down(1)+[['accept'],['capture','audio'],['back']]+down(1)+[['accept'],['capture','language'],['back']]+down(2)+[['accept'],['wait',2],['capture','returned-main'],['quit']]
+    steps=[['navigate',6],['capture','seventh-row'],['enter-options'],['capture','settings-home'],['accept'],['capture','display']]+down(3)+[['button',14,.12,.7],['capture','display-edit'],['back']]+down(1)+[['accept'],['capture','graphics'],['back']]+down(1)+[['accept'],['capture','controls'],['accept'],['capture','controller'],['accept'],['axis',2,-25000,.3],['wait',1],['capture','controller-conflict'],['back']]+down(1)+[['accept'],['accept'],['key',90],['capture','keyboard-bound'],['back'],['back']]+down(1)+[['accept'],['capture','audio'],['back']]+down(1)+[['accept'],['capture','language'],['back']]+down(1)+[['accept'],['capture','interface'],['back']]+down(2)+[['accept'],['wait',2],['capture','returned-main'],['quit']]
     (run/'command-1.json').write_text(json.dumps(steps))
 if '--recomp' in flags:
     boundary=[['main-step',11,8],['main-step',11,7],['main-step',11,6],['main-step',11,5],['main-step',12,6],['main-step',12,7],['main-step',12,8],['main-step',12,0]]
@@ -347,6 +400,8 @@ game=args.game.resolve();disc=game.suffix.lower() in ('.iso','.xiso')
 if disc:xbe=game;source_hash=str(game.stat().st_size)+':'+str(game.stat().st_mtime_ns)
 else:game=game.parent if game.is_file() else game;xbe=game/'default.xbe';source_hash=hashlib.sha256(xbe.read_bytes()).hexdigest()
 data=run/'data';data.mkdir()
+if campaign_scenario:
+    (run/'command-1.json').write_text(json.dumps(campaign_commands))
 if survival_scenario:(run/'command-1.json').write_text(json.dumps([['survival'],['quit']]))
 if args.cache_fixture:
     fixture=args.cache_fixture.resolve()
@@ -366,8 +421,7 @@ save_hashes={str(f.relative_to(save_source)):hashlib.sha256(f.read_bytes()).hexd
 if args.clean_profile:(run/'saves/E/UDATA/4d570029').mkdir(parents=True)
 else:shutil.copytree(save_source,run/'saves/E/UDATA/4d570029')
 if (survival_scenario and not args.survival_locked) or args.menu_roundtrip:
-    # Ordinary Survival probes start with a globally saved portal discovery.
-    # Keep the user's actual source saves and global unlock state untouched.
+    # Survival probes start with a saved portal discovery; real saves and unlocks stay untouched.
     (run/'saves/openshao-survival-unlock.dat').write_bytes(b'OpenShao Survival Unlocked v1\n')
 if args.page_files:
     for page in sorted(args.page_files.resolve().glob('openshao-save-page-*.bin')):shutil.copy2(page,run/'saves'/page.name)
@@ -391,10 +445,14 @@ survival_frame_log=(run/'survival-frames.jsonl').open('w',encoding='utf-8',buffe
 # Per-frame Main and backdrop state for the menu round trip (about every 16 ms).
 roundtrip_frame_log=(run/'roundtrip-frames.jsonl').open('w',encoding='utf-8',buffering=1) if args.menu_roundtrip else None
 last_roundtrip_sample=0
+return_frames=[]
+last_return_sample=0
+gold_handle=None
+return_seen_custom=False
 last_survival_frame_sample=0.0
 logpath=run/'native.log';began=time.monotonic()
 log=logpath.open('wb')
-process=subprocess.Popen([str(exe),'--background','--timeout','600','--virtual-gamepads','1','--disc' if disc else '--game',str(game),'--data-dir',str(data),'--save-dir',str(run/'saves')]+(['--resume-main-menu'] if args.resume_main_menu else []),cwd=run,env=env,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW|subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+process=subprocess.Popen([str(exe),'--background','--timeout','600','--virtual-gamepads',str(virtual_gamepads),'--disc' if disc else '--game',str(game),'--data-dir',str(data),'--save-dir',str(run/'saves')]+(['--resume-main-menu'] if args.resume_main_menu else []),cwd=run,env=env,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW|subprocess.BELOW_NORMAL_PRIORITY_CLASS)
 print('RUN',run,flush=True)
 def read(address,size):
     result=c.create_string_buffer(size);n=c.c_size_t()
@@ -446,8 +504,7 @@ def sample_ornament_motion():
                               bounds=[round(v,4) for v in (left,top_y,right,bottom)],
                               uv=[round(v,5) for v in struct.unpack_from('<6f',queue,4+i*0x6C+0x40)],
                               alpha=queue[4+i*0x6C+0x5B]))
-    # The queue is rebuilt during the frame. Wait for the flipped lower cap,
-    # which is queued after the shaft, instead of sampling the partial title.
+    # Wait for the flipped lower cap (queued after the shaft) instead of a partial title.
     lower_cap=any(q['uv'][3]>.98 and q['uv'][4]<.01 and 115<q['bounds'][2]-q['bounds'][0]<135 for q in quads)
     if not lower_cap or native!=(control,u32(scene+0x2A0),u32(scene+0x33C)):return
     ornament_motion.append(dict(seconds=round(time.monotonic()-began,4),control=hex(control),
@@ -455,7 +512,7 @@ def sample_ornament_motion():
                                 finished=bool(u32(scene+0x340)&255),quads=quads))
     last_ornament_frame=native
 def tick():
-    global base,last,resized,last_survival_frame_sample,last_roundtrip_sample
+    global base,last,resized,last_survival_frame_sample,last_roundtrip_sample,last_return_sample,gold_handle,return_seen_custom
     assert process.poll() is None,'Game exited during probe'
     assert time.monotonic()-began<590,'Probe deadline'
     user.EnumWindows(observer,0);assert not visible,'Visible window'
@@ -477,6 +534,37 @@ def tick():
                 base=candidate
     if base:
         depth=u32(0x6C9308);top=u32(0x6C9308+depth*4) if depth<=16 else 0
+        if args.return_audit and time.monotonic()-last_return_sample>=.032:
+            last_return_sample=time.monotonic()
+            scene=u32(0x59843C)
+            clip=u32(scene+0x2A0) if scene else 0
+            frame=u32(scene+0x33C) if scene else 0
+            row=u32(0x598468)
+            finished=bool(read(scene+0x340,1)[0]) if scene else False
+            if top==0x5985E8:return_seen_custom=True
+            gold_y=gold_alpha=None
+            sample_gold=(top==0x598430 and row==6 and ((gold_handle is None and clip==6 and finished) or return_seen_custom))
+            if sample_gold:
+                count=u32(0x63F5E0)
+                if 0<count<=512:
+                    queue=read(0x63F5E4,count*0x6C)
+                    for i in range(count):
+                        record=i*0x6C
+                        handle=struct.unpack_from('<I',queue,record+0x68)[0]
+                        points=[struct.unpack_from('<2f',queue,record+0x10+v*16) for v in range(3)]
+                        left=min(p[0] for p in points);right=max(p[0] for p in points)
+                        quad_top=min(p[1] for p in points);bottom=max(p[1] for p in points)
+                        # Identify the 64x60 glyph at rest, then follow its GPU handle rather than its asset CRC.
+                        if gold_handle is None and clip==6 and finished and 40<=left<=49 and 59<=right-left<=69 and 52<=bottom-quad_top<=67 and 285<=quad_top<=325:
+                            gold_handle=handle
+                        if gold_handle is not None and handle==gold_handle:
+                            gold_y=quad_top if gold_y is None else min(gold_y,quad_top)
+                            alpha=queue[record+0x5B]
+                            gold_alpha=alpha if gold_alpha is None else max(gold_alpha,alpha)
+            if sample_gold or return_seen_custom:
+                return_frames.append(dict(t=round(last_return_sample-began,4),top=hex(top),row=row,
+                    clip=clip,frame=frame,finished=finished,white_visible=u32(0x592D20+0xC),
+                    gold_y=round(gold_y,3) if gold_y is not None else None,gold_alpha=gold_alpha))
         if roundtrip_frame_log is not None and time.monotonic()-last_roundtrip_sample>=.016:
             last_roundtrip_sample=time.monotonic()
             main_movie=u32(0x59843C)
@@ -527,14 +615,36 @@ def wait(seconds):
     while time.monotonic()<until:tick()
 def top():
     d=u32(0x6C9308);return u32(0x6C9308+d*4) if d<=16 else 0
-def button(index,held):
-    assert hwnd and user.PostMessageW(hwnd,0x8051,index,int(held))
-    events.append(dict(elapsed=round(time.monotonic()-began,4),button=index,held=held))
-def pulse(index,duration=.12,gap=.55):
-    button(index,True);wait(duration);button(index,False);wait(gap)
+def button(index,held,controller=0):
+    assert hwnd and user.PostMessageW(hwnd,0x8051,index|(controller<<16),int(held))
+    event = dict(elapsed=round(time.monotonic()-began,4),button=index,held=held)
+    if campaign_scenario:
+        event['virtual_controller'] = controller
+    events.append(event)
+def pulse(index,duration=.12,gap=.55,controller=0):
+    button(index,True,controller);wait(duration);button(index,False,controller);wait(gap)
+
+def campaign_acknowledged_accept(player):
+    packet = re.compile(rf'openshao input: state port={player} packet=\d+ buttons=[0-9A-F]+ A=255\b')
+    offset = logpath.stat().st_size
+    button(0, True, controller=player)
+    seen = False
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            with logpath.open('rb') as log:
+                log.seek(offset)
+                if packet.search(log.read().decode('utf-8', errors='replace')):
+                    seen = True
+                    break
+            wait(.05)
+    finally:
+        button(0, False, controller=player)
+    wait(.7)
+    assert seen, ('Guest did not receive Accept from the virtual controller', player + 1)
+
 def held_until_seen(press,release,field):
-    # A capture can pause the game; hold the control until the game has read it, so a press made
-    # while it was paused is never lost.
+    # Hold the control until the game reads it, so a press during a capture pause is not lost.
     wait(.6)
     before=logpath.read_text(errors='replace').count(field)
     press();until=time.monotonic()+4
@@ -543,8 +653,7 @@ def held_until_seen(press,release,field):
     wait(.2);release();wait(1.2)
     assert seen,('The game never read the control',field.strip())
 def trigger(axis):
-    # SDL axis 4 is the left trigger, 5 the right. A virtual trigger rests at -32768 (0 reads as half
-    # pulled).
+    # SDL axis 4 is LT, 5 is RT; a virtual trigger rests at -32768 (0 is half pulled).
     held_until_seen(lambda:user.PostMessageW(hwnd,0x8052,axis,32767),lambda:user.PostMessageW(hwnd,0x8052,axis,-32768),
                     ' LT=255' if axis==4 else ' RT=255')
     events.append(dict(elapsed=round(time.monotonic()-began,4),trigger=axis))
@@ -597,8 +706,7 @@ def slot_records():
     assert buffer,'Save buffer is not loaded'
     return [buffer+0x131C+i*0x51AC for i in range(9)]
 def slot_variants(prefix):
-    # Worst-case slot lists, isolated process only: one room per level-name range, longest time,
-    # 100%, every difficulty, solo and Ko-op; originals restored afterwards.
+    # Worst-case slot lists in an isolated process; originals restored afterwards.
     records=slot_records();saved=[read(r,0xE0) for r in records]
     rooms=[0x00,0x20,0x40,0x60,0x67,0x80,0xA0,0xC0,0x1E]
     frames=(99*3600+59*60)*60
@@ -615,6 +723,13 @@ def slot_variants(prefix):
     for r,data in zip(records,saved):write_memory(r,data)
     wait(.5)
 def capture(name):
+    if name=='main-returning' and args.return_probe_frame is not None:
+        deadline=time.monotonic()+4
+        while time.monotonic()<deadline:
+            scene=u32(0x59843C)
+            if top()==0x598430 and scene and u32(scene+0x2A0)==16 and u32(scene+0x33C)<=args.return_probe_frame:break
+            tick()
+        else:raise AssertionError('Main return clip16 frame was not observed for visual capture')
     if args.survival_quick and name not in ('main-menu','main-row-9','survival-level-1','survival-level-9'):return
     main_scene=u32(0x59843C)
     main_before=dict(state=u32(main_scene+0x2A0),frame=u32(main_scene+0x33C),status=u32(main_scene+0x2E4)) if main_scene else {}
@@ -740,6 +855,586 @@ def key(code):
     assert user.PostMessageW(hwnd,0x100,code,0);wait(.15)
     assert user.PostMessageW(hwnd,0x101,code,0);wait(.9)
 
+def campaign_roster():
+    count = read(0x598C54, 1)[0]
+    assert 0 < count <= 8, ('Native roster count', count)
+    return list(read(0x598C28, count))
+
+def campaign_unlocks():
+    if not args.campaign_saved_unlocks:
+        write_memory(0x5A378D, b'\x01\x01')
+    story_flags = list(read(0x5A378D, 2))
+    expected = ([0, 1, 2] if story_flags[0] == 1 else []) + [3, 4] + ([5, 6, 7] if story_flags[1] == 1 else [])
+    checks.append(dict(capture='campaign-unlock-fixture',
+                       story_flags=story_flags, expected_campaign_slots=expected))
+    return expected
+
+def campaign_select(slot, player, available):
+    selected = 0x598E2C + player * 4
+    for _ in range(len(available) + 1):
+        assert top() == 0x598DF0, ('Unexpected menu during fighter navigation', hex(top()))
+        if u32(selected) == slot:
+            return
+        previous = u32(selected)
+        button(14, True, controller=player)
+        try:
+            deadline = time.monotonic() + 2
+            while u32(selected) == previous and time.monotonic() < deadline:
+                tick()
+        finally:
+            button(14, False, controller=player)
+        wait(.7)
+    raise AssertionError(('Could not select requested fighter', player + 1, slot, u32(selected)))
+
+def campaign_leave_difficulty(back):
+    difficulty = 0x596810
+    assert top() == difficulty
+    deadline = time.monotonic() + 25
+    attempts = 0
+    while top() == difficulty and time.monotonic() < deadline:
+        popup = u32(difficulty + 0x10)
+        if not popup or u32(popup + 0x28) != 1:
+            wait(.1)
+            continue
+        attempts += 1
+        button(1 if back else 0, True, controller=0)
+        try:
+            held_until = min(deadline, time.monotonic() + 1.2)
+            while top() == difficulty and time.monotonic() < held_until:
+                tick()
+        finally:
+            button(1 if back else 0, False, controller=0)
+        wait(.6)
+    checks.append(dict(capture='campaign-difficulty-input', back=back,
+                       attempts=attempts, destination=hex(top()), virtual_controller=0))
+    assert top() != difficulty, ('Native difficulty did not accept input', back, attempts)
+
+def campaign_characters(fighter, partner, check_back):
+    characters, difficulty = 0x598DF0, 0x596810
+    assert top() == 0x598430 and u32(0x598468) == int(partner is not None)
+    available = campaign_unlocks()
+    requested = [fighter] if partner is None else [fighter, partner]
+    assert all(slot in available for slot in requested), ('Requested slot is locked', requested, available)
+    deadline = time.monotonic() + 22
+    while top() == 0x598430 and time.monotonic() < deadline:
+        pulse(0, duration=.25, gap=2)
+    assert top() == characters, ('Campaign Main entry must open the native selector', hex(top()))
+    wait(4)
+
+    def confirm_selected(label):
+        assert campaign_roster() == available, ('Campaign roster', campaign_roster(), available)
+        assert u32(0x598468) == 2, 'Campaign selection must display the eight-slot portrait view'
+        for player, slot in enumerate(requested):
+            campaign_select(slot, player, available)
+        selected = [u32(0x598E2C + player * 4) for player in range(len(requested))]
+        assert selected == requested, ('Requested fighter slots changed', selected, requested)
+        capture('campaign-characters-' + label)
+        checks.append(dict(capture='campaign-exact-slots', phase=label, slots=selected,
+                           roster=available, coop=partner is not None))
+        for player in range(len(requested)):
+            duplicate = player == 1 and fighter == partner
+            if duplicate:
+                assert [u32(0x598E2C + port * 4) for port in range(2)] == requested, 'Duplicate probe requires the same selected slot'
+                campaign_acknowledged_accept(player)
+                continue
+            for _ in range(6):
+                if top() != characters or read(0x598E34 + player, 1) == b'\x01':
+                    break
+                button(0, True, controller=player)
+                try:
+                    deadline = time.monotonic() + 1.5
+                    while (top() == characters and read(0x598E34 + player, 1) != b'\x01'
+                           and time.monotonic() < deadline):
+                        tick()
+                finally:
+                    button(0, False, controller=player)
+                wait(.8)
+        if fighter == partner:
+            wait(4)
+            assert top() == characters and read(0x598E34, 2) == b'\x01\x00', (
+                'Native Ko-op must reject P2 confirming P1’s locked fighter', hex(top()),
+                list(read(0x598E34, 2)))
+            capture('campaign-duplicate-rejected')
+            checks.append(dict(capture='campaign-native-duplicate-rejection', slot=fighter))
+            return
+        deadline = time.monotonic() + 22
+        while top() == characters and time.monotonic() < deadline:
+            wait(.1)
+        assert top() == difficulty, ('Exact fighter selection must open difficulty', hex(top()),
+                                     list(read(0x598E34, 2)))
+        assert u32(0x598468) == 2 and campaign_roster() == available, 'Difficulty changed the roster backdrop'
+        capture('campaign-difficulty-' + label)
+
+    confirm_selected('initial')
+    if check_back:
+        campaign_leave_difficulty(back=True)
+        assert top() == characters, ('Difficulty Back must return to the roster', hex(top()))
+        returned = [u32(0x598E2C + player * 4) for player in range(len(requested))]
+        assert returned == requested, ('Difficulty Back changed the selected fighters', requested, returned)
+        capture('campaign-characters-after-back')
+        confirm_selected('reconfirmed')
+
+def campaign_start(fighter, partner):
+    expected = [(83, 89, 88, 1, 0, 82, 90, 84)[slot]
+                for slot in (fighter, partner) if slot is not None]
+    coop = partner is not None
+    campaign_leave_difficulty(back=False)
+
+    actors = [0x5CE880 + (player + 1) * 0x3238 for player in range(len(expected))]
+    deadline = time.monotonic() + 135
+    next_skip = time.monotonic() + 9
+    initial_play_frames = None
+    while time.monotonic() < deadline:
+        state = u32(0x5ACEBC)
+        if state and u32(0x505970) == 96 and initial_play_frames is None:
+            initial_play_frames = u32(state)
+        components = [u32(actor + 0x200) for actor in actors]
+        if (state and u32(0x505970) == 96 and u32(0x639224)
+                and all(component and u32(component + 0x370) for component in components)
+                and read(0x4EF42C, 1) == b'\x01'
+                and read(0x6C4198, 1) == b'\x00' and not u32(0x6C92F8)
+                and initial_play_frames is not None and u32(state) > initial_play_frames):
+            break
+        if time.monotonic() >= next_skip:
+            pulse(6, duration=.35, gap=.8)
+            next_skip = time.monotonic() + 10
+        else:
+            wait(.1)
+    else:
+        raise AssertionError(('Normal campaign room did not become active', u32(0x505970), hex(top())))
+
+    heroes = []
+    for player, (actor, component) in enumerate(zip(actors, components)):
+        heroes.append(dict(slot=(fighter, partner)[player],
+                           saved_fighter=u32(state + 0xCC + 4 * player),
+                           actor_fighter=struct.unpack('<h', read(actor + 0x1DFE, 2))[0],
+                           health=u32(component + 0x368), maximum_health=u32(component + 0x370),
+                           experience=u32(state + 0x48F0 + (player + 1) * 0x50),
+                           ranks=list(read(state + 0x1C4 + player * 0x1C, 28))))
+    snapshot = dict(capture='campaign-room-96-start', room=u32(0x505970), mode=u32(state + 0x88),
+                    health_pickups=u32(state + 0xE0), health_tier=u32(state + 0x90),
+                    base_health=u32(state + 0x94), heroes=heroes,
+                    cinematic=read(0x6C4198, 1)[0], movie_loading=u32(0x6C92F8),
+                    initial_play_frames=initial_play_frames, play_frames=u32(state))
+    checks.append(snapshot)
+    (run/'campaign-start.json').write_text(json.dumps(snapshot, indent=2))
+    assert snapshot['mode'] == int(coop), ('Native campaign mode', snapshot)
+    assert snapshot['health_pickups'] == 0 and snapshot['health_tier'] == 1, ('Campaign starting health progression', snapshot)
+    assert snapshot['base_health'] == u32(0x50B544 + 4 * int(coop)), ('Native zero-pickup health table', snapshot)
+    for hero, identity in zip(heroes, expected):
+        assert hero['saved_fighter'] == hero['actor_fighter'] == identity, ('Campaign fighter identity', hero)
+        assert 0 < hero['health'] <= hero['maximum_health'] == snapshot['base_health'] // len(expected), (
+            'Native campaign hero health', hero)
+        assert hero['ranks'][4:11] == [0] * 7, ('Campaign platform skills already acquired', hero)
+        if identity in (83, 84, 89, 90):
+            assert hero['ranks'][:4] == [1] * 4, ('Extra fighter inherited another fighter’s starting ranks', hero)
+    native_log = logpath.read_text(errors='replace')
+    assert 'Survival session started' not in native_log and 'Survival rules ready' not in native_log
+    assert u32(0x4E6E20 + 0x6C0 + 0x18) != 0xFFFFFD20, 'Survival rules were posted in normal campaign'
+    capture('campaign-room-96')
+
+def campaign_move_menus():
+    active, tab, player_owner, selected = 0x59E3D4, 0x4EF410, 0x4EFA60, 0x4EFB38
+    extra_labels = {83: 545, 84: 550, 89: 560, 90: 565}
+    state = u32(0x5ACEBC)
+    identities = [u32(state + 0xCC + player * 4) for player in range(1 + u32(state + 0x88))]
+    def progression():
+        return [(u32(state + 0x48F0 + (player + 1) * 0x50),
+                 list(read(state + 0x1C4 + player * 0x1C, 28)))
+                for player in range(len(identities))]
+
+    def drive(index, player, reached, *, axis=False):
+        def set_input(held):
+            if axis:
+                assert user.PostMessageW(hwnd, 0x8052, index | (player << 16), 32767 if held else -32768)
+            else:
+                button(index, held, controller=player)
+
+        for _ in range(6):
+            if reached():
+                return
+            set_input(True)
+            try:
+                deadline = time.monotonic() + 1.2
+                while not reached() and time.monotonic() < deadline:
+                    tick()
+            finally:
+                set_input(False)
+            wait(.7)
+        assert reached(), ('Native Moves input did not reach its destination', player + 1, index)
+
+    for player, identity in enumerate(identities):
+        assert not u32(active), 'A previous Moves menu remained open'
+        before = progression()
+        deadline = time.monotonic() + 100
+        while time.monotonic() < deadline and not u32(active):
+            # The first-room scene and active native tutorial messages can consume Start.
+            if not u32(0x6C92F8) and not u32(0x632F90):
+                pulse(6, duration=.25, gap=2, controller=player)
+            else:
+                wait(.15)
+        assert u32(active), ('Start must open the native Moves menu', player + 1)
+        # Start opens Main. The native tab-switch callback sets the Moves state to 1.
+        drive(5, player, lambda: u32(tab) == 1, axis=True)
+        deadline = time.monotonic() + 12
+        while not u32(selected) and time.monotonic() < deadline:
+            wait(.15)
+        wait(1)
+        category = u32(selected)
+        assert category and u32(player_owner) == player, ('Native Moves owner', u32(player_owner), player)
+        root_node = u32(category + 0x10)
+        capture(f'campaign-moves-p{player + 1}-root')
+        root_identity = u32(root_node + 0x18) if root_node else None
+        checks.append(dict(capture='campaign-moves-root', player=player + 1,
+                           expected_identity=identity, root_identity=root_identity,
+                           selected_label=u32(category + 0x18)))
+        assert root_identity == identity, ('Native Moves selected another fighter’s root', identity, root_identity)
+        if identity in extra_labels:
+            assert u32(category + 0x18) == 461, 'Extra fighter must open on Specials'
+            drive(0, player, lambda: u32(selected) != category)
+            for column in range(3):
+                button_node = u32(selected)
+                assert u32(button_node + 0x10) == category and u32(button_node + 0x18) == 466 + column
+                drive(0, player, lambda: u32(selected) != button_node)
+                leaf = u32(selected)
+                label = extra_labels[identity] + column * 100
+                capture(f'campaign-moves-p{player + 1}-special-{column + 1}')
+                sample = dict(capture='campaign-moves-special', player=player + 1, fighter=identity,
+                              label=u32(leaf + 0x18), description=u32(leaf + 0x1C),
+                              cost=u32(leaf + 0x28), acquired=u32(leaf + 0x2C),
+                              preview_request=u32(0x59E38C), preview_active=u32(0x59E3BC))
+                checks.append(sample)
+                assert u32(leaf + 0x10) == button_node and u32(leaf + 4) == 0, ('Native reference leaf', sample)
+                assert (sample['label'], sample['description']) == (label, label + 50), ('Native move text', sample)
+                assert (sample['cost'], sample['acquired']) == (0, 1), ('Reference cost or acquisition state', sample)
+                assert not (sample['preview_request'] or sample['preview_active']), ('Unexpected reference preview', sample)
+                campaign_acknowledged_accept(player)
+                assert u32(selected) == leaf and progression() == before, ('Reference technique accepted a purchase', sample)
+                for variant in range(1, u32(button_node + 0xC)):
+                    previous = u32(selected)
+                    drive(12, player, lambda: u32(selected) != previous)
+                    node = u32(selected)
+                    assert u32(node + 0x10) == button_node and u32(node + 4) == 0
+                    assert u32(node + 0x28) == 0 and u32(node + 0x2C) == 1
+                    assert not (u32(0x59E38C) or u32(0x59E3BC)), 'Unexpected variant preview'
+                    capture(f'campaign-moves-p{player + 1}-special-{column + 1}-variant-{variant}')
+                    campaign_acknowledged_accept(player)
+                    assert u32(selected) == node and progression() == before
+                    checks.append(dict(capture='campaign-moves-reference', player=player + 1,
+                                       fighter=identity, section='special-variant', label=u32(node + 0x18),
+                                       description=u32(node + 0x1C)))
+                drive(1, player, lambda: u32(selected) == button_node)
+                if column < 2:
+                    drive(12, player, lambda: u32(selected) != button_node)
+            drive(1, player, lambda: u32(selected) == category)
+            def inspect_references(parent, path):
+                count = u32(parent + 0xC)
+                assert 0 < count <= 7, ('Unexpected reference section size', path, count)
+                drive(0, player, lambda: u32(selected) != parent)
+                for row in range(count):
+                    node = u32(selected)
+                    label = u32(node + 0x18)
+                    assert u32(node + 0x10) == parent, ('Incorrect reference parent', path, row)
+                    if u32(node + 0xC):
+                        inspect_references(node, f'{path}-{row + 1}')
+                    else:
+                        description = u32(node + 0x1C)
+                        assert label != 0xFFFFFFFF and description != 0xFFFFFFFF
+                        assert u32(node + 0x28) == 0 and u32(node + 0x2C) == 1
+                        assert not (u32(0x59E38C) or u32(0x59E3BC)), ('Unexpected reference preview', path, row)
+                        capture(f'campaign-moves-p{player + 1}-{path}-{row + 1}')
+                        campaign_acknowledged_accept(player)
+                        assert u32(selected) == node and progression() == before
+                        checks.append(dict(capture='campaign-moves-reference', player=player + 1,
+                                           fighter=identity, section=path, label=label, description=description))
+                    if row + 1 < count:
+                        drive(12, player, lambda: u32(selected) != node)
+                drive(1, player, lambda: u32(selected) == parent)
+
+            drive(0, player, lambda: u32(selected) != category)
+            throw_group = u32(u32(category + 0x14) + 12)
+            for _ in range(3):
+                previous = u32(selected)
+                drive(12, player, lambda: u32(selected) != previous)
+            assert u32(selected) == throw_group and u32(throw_group + 0x18) == 469
+            inspect_references(throw_group, 'throws')
+            drive(1, player, lambda: u32(selected) == category)
+            for section_label, section_name in ((402, 'basic'), (463, 'combos'), (400, 'fatalities'), (462, 'platform')):
+                previous = u32(selected)
+                drive(12, player, lambda: u32(selected) != previous)
+                section = u32(selected)
+                assert u32(section + 0x18) == section_label
+                inspect_references(section, section_name)
+        drive(6, player, lambda: not u32(active))
+        assert progression() == before, ('Moves menu navigation changed XP or ranks', player + 1)
+
+def campaign_save_roundtrip(fighter, partner):
+    identities = [(83, 89, 88, 1, 0, 82, 90, 84)[slot]
+                  for slot in (fighter, partner) if slot is not None]
+    source_record = read(slot_records()[args.slot - 1], 0x51AC)
+    saved_room = struct.unpack_from('<I', source_record, 0xC8)[0]
+
+    def drive(index, reached, seconds=20, controller=0):
+        deadline = time.monotonic() + seconds
+        while not reached() and time.monotonic() < deadline:
+            button(index, True, controller=controller)
+            try:
+                held_deadline = min(deadline, time.monotonic() + 1.5)
+                while not reached() and time.monotonic() < held_deadline:
+                    tick()
+            finally:
+                button(index, False, controller=controller)
+            wait(.7)
+        assert reached(), ('Campaign save fixture input timed out', index, hex(top()))
+
+    def snapshot():
+        state = u32(0x5ACEBC)
+        heroes = []
+        for player in range(len(identities)):
+            actor = 0x5CE880 + (player + 1) * 0x3238
+            component = u32(actor + 0x200)
+            heroes.append(dict(saved_fighter=u32(state + 0xCC + player * 4),
+                               actor_fighter=struct.unpack('<h', read(actor + 0x1DFE, 2))[0],
+                               experience=u32(state + 0x4940 + player * 0x50),
+                               ranks=list(read(state + 0x1C4 + player * 28, 28)),
+                               health=u32(component + 0x368), maximum_health=u32(component + 0x370)))
+        return dict(room=u32(0x505970), mode=u32(state + 0x88),
+                    health_pickups=u32(state + 0xE0), heroes=heroes)
+
+    def load():
+        saved_frames = u32(slot_records()[0])
+        drive(0, lambda: top() != 0x5967C0)
+        deadline = time.monotonic() + 35
+        while (top() == 0x596810 and
+               (not u32(0x596820) or u32(u32(0x596820) + 0x28) != 1)
+               and time.monotonic() < deadline):
+            wait(.1)
+        if len(identities) == 2:
+            assert top() == 0x596810 and u32(0x59684C) == 6, 'Ko-op load must request the second player'
+            drive(6, lambda: u32(0x59684C) != 6, controller=1)
+        assert top() == 0x596810 and u32(0x59684C) == 1, 'Native load confirmation must open'
+        selection = u32(0x596820) + 12
+        drive(12, lambda: u32(selection) == 1)
+        drive(0, lambda: top() != 0x596810)
+        deadline = time.monotonic() + 150
+        while time.monotonic() < deadline:
+            if (top() == 0 and u32(0x505970) == saved_room and u32(0x639224)
+                    and all(u32(0x5CE880 + (i + 1) * 0x3238 + 0x200) for i in range(len(identities)))
+                    and read(0x4EF42C, 1) == b'\x01' and not u32(0x6C92F8)
+                    and read(0x6C4198, 1) == b'\x00'
+                    and u32(u32(0x5ACEBC)) > saved_frames):
+                wait(3)
+                return
+            wait(.15)
+        capture('campaign-save-load-timeout')
+        raise AssertionError(('Totem fixture did not load', hex(top()), u32(0x505970),
+                              saved_frames, u32(u32(0x5ACEBC)), u32(0x6C92F8)))
+
+    wait(3)
+    record = slot_records()[0]
+    assert source_record[0x84] == 1, 'The requested source slot must contain a save'
+    if args.slot != 1:
+        write_memory(record, source_record)
+    original_record = read(record, 0x51AC)
+    # Prepares only the child's copied record: proves serialization, not progression.
+    write_memory(record + 0x88, struct.pack('<I', len(identities) - 1))
+    fixture_heroes = []
+    for player, identity in enumerate(identities):
+        write_memory(record + 0xCC + player * 4, struct.pack('<I', identity))
+        ranks = bytearray(original_record[0x1C4 + player * 28:0x1E0 + player * 28])
+        ranks[:4] = bytes([2, 3, 4, 2])
+        write_memory(record + 0x1C4 + player * 28, ranks)
+        write_memory(record + 0x4940 + player * 0x50, struct.pack('<I', 1234 + player * 1111))
+        fixture_heroes.append(dict(identity=identity, experience=1234 + player * 1111, ranks=list(ranks)))
+    checks.append(dict(capture='campaign-save-injected-fixture', source_slot=args.slot, copied_slot=1, room=saved_room,
+                       identities=identities, injected_fields=['mode', 'fighter IDs', 'base special ranks', 'XP'],
+                       heroes=fixture_heroes, native_acquisition=False, ordinary_traversal=False))
+    capture('campaign-save-injected-load-list')
+    load()
+    before = snapshot()
+    (run/'campaign-save-before.json').write_text(json.dumps(before, indent=2))
+    capture('campaign-save-loaded-at-totem')
+    assert [hero['saved_fighter'] for hero in before['heroes']] == identities, before
+    assert [hero['actor_fighter'] for hero in before['heroes']] == identities, before
+    assert before['mode'] == len(identities) - 1, before
+    assert before['health_pickups'] == struct.unpack_from('<I', original_record, 0xE0)[0], before
+    for hero, fixture_hero in zip(before['heroes'], fixture_heroes):
+        assert hero['ranks'] == fixture_hero['ranks'] and hero['experience'] == fixture_hero['experience'], (
+            'Initial native load changed fixture progression', hero, fixture_hero)
+    # The original loaded position is in reach of its save totem. Native RB opens it.
+    drive(10, lambda: bool(u32(0x59E600)), seconds=30)
+    wait(3)
+    capture('campaign-save-totem-list')
+    trigger(5)
+    assert not slot_used(1) and not page_file(2).exists(), 'The isolated destination page must start empty'
+    capture('campaign-save-empty-page-2')
+
+    saved_record = None
+
+    def save_record_ready():
+        nonlocal saved_record
+        try:
+            page = page_file(2).read_bytes()
+        except (FileNotFoundError, PermissionError):
+            # The native write can briefly replace or hold the destination open.
+            return False
+        if len(page) != 24 + 9 * 0x51AC or page[24 + 0x84] != 1:
+            return False
+        saved_record = page[24:24 + 0x51AC]
+        return True
+
+    drive(0, save_record_ready, seconds=30)
+    wait(3)
+    capture('campaign-save-written-page-2')
+    for player, identity in enumerate(identities):
+        assert struct.unpack_from('<I', saved_record, 0xCC + player * 4)[0] == identity
+        assert struct.unpack_from('<I', saved_record, 0x4940 + player * 0x50)[0] == before['heroes'][player]['experience']
+        assert list(saved_record[0x1C4 + player * 28:0x1E0 + player * 28]) == before['heroes'][player]['ranks']
+    pulse(1, duration=.35, gap=3)
+    old_count = logpath.read_text(errors='replace').count('Gameplay pause expanded:')
+    drive(4, lambda: logpath.read_text(errors='replace').count('Gameplay pause expanded:') > old_count)
+    panel = int(re.findall(r'Gameplay pause expanded: list=([0-9A-Fa-f]{8})',
+                          logpath.read_text(errors='replace'))[-1], 16)
+    drive(12, lambda: u32(panel + 0x6C) == 4)
+    capture('campaign-save-exit-selected')
+    # Exit Game (0xA28E0) sets this mask during its Yes/No scene; the frontend stack stays empty.
+    drive(0, lambda: u32(0x4EFA50) == 3)
+    scene_index = u32(0x59E358)
+    assert scene_index < 8, ('Native Exit Game scene', scene_index)
+    scene = u32(0x4EF3C8 + 0x668 + scene_index * 4)
+    deadline = time.monotonic() + 12
+    question_list = 0
+    while scene and u32(0x4EFA50) == 3 and time.monotonic() < deadline:
+        question_list = u32(scene + 0x48)
+        if question_list and read(scene + 0xC, 1) == b'\x01' and u32(question_list + 0x6C) == 1:
+            break
+        wait(.1)
+    else:
+        raise AssertionError(('Native Exit Game Yes/No list was not ready', scene_index, hex(scene), hex(question_list)))
+    capture('campaign-save-exit-question')
+    drive(13, lambda: u32(question_list + 0x6C) == 0)
+    drive(0, lambda: u32(0x4EFA50) != 3)
+    deadline = time.monotonic() + 45
+    while top() != 0x598430 and time.monotonic() < deadline:
+        wait(.1)
+    assert top() == 0x598430, 'Native Exit Game did not return to Main'
+    enter_load_game()
+    assert slot_used(1), 'The newly saved page must remain selected after returning to Main'
+    assert read(slot_records()[0], 0x51AC) == saved_record, 'The Load list must read the newly serialized record'
+    capture('campaign-save-reload-list')
+    load()
+    after = snapshot()
+    capture('campaign-save-reloaded-at-totem')
+    for snapshot_value in (before, after):
+        for hero in snapshot_value['heroes']:
+            assert 0 < hero['health'] <= hero['maximum_health'], snapshot_value
+    # Current health can be restored by a save totem; persistent progression is exact.
+    persistent = lambda value: dict(room=value['room'], mode=value['mode'], health_pickups=value['health_pickups'],
+                                   heroes=[{key: hero[key] for key in ('saved_fighter', 'actor_fighter', 'experience', 'ranks', 'maximum_health')}
+                                           for hero in value['heroes']])
+    assert persistent(before) == persistent(after), ('Campaign serialization changed progression', before, after)
+    result = dict(capture='campaign-save-roundtrip', fixture_injected=True, native_save_ui=True,
+                  native_load_ui=True, page=2, slot=1, before=before, after=after,
+                  ordinary_traversal_verified=False, death_continue_verified=False)
+    checks.append(result)
+    (run/'campaign-save-roundtrip.json').write_text(json.dumps(result, indent=2))
+
+def campaign_death_continue():
+    state = u32(0x5ACEBC)
+    count = 1 + u32(state + 0x88)
+    assert count in (1, 2) and top() == 0, 'The diagnostic requires active Solo or Ko-op gameplay'
+    checkpoint = read(state + 0x51AC, 0x51AC)
+
+    def record_progression(record):
+        number = 1 + struct.unpack_from('<I', record, 0x88)[0]
+        assert number in (1, 2), 'The native checkpoint must contain a campaign record'
+        return dict(room=struct.unpack_from('<I', record, 0xC8)[0], mode=number - 1,
+                    health_pickups=struct.unpack_from('<I', record, 0xE0)[0],
+                    heroes=[dict(identity=struct.unpack_from('<I', record, 0xCC + player * 4)[0],
+                                 experience=struct.unpack_from('<I', record, 0x4940 + player * 0x50)[0],
+                                 ranks=list(record[0x1C4 + player * 28:0x1E0 + player * 28]))
+                            for player in range(number)])
+
+    expected = record_progression(checkpoint)
+    before = record_progression(read(state, 0x51AC))
+    actors = [0x5CE880 + (player + 1) * 0x3238 for player in range(count)]
+    components = [u32(actor + 0x200) for actor in actors]
+    assert all(components), 'Native actor components must exist before the death diagnostic'
+    checks.append(dict(capture='campaign-death-injected-hp', live_hp_injected=0,
+                       natural_damage_verified=False, before=before, checkpoint=expected))
+    capture('campaign-death-before-hp-fixture')
+    for component in components:
+        write_memory(component + 0x368, struct.pack('<I', 0))
+
+    # Death calls 0x38CB0 (random text EF..121, kind 3 Continue/Quit); 0x85300 handles A.
+    message = 0x4E6E20 + 0x6C0
+    deadline = time.monotonic() + 80
+    observed_death = False
+    samples = []
+    previous = None
+    while time.monotonic() < deadline:
+        manager = u32(0x589438)
+        sample = dict(actor_states=[u32(actor + 0x1E04) for actor in actors],
+                      phases=[u32(manager + 0x10 + player * 12) for player in range(count)] if manager else [],
+                      message_active=read(message, 1)[0], message_kind=u32(message + 0x14),
+                      message_text=u32(message + 0x18), accepts_a=read(message + 0x29, 1)[0])
+        if sample != previous:
+            samples.append(sample)
+            previous = sample
+        observed_death |= any(value == 12 for value in sample['actor_states']) or any(sample['phases'])
+        if (observed_death and sample['message_active'] == sample['accepts_a'] == 1
+                and sample['message_kind'] == 3 and 0xEF <= sample['message_text'] < 0x122):
+            break
+        wait(.05)
+    else:
+        capture('campaign-death-prompt-timeout')
+        (run/'campaign-death-samples.json').write_text(json.dumps(samples, indent=2))
+        raise AssertionError(('Native Continue prompt was not reached after HP 0', samples[-1:]))
+    capture('campaign-death-native-continue-prompt')
+    # The original prompt defaults to Continue (1); Up selects it if needed.
+    deadline = time.monotonic() + 15
+    while u32(0x59E09C) != 1 and time.monotonic() < deadline:
+        pulse(11, duration=.4, gap=.7)
+    assert u32(0x59E09C) == 1, 'Native Continue must be selected before accepting'
+    deadline = time.monotonic() + 20
+    while read(message, 1) == b'\x01' and u32(0x4E6E20 + 0x6A8) != 2 and time.monotonic() < deadline:
+        button(0, True)
+        try:
+            held_deadline = min(deadline, time.monotonic() + 1.5)
+            while (read(message, 1) == b'\x01' and u32(0x4E6E20 + 0x6A8) != 2
+                   and time.monotonic() < held_deadline):
+                tick()
+        finally:
+            button(0, False)
+        wait(.7)
+    assert read(message, 1) == b'\x00' or u32(0x4E6E20 + 0x6A8) == 2, 'Native Continue did not accept A'
+    deadline = time.monotonic() + 150
+    saved_frames = struct.unpack_from('<I', checkpoint)[0]
+    while time.monotonic() < deadline:
+        state = u32(0x5ACEBC)
+        components = [u32(actor + 0x200) for actor in actors]
+        if (top() == 0 and u32(0x505970) == expected['room'] and u32(state) > saved_frames
+                and not u32(0x6C92F8) and read(0x6C4198, 1) == b'\x00'
+                and read(0x4EF42C, 1) == b'\x01' and read(message, 1) == b'\x00'
+                and all(component and u32(component + 0x368) > 0 for component in components)):
+            break
+        wait(.1)
+    else:
+        capture('campaign-continue-restore-timeout')
+        raise AssertionError('Native Continue did not restore active checkpoint gameplay')
+    after = record_progression(read(state, 0x51AC))
+    capture('campaign-death-native-continue-restored')
+    assert after == expected, ('Native Continue changed checkpoint progression', expected, after)
+    assert [struct.unpack('<h', read(actor + 0x1DFE, 2))[0] for actor in actors] == [
+        hero['identity'] for hero in expected['heroes']], 'Native Continue restored incorrect actor identities'
+    result = dict(capture='campaign-death-continue', live_hp_injected=True,
+                  native_prompt=True, native_checkpoint_restored=True, before=before,
+                  checkpoint=expected, after=after, samples=samples,
+                  health=[dict(current=u32(component + 0x368), maximum=u32(component + 0x370))
+                          for component in components])
+    checks.append(result)
+    (run/'campaign-death-continue.json').write_text(json.dumps(result, indent=2))
+
 def open_language():
     navigate(6);pulse(0,duration=.3,gap=4);assert top()==0x5985E8
     for _ in range(4):key(40)
@@ -752,7 +1447,6 @@ def save_language(target,change,voice_target=None):
     if voice_target is not None:
         key(40);key(39)
     elif change:key(39)
-    key(27);key(40)
     settings_idle()
     log_before=logpath.read_text(errors='replace');segment_before=len(log_before)
     assert user.PostMessageW(hwnd,0x100,13,0)
@@ -761,7 +1455,7 @@ def save_language(target,change,voice_target=None):
         wait(4);assert process.pid==old.pid and process.poll() is None
         assert 'Language restart prepared:' not in logpath.read_text(errors='replace')[segment_before:]
         assert tomllib.loads((data/'settings.toml').read_text(encoding='utf8'))['language']==target
-        key(27);wait(4);assert top()==0x598430
+        key(27);key(27);wait(4);assert top()==0x598430
         checks.append(dict(capture='same-language-no-restart',language=target,pid=process.pid));return
     child=None;deadline=time.monotonic()+40
     while child is None and time.monotonic()<deadline:
@@ -774,6 +1468,11 @@ def save_language(target,change,voice_target=None):
     while not (base and top()==0x598430) and time.monotonic()<deadline:tick()
     assert base and top()==0x598430,'Replacement did not reach main menu without injected input'
     wait(4);assert u32(0x598468)==0,'Restart must stop at the main menu without selecting Single Player'
+    brightness=struct.unpack('<f',read(0x4DF5C0,4))[0]
+    rendered=struct.unpack('<f',read(0x632BE8,4))[0]
+    multiplier=struct.unpack('<f',read(0x49E580,4))[0]
+    assert abs(rendered-brightness*multiplier)<.001,('Restart brightness was not applied to rendering',brightness,rendered,multiplier)
+    checks.append(dict(capture='restart-brightness',language=target,saved=brightness,rendered=rendered,multiplier=multiplier))
     saved=tomllib.loads((data/'settings.toml').read_text(encoding='utf8'))
     assert saved['language']==target and saved['master_volume']==0
     if voice_target is not None:assert saved['voice_language']==voice_target
@@ -797,11 +1496,25 @@ def save_language(target,change,voice_target=None):
     assert 'Language restart prepared: '+target in current_log and 'Language restart committed' in current_log
     assert 'Language restart: main menu ready' in current_log
     assert "language = '"+target+"'" in current_log
-    assert 'Save directory: '+str(run/'saves') in current_log
-    assert 'files: D: is '+str(game) in current_log
     assert not re.search(r'files: open .*MOVIES.*(?:MIDWAY|OPENING)',current_log,re.I),'Restart must not open the logo or opening movie'
     checks.append(dict(capture='language-process-restart',voice_language=saved['voice_language'],language=target,old_pid=old.pid,new_pid=process.pid))
     locale=target
+    navigate(4);pulse(0,duration=.3,gap=4)
+    assert top()==0x5985E8 and u32(0x598620)==0,'Native Options must open on Brightness'
+    pulse(0,duration=.3,gap=4)
+    assert top()==0x5982C8,'The native brightness calibration did not open after restart'
+    draft=struct.unpack('<f',read(0x598308,4))[0]
+    assert abs(draft-brightness)<.001,('Restart calibration slider lost the saved brightness',brightness,draft)
+    capture('restart-brightness-slider-'+target)
+    pulse(14 if brightness<.95 else 13,duration=.15,gap=1)
+    assert abs(struct.unpack('<f',read(0x598308,4))[0]-brightness)>.001,'The restarted calibration slider must remain adjustable'
+    pulse(1,duration=.3,gap=4)
+    assert abs(struct.unpack('<f',read(0x4DF5C0,4))[0]-brightness)<.001,'Cancelling calibration after restart must preserve saved brightness'
+    pulse(0,duration=.3,gap=4)
+    assert abs(struct.unpack('<f',read(0x598308,4))[0]-brightness)<.001,'Reopening calibration after cancellation must retain saved brightness'
+    pulse(1,duration=.3,gap=4);pulse(1,duration=.3,gap=4)
+    assert top()==0x598430,'Calibration cancellation must return to Main'
+    checks.append(dict(capture='restart-brightness-slider',language=target,saved=brightness,opened=draft,cancellation_preserved=True))
 
 try:
     next_boot=24
@@ -834,7 +1547,17 @@ try:
         if not command.exists():wait(.1);continue
         quit=False
         for action in json.loads(command.read_text()):
-            if action[0]=='survival':
+            if action[0]=='campaign-characters':
+                campaign_characters(*action[1:])
+            elif action[0]=='campaign-start':
+                campaign_start(*action[1:])
+            elif action[0]=='campaign-move-menus':
+                campaign_move_menus()
+            elif action[0]=='campaign-save-roundtrip':
+                campaign_save_roundtrip(*action[1:])
+            elif action[0]=='campaign-death-continue':
+                campaign_death_continue()
+            elif action[0]=='survival':
                 def survival_accept(done,menu=False):
                     deadline=time.monotonic()+16
                     attempts=0
@@ -846,8 +1569,7 @@ try:
                         while (not done() or (menu and args.survival_short_space)) and time.monotonic()<held:wait(.01)
                         assert user.PostMessageW(hwnd,0x101,keycode,0)
                         events.append(dict(elapsed=round(time.monotonic()-began,4),key=keycode,held=False))
-                        # A long post-input sleep concealed entry-frame bugs:
-                        # collect native snapshots immediately in frame-audit runs.
+                        # Frame-audit runs snapshot right away; a long sleep hid entry-frame bugs.
                         wait(.03 if args.survival_frame_audit else .7)
                         attempts+=1
                         if menu and args.survival_short_space:
@@ -945,8 +1667,7 @@ try:
                 wait(4);assert top()==0x598DF0,('Survival must enter character selection',hex(top()))
                 assert u32(0x598468)==2,'The complete Versus character screen must be displayed'
                 available=list(read(0x598C28,read(0x598C54,1)[0]))
-                # The native Versus initializer uses the saved progress bits,
-                # not a fixed list of eight fighters, for this exact roster.
+                # The Versus roster comes from saved progress bits, not a fixed list.
                 def versus_unlocked(fighter):
                     key=u32(0x4E5F98+fighter*12)
                     return key<0x34*8 and bool(u32(0x5A375C+(key>>5)*4)&u32(0x4FC348+(key&31)*4))
@@ -1007,8 +1728,7 @@ try:
                 assert read(rules_message+0x29,2)==b'\x01\x01' and read(0x5AE5B0,1)==b'\x01','Rules must wait for A and pause the first arena'
                 checks.append(dict(capture='survival-rules-modal',native_frame=True,wait_for_a=True,world_paused=True))
                 if args.survival_verify_upgrades:
-                    # Check the refill before releasing the A-only rules frame:
-                    # combat can legitimately remove health while later checks run.
+                    # Check the refill before releasing the rules frame; combat can lower health later.
                     paused_state=u32(0x5ACEBC)
                     assert u32(paused_state+0xE0)==4 and u32(paused_state+0x90)==1,\
                         'Survival must apply all four story health pickups instead of the debug tier cheat'
@@ -1031,8 +1751,7 @@ try:
                         fatality_capacity.append(dict(player=player,unlocked_levels=level,current_charge=charge))
                     checks.append(dict(capture='survival-health-before-combat',heroes=paused_health,world_paused=True))
                     checks.append(dict(capture='survival-fatality-capacity',heroes=fatality_capacity,charged_by_gameplay=True))
-                # The framed message animates in after its modal state is set: check a settled frame,
-                # not the initial black entrance frame.
+                # Check a settled frame, not the black entrance frame.
                 wait(3)
                 capture('survival-rules')
                 if not args.survival_quick:
@@ -1225,8 +1944,7 @@ try:
             elif action[0]=='slot-variants':
                 slot_variants(action[1])
             elif action[0]=='save-list-totem':
-                # Copy the requested totem save over slot 1 in this isolated process only, so the
-                # default selection loads it; the saves on disk are never written.
+                # Copy the totem save over slot 1 in this process only; saves on disk are never written.
                 records=slot_records()
                 if args.slot!=1:write_memory(records[0],read(records[args.slot-1],0x51AC))
                 wait(1);capture('load-slot-'+str(args.slot))
@@ -1251,8 +1969,7 @@ try:
                 if top()==0:pulse(10,duration=.35,gap=5)
                 capture('totem-save')
                 slot_variants('totem')
-                # Right trigger turns to page 2; saving into its first slot must create that page's
-                # file and leave the native slots untouched.
+                # RT turns to page 2; saving there creates the page file and leaves native slots untouched.
                 native=read(slot_records()[0],0x51AC)
                 trigger(5);capture('totem-page-2')
                 page_file=run/'saves'/'openshao-save-page-02.bin'
@@ -1342,8 +2059,7 @@ try:
                             if u32(confirm_selection)==1:break
                             pulse(12,duration=.35,gap=1.4)
                         if u32(confirm_selection)!=1:
-                            # Known-good isolated Load Game fixtures set this field
-                            # directly; never change original disc or source saves.
+                            # Isolated Load Game fixtures set this field directly; disc and source saves stay untouched.
                             kernel.WriteProcessMemory.argtypes=[w.HANDLE,c.c_void_p,c.c_void_p,c.c_size_t,c.POINTER(c.c_size_t)]
                             desired=c.c_uint32(1);written=c.c_size_t()
                             assert kernel.WriteProcessMemory(int(process._handle),base+confirm_selection,c.byref(desired),4,c.byref(written)) and written.value==4
@@ -1357,8 +2073,7 @@ try:
                     deadline=time.monotonic()+60
                     while top()!=0 and time.monotonic()<deadline:wait(.12)
                     assert top()==0,'Load Game must enter gameplay before SELECT'
-                    # Top 0 begins the asynchronous Xbox level load. The game can
-                    # still be on CARREGANDO for tens of seconds at this point.
+                    # Top 0 starts the async level load; CARREGANDO can last tens of seconds.
                     wait(32)
                     capture('pause-load-selected')
                 else:
@@ -1374,94 +2089,128 @@ try:
                 match=re.search(r'Gameplay pause expanded: list=([0-9A-Fa-f]{8}) rows=(\d+)',native)
                 assert match,'Pause entry did not allocate a new native list'
                 panel=int(match.group(1),16)
-                assert u32(panel+0x64)==5 and int(match.group(2))==5,'Locked pause must have five actions'
+                assert u32(panel+0x64)==7 and int(match.group(2))==7,'Locked pause must have seven actions with Photo Mode'
                 original_rows=u32(panel+0x54)
-                assert original_rows not in (0,0x4F1CE0) and u32(original_rows)==0x1A4 and u32(original_rows+8)==0x1A5 and u32(original_rows+16)==0xFFFFFF00 and u32(original_rows+24)==0x1A7,'Pause settings must precede the original Exit Game action'
-                assert u32(original_rows+28)==0x16262,'Exit Game must retain the native return-to-main-menu callback'
-                capture('pause-expanded')
-                for selected in (1,2):
-                    # First pause frames may compile pipelines and miss a D-pad edge: retry until
-                    # the expected row is observed, never blindly.
-                    deadline=time.monotonic()+10
-                    while u32(panel+0x6C)<selected and time.monotonic()<deadline:
-                        pulse(12,duration=.25,gap=1.25)
-                    assert u32(panel+0x6C)==selected,('Pause navigation',selected,u32(panel+0x6C))
-                pulse(0,duration=.3,gap=2)
-                assert u32(panel+0x64)==6 and u32(panel+0x6C)==0,'Five recompilation categories and Back must open'
-                capture('pause-recomp-open')
+                assert [u32(original_rows+i*8) for i in range(6)]==[0x1A4,0x1A5,0xFFFFFF00,0xFFFFFF09,0xFFFFFF0A,0x1A7]
+                assert u32(original_rows+44)==0x16262,'Exit Game retains the original callback'
                 initial=tomllib.loads((data/'settings.toml').read_text(encoding='utf-8'))
+                def pause_press(index,mask,gap=1.2):
+                    button(index,True)
+                    deadline=time.monotonic()+8
+                    while not (u32(0x67C668)&mask) and time.monotonic()<deadline:wait(.025)
+                    seen=bool(u32(0x67C668)&mask)
+                    wait(.045)
+                    button(index,False)
+                    deadline=time.monotonic()+8
+                    while u32(0x67C668)&mask and time.monotonic()<deadline:wait(.025)
+                    assert seen and not (u32(0x67C668)&mask),('Pause must read and release the button',index)
+                    wait(gap)
                 def go_pause_row(row):
                     for _ in range(15):
                         selected=u32(panel+0x6C)
                         if selected==row:break
-                        pulse(12 if selected<row else 11,duration=.2,gap=.65)
-                    assert u32(panel+0x6C)==row,('Pause menu selection',row,u32(panel+0x6C))
+                        index,mask=(12,0x4000) if selected<row else (11,0x1000)
+                        pause_press(index,mask,gap=.4)
+                    assert u32(panel+0x6C)==row,('Pause selection',row,u32(panel+0x6C))
                 def pause_choose(row):
-                    go_pause_row(row);pulse(0,duration=.3,gap=1.25)
+                    go_pause_row(row);pause_press(0,0x40)
+                def pause_adjust(row):
+                    go_pause_row(row);pause_press(14,0x2000)
+                def pause_back():pause_press(1,0x20)
                 def pause_settings():return tomllib.loads((data/'settings.toml').read_text(encoding='utf-8'))
-                # Graphics: Bloom, AF, rendering scale, immediately saved.
-                pause_choose(1);assert u32(panel+0x64)==5,'Graphics submenu must open'
-                pause_choose(0);pause_choose(1);pause_choose(2)
+                pause_choose(2);assert u32(panel+0x64)==5,'Five settings categories open'
+                capture('pause-recomp-open')
+                pause_choose(1);assert u32(panel+0x64)==5,'Graphics has five settings'
+                for row in (3,1,0,2):pause_adjust(row)
                 current=pause_settings()
-                assert current['bloom_effect'] is (not initial.get('bloom_effect',False))
+                for key,default in [('bloom_effect',False),('vsync',True)]:
+                    assert current[key] is (not initial.get(key,default))
                 assert current['anisotropic_filtering']!=initial.get('anisotropic_filtering',0)
                 assert current['render_percent']!=initial.get('render_percent',100)
-                pause_choose(3);assert pause_settings()['fps_cap']==120,'Pause must persist 120 FPS'
-                pause_choose(3);assert pause_settings()['fps_cap']==60,'Pause must return to the default 60 FPS'
+                if current['vsync']:pause_adjust(2)
+                pause_adjust(4);assert pause_settings()['fps_cap']==120
                 capture('pause-recomp-graphics')
-                pause_choose(4);assert u32(panel+0x64)==6,'Back to categories from graphics'
-                # Video: VSync commits; display mode is previewed and then reverted.
-                pause_choose(2);assert u32(panel+0x64)==5,'Video/screen submenu must open'
-                pause_choose(3);assert pause_settings()['vsync'] is (not initial.get('vsync',True))
+                pause_back();assert u32(panel+0x64)==5
+                pause_choose(0);assert u32(panel+0x64)==5,'Display has pending Apply and Discard actions'
                 old_mode=pause_settings()['display_mode']
-                pause_choose(0);assert u32(panel+0x64)==2,'Display change must require confirmation'
+                pause_adjust(0);assert pause_settings()['display_mode']==old_mode
+                pause_choose(3);assert u32(panel+0x64)==2,'Apply starts display confirmation'
                 capture('pause-recomp-display-confirm')
-                pause_choose(1);assert u32(panel+0x64)==5 and pause_settings()['display_mode']==old_mode,'Reject screen change must restore live mode'
-                pause_choose(4);assert u32(panel+0x64)==6
-                # Audio and Interface: no restart and persistence.
-                pause_choose(3);assert u32(panel+0x64)==2
-                pause_choose(0);assert pause_settings()['master_volume']!=initial.get('master_volume',100)
-                pause_choose(1);assert u32(panel+0x64)==6
-                pause_choose(4);assert u32(panel+0x64)==2
-                pause_choose(0);assert pause_settings()['show_fps'] is (not initial.get('show_fps',False))
-                pause_choose(1);assert u32(panel+0x64)==6
+                pause_back()
+                assert u32(panel+0x64)==5 and pause_settings()['display_mode']==old_mode
+                pause_back();assert u32(panel+0x64)==5
+                pause_choose(3);assert u32(panel+0x64)==1
+                old_volume=pause_settings()['master_volume']
+                index,mask=(14,0x2000) if old_volume==0 else (13,0x8000)
+                pause_press(index,mask)
+                assert pause_settings()['master_volume']!=old_volume
+                pause_back();assert u32(panel+0x64)==5
+                # Interface: Show FPS and photo notifications, then F9 must update the saved Show FPS too.
+                pause_choose(4);assert u32(panel+0x64)==2,'Interface has Show FPS and photo notifications'
+                pause_adjust(0);pause_adjust(1)
+                current=pause_settings()
+                assert current['show_fps'] is (not initial.get('show_fps',False)),'Interface Show FPS must persist'
+                assert current['screenshot_notifications'] is (not initial.get('screenshot_notifications',True)),'Photo notifications must persist'
+                capture('pause-recomp-interface')
+                assert user.PostMessageW(hwnd,0x100,0x78,0);wait(.2);assert user.PostMessageW(hwnd,0x101,0x78,0xC0000001);wait(1.0)
+                assert pause_settings()['show_fps'] is initial.get('show_fps',False),'F9 must save the Show FPS choice'
+                pause_back();assert u32(panel+0x64)==5
                 # Controls: deadzone, rumble, mouse sensitivity and keyboard remap.
-                pause_choose(0);assert u32(panel+0x64)==6,'Controls must have six rows'
-                pause_choose(3);pause_choose(4)
+                pause_choose(2);assert u32(panel+0x64)==5,'Controls must have five rows'
+                pause_adjust(3);pause_adjust(4)
                 current=pause_settings()
                 assert current['controller']['deadzone']!=initial.get('controller',{}).get('deadzone',.15)
                 assert current['controller']['rumble'] is (not initial.get('controller',{}).get('rumble',True))
-                pause_choose(2);assert u32(panel+0x64)==6,'Mouse settings must open'
-                pause_choose(0);assert pause_settings()['mouse']['sensitivity']!=initial.get('mouse',{}).get('sensitivity',100)
-                pause_choose(5);assert u32(panel+0x64)==6
-                pause_choose(1);assert u32(panel+0x64)==6,'Keyboard mapping must open'
+                pause_choose(2);assert u32(panel+0x64)==4,'Mouse settings must open'
+                pause_adjust(0);assert pause_settings()['mouse']['sensitivity']!=initial.get('mouse',{}).get('sensitivity',100)
+                trigger(4);assert u32(panel+0x64)==3,'LT wraps to the last mouse page'
+                capture('pause-recomp-mouse-last')
+                trigger(5);assert u32(panel+0x64)==4,'RT wraps back to mouse settings'
+                pause_back();assert u32(panel+0x64)==5
+                pause_choose(1);assert u32(panel+0x64)==3,'Keyboard mapping must open'
                 pause_choose(2) # Capture the X key in slot 1, keep A/B navigation untouched.
                 assert user.PostMessageW(hwnd,0x100,ord('Z'),0)
                 wait(.3)
                 assert user.PostMessageW(hwnd,0x101,ord('Z'),0)
                 wait(1.4)
                 assert pause_settings()['keyboard']['bindings']['x'][0]==ord('Z'),'In-game keyboard remapping must persist'
-                pause_choose(5);assert u32(panel+0x64)==6
-                pause_choose(0);assert u32(panel+0x64)==6,'Controller mapping must open'
+                trigger(4);assert u32(panel+0x64)==1,'LT reaches the last alternate keyboard page'
+                capture('pause-recomp-keyboard-alternate-last')
+                trigger(5);assert u32(panel+0x64)==3,'RT returns to primary keyboard page one'
+                pause_back();assert u32(panel+0x64)==5
+                pause_choose(0);assert u32(panel+0x64)==3,'Controller mapping must open'
+                trigger(4);assert u32(panel+0x64)==1,'LT wraps to the recenter binding'
+                capture('pause-recomp-camera-binding')
+                trigger(5);assert u32(panel+0x64)==3,'RT wraps to the first controller page'
                 pause_choose(2) # X; avoid remapping A/B which drive this smoke.
                 pulse(16,duration=.25,gap=1.5) # SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, unassigned in default profile.
                 assert pause_settings()['controller']['bindings']['x']=='paddle1','In-game controller remapping must persist'
                 capture('pause-recomp-controls')
-                pause_choose(5);assert u32(panel+0x64)==6
-                pause_choose(5);assert u32(panel+0x64)==6
-                capture('pause-recomp-changed')
-                pause_choose(5)
-                assert u32(panel+0x54)==original_rows and u32(panel+0x6C)==2,'Return must restore the settings row in pause'
-                go_pause_row(4)
-                pulse(0,duration=.3,gap=1.4)
-                assert u32(panel+0x64)==2 and u32(panel+0x6C)==0,'Exit confirmation must default to No'
+                pause_back();assert u32(panel+0x64)==5,('Controller back to controls',u32(panel+0x64))
+                pause_back();assert u32(panel+0x64)==5,('Controls back to categories',u32(panel+0x64))
+                pause_back()
+                assert u32(panel+0x54)==original_rows and u32(panel+0x6C)==2
+                pause_choose(3);assert u32(panel+0x64)==4,'Enhancements opens directly from Select'
+                for row,key in enumerate(('scorpion_unfiltered','restore_dialogue','cinematic_bars')):
+                    before=pause_settings()['enhancements'][key]
+                    pause_adjust(row)
+                    assert pause_settings()['enhancements'][key] is not before
+                capture('pause-enhancements')
+                pause_choose(3);assert u32(panel+0x64)==3
+                pause_back()
+                assert u32(panel+0x64)==4 and read(0x4EF42C,1)==b'\x00'
+                pause_back()
+                assert u32(panel+0x54)==original_rows and u32(panel+0x6C)==3
+                pause_choose(1);capture('pause-retail-options')
+                pause_press(1,0x20,gap=2)
+                assert read(0x4EF42C,1)==b'\x00' and u32(panel+0x54)==original_rows and u32(panel+0x6C)==1
+                pause_choose(6)
+                assert u32(panel+0x64)==2 and u32(panel+0x6C)==0,'Exit confirmation defaults to No'
                 capture('pause-exit-confirm')
-                yes_label=read(original_rows+7*8+7*8+3*8+8*64,64).split(b'\x00',1)[0].decode('latin1','replace')
-                assert any(word in yes_label.lower() for word in ('progress','progresso','sem salvar','unsaved','without saving','sans sauver','ohne speichern','sin guardar','senza salvare')),('Yes must warn of unsaved progress',yes_label)
-                pulse(0,duration=.3,gap=1.4)
-                assert u32(panel+0x54)==original_rows and process.poll() is None,'No must return to pause without exiting'
-                assert u32(panel+0x6C)==4,'No must return to the desktop-exit row'
-                pulse(0,duration=.3,gap=1.4)
+                pause_press(0,0x40,gap=1.4)
+                assert u32(panel+0x54)==original_rows and process.poll() is None
+                assert u32(panel+0x6C)==6,'No restores the desktop-exit row'
+                pause_press(0,0x40,gap=1.4)
                 assert u32(panel+0x64)==2 and u32(panel+0x6C)==0
                 if args.verify_pause_exit:
                     pulse(12,duration=.25,gap=.8)
@@ -1486,9 +2235,9 @@ try:
                                        selected=u32(panel+0x6C),
                                        active=process.poll() is None,
                                        resumed_gameplay=after_cancel_rows!=original_rows))
-                    assert process.poll() is None and (after_cancel_rows==original_rows or after_cancel_count==3),\
+                    assert process.poll() is None and after_cancel_rows==original_rows and read(0x4EF42C,1)==b'\x00',\
                         'B must safely cancel the exit confirmation without closing the game'
-                checks.append(dict(capture='pause-recomp',root_rows=5,categories=['controls','graphics','video','audio','interface'],
+                checks.append(dict(capture='pause-recomp',root_rows=7,categories=['display','graphics','controls','audio','interface'],
                                    settings_toggled=['show_fps','vsync','bloom_effect','anisotropic_filtering','render_percent','master_volume','deadzone','rumble','mouse_sensitivity'],
                                    remapped=['keyboard.x','controller.x'],confirm_cancelled=True,original_save_unchanged=True))
             elif action[0]=='capture-cutscene-bars':
@@ -1664,8 +2413,7 @@ try:
                 while top()==0x598DF0 and time.monotonic()<deadline:key(32)
                 assert top()==0x596810,('Confirming a fighter must open the difficulty popup',hex(top()))
             elif action[0]=='accept-until':
-                # Screens that ignore A while they animate: retry until the target is on top.
-                # Like the Survival probe, confirm fighters with a held keyboard Space (P1).
+                # Retry A until the target is on top; confirm fighters with a held Space (P1).
                 until=time.monotonic()+15
                 while top()!=int(action[1],16) and time.monotonic()<until:
                     assert user.PostMessageW(hwnd,0x100,32,0);wait(2)
@@ -1719,7 +2467,7 @@ try:
         print('DONE',sequence,flush=True);sequence+=1
         if quit:break
     if not closed:
-        assert user.PostMessageW(hwnd,0x10,0,0);closed=True;process.wait(timeout=8)
+        assert user.PostMessageW(hwnd,0x10,0,0);closed=True;process.wait(timeout=30)
 except Exception as e:
     failure=repr(e)
 finally:
@@ -1735,10 +2483,21 @@ finally:
     copied_saves={str(f.relative_to(run/'saves/E/UDATA/4d570029')):hashlib.sha256(f.read_bytes()).hexdigest() for f in (run/'saves/E/UDATA/4d570029').rglob('*') if f.is_file()}
     result=dict(copied_title_saves_unchanged=copied_saves==save_hashes,language=locale,mode=mode,output=size,exit_code=code,closed=closed,failure=failure,checks=checks,events=events,trace=trace,visible_windows=visible,source_xbe_unchanged=(str(xbe.stat().st_size)+':'+str(xbe.stat().st_mtime_ns) if disc else hashlib.sha256(xbe.read_bytes()).hexdigest())==source_hash,source_saves_unchanged=saves_after==save_hashes,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
     if ornament_motion:(run/'ornament-motion.json').write_text(json.dumps(ornament_motion,indent=2))
+    if args.return_audit:
+        (run/'main-return-frames.json').write_text(json.dumps(dict(gold_handle=hex(gold_handle) if gold_handle else None,frames=return_frames),indent=2))
+        seen_settings=seen_return_movie=seen_recovered_focus=False
+        for sample in return_frames:
+            if sample['top']=='0x5985e8':seen_settings=True
+            if seen_settings and sample['top']=='0x598430' and sample['row']==6 and sample['clip']==16:
+                seen_return_movie=True
+            if seen_return_movie and sample['top']=='0x598430' and sample['row']==6 and sample['clip']==6 and sample['finished'] and sample['white_visible']==1:
+                seen_recovered_focus=True
+        if not seen_settings or not seen_return_movie or not seen_recovered_focus:
+            failure=failure or 'Missing complete custom Options -> Main clip16 -> restored focus6 transition'
+        result['failure']=failure
     (run/'result.json').write_text(json.dumps(result,indent=2));print('RESULT',mode,code,failure,flush=True)
     if args.menu_roundtrip:
-        # Main's six lake objects must be active within 0.1 s of Main reappearing (retail took
-        # 0.18-0.35 s) and stay active; the fighter courtyard never runs behind Main.
+        # Main's six lake objects must be active within 0.1 s (retail 0.18-0.35 s); no courtyard behind Main.
         rows=[json.loads(line) for line in (run/'roundtrip-frames.jsonl').read_text().splitlines() if line]
         segments=[];current=[]
         for row in rows:

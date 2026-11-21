@@ -7,20 +7,24 @@
 #include <string_view>
 
 namespace openshao::bindings {
-inline constexpr std::array<const char*,24> keys{"a","b","x","y","black","white","start","back",
+inline constexpr unsigned LeftStickClick=8, RightStickClick=9;
+inline constexpr unsigned RecenterCamera=24, Count=RecenterCamera+1;
+inline constexpr unsigned KeyBelowEscape=192;
+inline constexpr std::array<const char*,Count> keys{"a","b","x","y","black","white","start","back",
     "left_stick","right_stick","dpad_up","dpad_down","dpad_left","dpad_right","left_trigger","right_trigger",
-    "move_up","move_down","move_left","move_right","camera_up","camera_down","camera_left","camera_right"};
-inline constexpr std::array<const char*,24> labels{"A / Accept","B / Cancel","X","Y",
+    "move_up","move_down","move_left","move_right","camera_up","camera_down","camera_left","camera_right","camera_recenter"};
+inline constexpr std::array<const char*,Count> labels{"A / Accept","B / Cancel","X","Y",
     "Black / RB / R1","White / LB / L1","Start / Pause","Back / Select","Left stick click","Right stick click",
     "D-pad up","D-pad down","D-pad left","D-pad right","Left trigger / LT / L2","Right trigger / RT / R2",
-    "Move up","Move down","Move left","Move right","Camera up","Camera down","Camera left","Camera right"};
-inline const std::array<std::string,24> controller_defaults{"a","b","x","y","rightshoulder","leftshoulder","start","back",
+    "Move up","Move down","Move left","Move right","Camera up","Camera down","Camera left","Camera right","Recenter Camera"};
+using Controller=std::array<std::string,Count>;
+inline const Controller controller_defaults{"a","b","x","y","rightshoulder","leftshoulder","start","back",
     "leftstick","rightstick","dpup","dpdown","dpleft","dpright","lefttrigger","righttrigger",
-    "lefty-","lefty+","leftx-","leftx+","righty-","righty+","rightx-","rightx+"};
+    "lefty-","lefty+","leftx-","leftx+","righty-","righty+","rightx-","rightx+","leftstick"};
 struct Keyboard {
-    std::array<std::array<int,2>,24> keys{{{0x20,0},{0x1B,0x11},{'J',0},{'K',0},{'C',0},{'Q',0},{0x0D,0},{0x08,0},
+    std::array<std::array<int,2>,Count> keys{{{0x20,0},{0x1B,0x11},{'J',0},{'K',0},{'C',0},{'Q',0},{0x0D,0},{0x08,0},
         {0,0},{0,0},{0x26,0},{0x28,0},{0x25,0},{0x27,0},{0x10,0},{'E',0},
-        {'W',0},{'S',0},{'A',0},{'D',0},{0,0},{0,0},{0,0},{0,0}}};
+        {'W',0},{'S',0},{'A',0},{'D',0},{0,0},{0,0},{0,0},{0,0},{KeyBelowEscape,0}}};
     bool operator==(const Keyboard&) const = default;
 };
 inline bool ValidKey(int key) {
@@ -46,6 +50,19 @@ inline constexpr std::array<const char*,37> sources{"none","a","b","x","y","back
 inline bool ValidSource(const std::string& source) {
     const auto normalized=CanonicalSource(source);
     return std::find(sources.begin(),sources.end(),normalized)!=sources.end();
+}
+inline std::string ControllerConflicts(const Controller& bindings,size_t row,std::string_view source) {
+    if(source=="none")return {};
+    // The host shortcut can coexist with either stick click's corresponding native Xbox button.
+    const size_t stick_click=source=="leftstick"?LeftStickClick:source=="rightstick"?RightStickClick:Count;
+    std::string result;
+    for(size_t i=0;i<bindings.size();++i) {
+        if(i==row || (row==RecenterCamera && i==stick_click) || (i==RecenterCamera && row==stick_click))continue;
+        if(CanonicalSource(bindings[i])!=source)continue;
+        if(!result.empty())result+=", ";
+        result+=labels[i];
+    }
+    return result;
 }
 inline const char* SourceLabel(std::string_view source) {
     if(source=="none")return "Unassigned";
@@ -86,7 +103,7 @@ inline std::string KeyLabel(int key) {
     default:return "Key "+std::to_string(key);
     }
 }
-using Values=std::array<float,24>;
+using Values=std::array<float,Count>;
 template<class Pad> void Apply(Pad& pad,const Values& values) {
     constexpr unsigned analog[]={0,1,2,3,4,5,0,0,0,0,0,0,0,0,6,7};
     for(unsigned i=0;i<16;++i) {

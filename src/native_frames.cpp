@@ -1,4 +1,6 @@
+#include "photo_mode.h"
 #include "dialogue_queue.h"
+#include "fighter_proportions.h"
 #include "survival_session.h"
 #include "cpu/x86_context.h"
 #include "kernel/kernel.h"
@@ -23,7 +25,11 @@
 namespace {
 // Retail image addresses; only visual queues are replayed, gameplay stays on the native 60 Hz callback.
 using Clock=std::chrono::steady_clock;
-thread_local bool active=false,extra=false,catchup=false,faulted=false;
+#ifndef OPENSHAO_ROOM_SETTLE_UPDATES
+// Native 60 Hz updates at the start of every room before interpolation resumes (issue 59).
+#define OPENSHAO_ROOM_SETTLE_UPDATES 30
+#endif
+thread_local bool active=false,extra=false,faulted=false;
 thread_local uint64_t tick=0,draws=0,extras=0;
 thread_local uint32_t room=0,world=0,queue=0;
 thread_local std::array<uint8_t,0x25F0> native_queue{};
@@ -185,6 +191,7 @@ void Account(unsigned steps) {
 X86_EXTERN_FUNC(__imp__sub_00107880);
 X86_FUNC(sub_00107880) {
     const auto caller=kernel::R32(ctx.esp),model=kernel::R32(ctx.esp+4);
+    openshao::fighter_proportions::BeforePoseRebuild(ctx,caller,model);
     __imp__sub_00107880(ctx,base);
     if(!active || caller!=0x12B8E4 || !Valid(model,0xB0))return;
     const auto bones=kernel::R32(model+0x28),count=kernel::R32(model+0x30);
@@ -196,8 +203,21 @@ X86_FUNC(sub_00107880) {
         p.current=ReadPose(model,bones,count);
         p.bones=bones;p.count=count;p.tick=tick;
     }
-    // Apply the visual pose on real frames too (UpdateCharacters runs inside the renderer); outside rendering keep the native pose.
-    if(rendering)WritePose(model,p,true);
+}
+
+// UpdateCharacters runs cPxCharacter::Update (ground, collision, Ko-op separation) for each hero.
+// The visual pose is applied only after it returns, so physics never sees an interpolated pose.
+// The pose restored after drawing is the final simulated one, not the copy taken mid-update.
+X86_EXTERN_FUNC(__imp__sub_0012DA10);
+X86_FUNC(sub_0012DA10) {
+    __imp__sub_0012DA10(ctx,base);
+    if(!rendering)return;
+    for(auto& [model,p]:poses) {
+        if(!extra && p.tick==tick && Valid(model,0xB0) && Valid(p.bones,p.count*0x390) &&
+           kernel::R32(model+0x28)==p.bones && kernel::R32(model+0x30)==p.count)
+            p.current=ReadPose(model,p.bones,p.count);
+        WritePose(model,p,true);
+    }
 }
 
 X86_EXTERN_FUNC(__imp__sub_00114BC0);
@@ -281,6 +301,8 @@ const bool polygon_observer=[] {
 }
 X86_EXTERN_FUNC(__imp__sub_001EE6B0);
 X86_FUNC(sub_001EE6B0) {
+    // Text queues draw after the 3D: photo mode puts its scene effects under them.
+    openshao::photo_mode::BeforeText();
     if(active)for(size_t i=0;i<font_addresses.size();++i)if(ctx.ecx==font_addresses[i]) {
         if(extra)CopyIn(ctx.ecx,native_fonts[i].data(),native_fonts[i].size());
         else {
@@ -308,7 +330,7 @@ X86_FUNC(sub_00114CD0) {
         material_pass=0;
         if(!extra){material_passes.clear();native_materials.clear();}
     }
-    if(active && !extra && !catchup && kernel::R32(0x639224) && !kernel::R32(0x6C92F8)) {
+    if(active && !extra && kernel::R32(0x639224) && !kernel::R32(0x6C92F8)) {
         capture_block=Block::None;
         queue=Queue();have_queue=Valid(queue,native_queue.size());
         if(!have_queue)capture_block=Block::Buffer;
@@ -336,7 +358,6 @@ X86_FUNC(sub_00114CD0) {
         float value=continuous?previous_camera[i]+delta*alpha:camera[i];
         CopyIn(addresses[i],&value,4);
     }
-    if(active)for(auto& [model,p]:poses)WritePose(model,p,true);
     {
         struct Scope {
             bool previous=rendering;
@@ -349,13 +370,6 @@ X86_FUNC(sub_00114CD0) {
     if(active){Flush(ctx);RestorePoses();for(size_t i=0;i<6;++i)CopyIn(addresses[i],&saved[i],4);++draws;}
 }
 
-X86_EXTERN_FUNC(__imp__sub_001B0AF0);
-X86_FUNC(sub_001B0AF0) {
-    const auto skip=kernel::R32(0x5CAB98);
-    if(catchup)kernel::W32(0x5CAB98,1);
-    __imp__sub_001B0AF0(ctx,base);
-    if(catchup)kernel::W32(0x5CAB98,skip);
-}
 X86_EXTERN_FUNC(__imp__sub_00011069);
 X86_FUNC(sub_00011069) {
     static thread_local openshao::frames::Clock clock;
@@ -365,13 +379,24 @@ X86_FUNC(sub_00011069) {
     if(faulted && (kernel::R32(0x639224)!=fault_world || kernel::R32(0x505970)!=fault_room)) {
         faulted=false;LOGR("Display output target: interpolation resumed after a room change");
     }
-    if(openshao::frames::Target()<=60 || faulted) {
+    // The first updates of a room place the heroes (0xC70F0 -> 0x179EE0). With interpolation active there,
+    // Ko-op heroes were thrown across the room and then rescued elsewhere (issue 59), so a room starts at 60 Hz.
+    static thread_local uint32_t settle_world=0,settle_room=0;
+    static thread_local unsigned settle=0;
+    if(kernel::R32(0x639224)!=settle_world || kernel::R32(0x505970)!=settle_room || kernel::G<uint8_t>(0x5ACEDC)==1) {
+        settle_world=kernel::R32(0x639224);settle_room=kernel::R32(0x505970);settle=OPENSHAO_ROOM_SETTLE_UPDATES;
+    }
+    const bool settling=settle!=0;
+    if(settle)--settle;
+    if(openshao::frames::Target()<=60 || faulted || settling) {
         clock.Reset();have_queue=false;poses.clear();have_camera=false;
         if(faulted){pending_block=Block::Fault;Account(1);}
         else extra_since_logic=true;
         app::Get().fps_cap=60;__imp__sub_00011069(ctx,base);return;
     }
-    auto advance=[&]{return clock.Take(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count());};
+    // One native update per call. The render-skip path (0x5CAB98) leaves out the renderer, which runs
+    // cPxCharacter::Update (ground, collision), so consecutive catch-up steps let characters leave the map.
+    auto advance=[&]{return clock.Take(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(),1);};
     unsigned due=advance();
     if(epoch!=clock.Epoch()){epoch=clock.Epoch();have_queue=false;poses.clear();have_camera=false;}
     auto eligible=[&]{return have_queue && Queue()==queue && kernel::R32(0x639224)==world && kernel::R32(0x505970)==room && !MenuOpen() && !kernel::R32(0x6C92F8);};
@@ -389,15 +414,13 @@ X86_FUNC(sub_00011069) {
     // Due gameplay updates already come first: reuse the next output slot when render cost recovers.
     if(epoch!=clock.Epoch()){epoch=clock.Epoch();have_queue=false;poses.clear();have_camera=false;}
     alpha=float(clock.Alpha());
-    const auto entry=ctx;
     app::Get().fps_cap=openshao::frames::OutputCap();
     const auto nextworld=kernel::R32(0x639224),nextroom=kernel::R32(0x505970);
     if(world!=nextworld || room!=nextroom){poses.clear();have_camera=false;world=nextworld;room=nextroom;}
-    for(unsigned step=0;step<due;++step) {
-        ctx=entry;active=true;catchup=step+1<due;have_queue=false;++tick;
+    if(due) {
+        active=true;have_queue=false;++tick;
         __imp__sub_00011069(ctx,base);
-        active=false;catchup=false;
-        if(ctx.eax)break;
+        active=false;
     }
     if(!due && eligible()) {
         auto pending_gpu=d3d::State();

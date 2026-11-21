@@ -1,4 +1,5 @@
 #include "language_credits.h"
+#include "campaign_moves.h"
 #include "difficulty.h"
 #include "cpu/x86_ops.h"
 #include <cstring>
@@ -34,7 +35,9 @@ X86_FUNC(sub_000EBD00) {
 }
 
 X86_FUNC(sub_00152960) {
-    openshao::difficulty::PopupFooter(ctx);
+    if (openshao::campaign_moves::FitReferenceList(ctx)) return;
+    if (openshao::difficulty::SaveListText(ctx, base, openshao::difficulty::TextCall::PlainLeft,
+                                         __imp__sub_00152960)) return;
     const auto slot = ctx.esp + 20;
     if (openshao::language::CreditsEnabled() && Read(base, ctx.esp) == 0x4B419 &&
         Read(base, ctx.esp + 16) == 2 && ctx.edi &&

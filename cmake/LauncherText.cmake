@@ -1,0 +1,12 @@
+# Embeds resources/launcher/*.json; add a language with one more file (keys checked by launcher_text_test).
+file(GLOB OPENSHAO_LAUNCHER_TEXT_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/launcher/*.json")
+list(SORT OPENSHAO_LAUNCHER_TEXT_FILES)
+set(OPENSHAO_LAUNCHER_TEXT "// Generated from resources/launcher by cmake/LauncherText.cmake.\n#pragma once\n#include <string_view>\nnamespace openshao::launcher::text {\ninline constexpr std::string_view EmbeddedCatalogs[] = {\n")
+foreach(file IN LISTS OPENSHAO_LAUNCHER_TEXT_FILES)
+    file(READ "${file}" json)
+    string(APPEND OPENSHAO_LAUNCHER_TEXT "R\"launchertext(${json})launchertext\",\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${file}")
+endforeach()
+string(APPEND OPENSHAO_LAUNCHER_TEXT "};\n}\n")
+file(WRITE "${GEN}/launcher_text_data.h.tmp" "${OPENSHAO_LAUNCHER_TEXT}")
+configure_file("${GEN}/launcher_text_data.h.tmp" "${GEN}/launcher_text_data.h" COPYONLY)

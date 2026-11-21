@@ -146,8 +146,7 @@ def main():
                     assert len(archives)==1 and str(archives[0]) in '\n'.join(texts), ('The ZIP must exist before the dialog opens',texts)
                     assert 'OpenShao > Support > Report a bug' in '\n'.join(texts), texts
                     assert 'Click OK to open the folder with this ZIP selected.' in '\n'.join(texts), texts
-                    # The private desktop suppresses Explorer while exercising
-                    # the same dismissal path used by the interactive dialog.
+                    # The private desktop has no Explorer but uses the same dismissal path.
                     assert user.PostMessageW(dialogs[0], 0x0010, 0, 0), ctypes.get_last_error()
                     assert process.wait(timeout=5) != 0, 'The invalid source must still fail startup'
                     log = logs[0].read_text(encoding='utf-8', errors='replace')

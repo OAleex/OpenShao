@@ -1,8 +1,4 @@
-"""Opt-in first-map audio probe with isolated data and silent virtual input.
-
-The original game is read-only. Logs and summaries stay in local output.
-This checks runtime activity; it does not assess audible quality.
-"""
+"""Opt-in first-map audio probe with isolated data and silent virtual input."""
 from pathlib import Path
 import argparse
 import ctypes as c
@@ -234,8 +230,7 @@ def main():
         assert top() == 0 and u32(0x505970) == 96 and u32(0x639224), 'First map was not reached'
         pulse(6, gap=12)
         pulse(6, gap=5)
-        # The room number is assigned before streaming and pipeline preparation finish.
-        # Require real gameplay logic to advance before measuring the audio window.
+        # The room is set before loading ends: wait for gameplay logic to advance before measuring audio.
         initial_logic = u32(0x5AFC60)
         until = time.monotonic() + 120
         next_scene_skip = time.monotonic() + 5

@@ -1,84 +1,57 @@
-name: Fan translation mod
-description: Offer a fan translation or fan dub of the game as an optional OpenShao language pack mod.
-title: "[Fan translation] "
+name: Offer translation help
+description: Offer to translate OpenShao into a new language.
+title: "[Translation offer] "
 labels: ["fan translation", "needs triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for offering your work. Fan translations are unofficial mods, installed as optional language packs.
-        **Never attach game files** (disc images, extracted game files or original audio) or sensitive data. Screenshots, short clips and a few translated lines are enough.
-  - type: input
+        Offer to translate OpenShao into a language that is not yet available.
+        The maintainer can contact you to provide the translation materials and instructions.
+  - type: dropdown
     id: language
     attributes:
-      label: Language
-      description: Language and region, for example Spanish (Latin America).
-    validations:
-      required: true
-  - type: textarea
-    id: authors
-    attributes:
-      label: Authors
-      description: Who worked on it and their roles, as they should appear in the credits.
-    validations:
-      required: true
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: What does it cover?
+      label: Which languages would you like to translate OpenShao into?
+      description: Select languages not yet available in the game or as mods. Select Other for an unlisted language or regional variant.
+      multiple: true
       options:
-        - label: Menus and in-game text
-        - label: Fonts and accented characters
-        - label: Graphics with text (textures, title screens, logos)
-        - label: Subtitles
-        - label: Voices (fan dub)
-        - label: Movies (audio or subtitles)
-  - type: dropdown
-    id: status
-    attributes:
-      label: Status
-      options:
-        - Complete
-        - Mostly complete
-        - In progress
-        - Just starting
+        - Arabic
+        - Bulgarian
+        - Chinese (Simplified)
+        - Chinese (Traditional)
+        - Czech
+        - Danish
+        - Dutch
+        - Finnish
+        - Greek
+        - Hungarian
+        - Indonesian
+        - Japanese
+        - Korean
+        - Malay
+        - Norwegian
+        - Polish
+        - Portuguese (Portugal)
+        - Romanian
+        - Russian
+        - Spanish (Latin America)
+        - Swedish
+        - Thai
+        - Turkish
+        - Ukrainian
+        - Vietnamese
+        - Other
     validations:
       required: true
-  - type: textarea
-    id: details
+  - type: input
+    id: other_language
     attributes:
-      label: Details
-      description: What is finished and what is missing, the original version you worked from, and the tools used.
-    validations:
-      required: true
-  - type: dropdown
-    id: ai
-    attributes:
-      label: AI or machine translation
-      options:
-        - Not used
-        - Used for parts, then reviewed by people
-        - Used for most of the work
-    validations:
-      required: true
-  - type: textarea
-    id: samples
-    attributes:
-      label: Samples
-      description: Screenshots, a short video link or a few translated lines. No game files.
-    validations:
-      required: true
+      label: Other language or regional variant
+      description: If you selected Other, name the languages or regional variants you can translate. The maintainer can review your offer.
   - type: input
     id: contact
     attributes:
-      label: Preferred contact
-      description: How the maintainer can reach you (GitHub is fine). Do not post private data you do not want public.
-  - type: checkboxes
-    id: checks
-    attributes:
-      label: Checks
-      options:
-        - label: I own this work or have permission from everyone involved to share it.
-          required: true
-        - label: This issue contains no game files or sensitive data.
-          required: true
+      label: How can the maintainer contact you?
+      description: Provide an email address, Discord username or profile that accepts messages. This issue is public.
+    validations:
+      required: true

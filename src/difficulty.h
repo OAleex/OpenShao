@@ -1,16 +1,20 @@
 #pragma once
+#include <array>
 #include <bitset>
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct X86Context;
 namespace openshao::difficulty {
 // Easy/Normal/Hard are native 0..2; Monk runs on Hard and is stored as 3 only in save records.
 enum class Mode : uint8_t { Easy = 0, Normal = 1, Hard = 2, Monk = 3 };
 void DrawPopup(X86Context& ctx, uint8_t* base);
+void DrawFighterHint(X86Context& ctx, std::string_view name, std::string_view message);
 inline constexpr uint32_t SerializedMonk = 3;
 inline constexpr uint32_t EasyLabel = 0xFFFFFE00, MonkLabel = 0xFFFFFE01;
 
@@ -129,12 +133,26 @@ public:
 std::string SerializeRooms(const std::bitset<512>& rooms);
 std::bitset<512> ParseRooms(std::string_view text);
 uint64_t Fingerprint(const uint8_t* record, size_t size, size_t difficulty_offset);
+// Monk totem data of one global save slot (page 1 = native 1..9), kept beside the save pages.
+struct MonkSlot {
+    uint32_t slot = 0;
+    uint64_t print = 0;  // Fingerprint of the saved record
+    std::bitset<512> rooms;
+    std::array<int32_t, 2> health{-1, -1};  // heroes' health at the totem, -1 unknown
+    bool operator==(const MonkSlot&) const = default;
+};
+// Binary sidecar: magic, count, FNV-1a 64 of the scrambled body, then fixed-size entries.
+std::string EncodeMonkSlots(std::span<const MonkSlot> slots);
+// Accepts only an intact file; slots is untouched on failure.
+bool DecodeMonkSlots(std::span<const uint8_t> file, std::vector<MonkSlot>& slots);
+// Reads the text sidecar of earlier versions; false when a line could not be read.
+bool ParseMonkText(std::string_view text, std::vector<MonkSlot>& slots);
 
 Mode Current();
 bool MenuExpanded();
 uint32_t Label(uint32_t id, uint32_t caller);  // host string replacing a native text id, or 0
 // Save lists: lays out columns, adds difficulty; true when the call belongs to a slot list.
-enum class TextCall { Left, Centered, Plain };
+enum class TextCall { Left, Centered, Plain, PlainLeft };
 bool SaveListText(X86Context& ctx, uint8_t* base, TextCall call, void (*original)(X86Context&, uint8_t*));
 
 void KillPanel(X86Context& ctx, uint8_t* base, void (*original)(X86Context&, uint8_t*));
@@ -148,4 +166,6 @@ void SetDebugRefill(bool enabled);
 uint32_t CheckpointRestores();
 // Save slots loaded or written this session; 0 means the campaign has never touched a save.
 uint32_t SaveSlotTransfers();
+// Converts the text progress file of earlier versions; call once the save folder is open.
+void ConvertLegacyProgress();
 }

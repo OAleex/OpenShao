@@ -7,6 +7,7 @@ void Shutdown();
 void SetFocused(bool focused);
 bool HasRumble(int port);
 bool RumbleEnabled();
+bool CameraRecenterDown();
 int KeyboardPort();
 void SetMultiplayer(bool enabled); // game callbacks; no SDL calls on this thread
 void Window(void* hwnd);

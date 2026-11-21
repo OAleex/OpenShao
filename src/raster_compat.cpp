@@ -73,8 +73,7 @@ std::string AtlasQuadHlsl(std::string s) {
         const std::string at="float4 main(VOut i, bool front";
         Replace(s,at,R"(float4 atlas_coord(float4 t, float4 bounds) {
     t.xy=clamp(t.xy,bounds.xy,bounds.zw);
-    // One repeated tile (including mirrored negative UVs) is the same image
-    // after an integer offset. Sampling it clamped avoids the opposite edge.
+    // One repeated tile (mirrored negative UVs too) is the same image after an integer offset; sample it clamped.
     if (all(abs(bounds)<1e10)) t.xy-=floor(bounds.xy+1.0/4096);
     return t;
 }
@@ -122,8 +121,7 @@ float4 bounds(float2 p0,float2 p1,float2 p2,float4 t0,float4 t1,float4 t2) {
     if (any(c0>1e-4)||any(c1>1e-4)||any(c2>1e-4)) return unrestricted;
     float2 dx=((t1.xy-t0.xy)*b.y-(t2.xy-t0.xy)*a.y)/det;
     float2 dy=((t2.xy-t0.xy)*a.x-(t1.xy-t0.xy)*b.x)/det;
-    // A quarter turn swaps the screen axes. It still samples one atlas tile,
-    // including the negative V tile used by the brightness frame's right side.
+    // A quarter turn swaps screen axes but still samples one tile, including the brightness frame's negative V.
     bool aligned=abs(dx.y)<=1e-6&&abs(dy.x)<=1e-6;
     bool rotated=abs(dx.x)<=1e-6&&abs(dy.y)<=1e-6;
     if (!aligned&&!rotated) return unrestricted;
@@ -145,8 +143,7 @@ void main(triangle VOut v[3],inout TriangleStream<VOut> output) {
     for (int i=0;i<3;++i) {
         VOut o=v[i]; o.atlas0=b0; o.atlas1=b1; o.atlas2=b2; o.atlas3=b3;
         if (all(abs(b0)<1e10) && all(sprite_surface.xy>0) && abs(o.pos.w-1)<1e-5) {
-            // Cover samples ceil(left)..ceil(right)-1 with whole host pixels (closes transparent joins);
-            // e.zw tracks the changed edge so unstretch keeps UVs.
+            // Cover ceil(left)..ceil(right)-1 with whole host pixels to close joins; e.zw keeps UVs for unstretch.
             float2 edge=ceil(o.e.zw-1e-4)-0.5;
             o.pos.xy+=(edge-o.e.zw)*float2(2/sprite_surface.x,-2/sprite_surface.y)*o.pos.w;
             o.e.zw=edge;

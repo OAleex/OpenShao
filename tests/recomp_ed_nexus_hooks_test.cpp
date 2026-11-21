@@ -1,6 +1,8 @@
 #include "ed_nexus.h"
 #include "pause_recomp.h"
+#include "recomp_input.h"
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -15,12 +17,43 @@ unsigned opens=0,sounds=0,updates=0,builds=0,native_pause_events=0;
 unsigned toggles=0,desktop_exits=0;
 unsigned original_cheats=0;
 unsigned refills=0;
+uint32_t measured_width=120;
+bool long_pause_caption=false;
+bool pause_capturing=false;
 bool player2_live=false;
-namespace mem {uint32_t AllocSystem(uint32_t size){static uint32_t next=0x8000;Check(size<=2048,"pause menus use bounded guest allocations");const auto result=next;next+=0x1000;return result;}}
+uint32_t indicator_text=0,indicator_y=0;
+namespace mem {
+uint32_t AllocSystem(uint32_t size){static uint32_t next=0x8000;Check(size<=4096,"menu allocations fit the fixture page");const auto result=next;next+=0x1000;return result;}
+void FreeSystem(uint32_t){}
+}
+namespace openshao::campaign_moves {
+uint32_t ReferenceTitleSource(uint32_t label) {
+    if(label==0xFFFFFC03)return 876;
+    return label==0xFFFFFC00?997:0;
+}
+std::string_view ReferenceTranslationKey(uint32_t label) { return label==0xFFFFFC03?"moves.head_smack":""; }
+bool LocalizedReferenceTitle(uint32_t address,std::string& text) {
+    if(address==0x7100) {text="Pancada na Cabeca";return true;}
+    if(address!=0x7000)return false;
+    text="Rotacao Fraca";
+    return true;
+}
+bool ReferenceCaption(uint32_t label,std::string& text) {
+    if(label==0xFFFFFC03) {text="Head Smack\n$ + ^, *";return true;}
+    if(label!=0xFFFFFC00)return false;
+    text="Blade Flip";
+    return true;
+}
+bool CorrectCaption(uint32_t label,uint32_t address,std::string& text) {
+    if(label!=610 || address!=0x7000)return false;
+    text="Localized $ + *";return true;
+}
+}
 namespace openshao::pause_recomp {
 Page current=Page::Categories;
 static bool portuguese_debug=false;
 std::string Localized(std::string_view id) {
+    if(id=="moves.head_smack")return "Generated Head Smack";
     if(portuguese_debug) {
         if(id=="debug.menu")return std::string("Menu de Depura\xE7\xE4""o");
         if(id=="debug.unlock_kontent")return std::string("Desbloquear Konte\xFA""do");
@@ -35,6 +68,10 @@ std::string Localized(std::string_view id) {
     if(id=="debug.next_map")return "next map";
     if(id=="value.on")return "Yes";
     if(id=="value.off")return "No";
+    if(id=="footer.back")return portuguese_debug?"Voltar":"Back";
+    if(id=="footer.cancel")return "Cancel";
+    if(id=="settings.hold_cancel")return "Hold B to Cancel";
+    if(id=="settings.adjust_hint")return portuguese_debug?"Ajustar":"Adjust";
     Check(false,"every debug caption uses a known localized catalog key");
     return {};
 }
@@ -44,22 +81,30 @@ std::string Text(Item item) {
 }
 bool Toggle(Item item){Check(item>=Item::ShowFps && item<=Item::Bloom,"only safe pause toggles");++toggles;return true;}
 bool Exit(){++desktop_exits;return true;}
-void Open(){current=Page::Categories;}
+void Open(Page initial){current=initial;}
 void Close(){current=Page::Categories;}
 Page CurrentPage(){return current;}
-unsigned RowCount(){return current==Page::Categories?5:current==Page::Controls?6:current==Page::Graphics?7:current==Page::Display?4:2;}
-std::string RowText(unsigned row){return "Entry "+std::to_string(unsigned(current))+" "+std::to_string(row)+" " +std::to_string(toggles);}
-bool Choose(unsigned row){
+unsigned RowCount(){return current==Page::Categories?4:current==Page::Controls?5:current==Page::Graphics?6:current==Page::Display?5:current==Page::Enhancements?4:current==Page::Audio?1:3;}
+std::string RowText(unsigned row){return long_pause_caption?std::string(96,'W')+" < Yes >":"Entry "+std::to_string(unsigned(current))+" "+std::to_string(row)+" " +std::to_string(toggles);}
+std::string PageIndicator(){return current==Page::Controller && !pause_capturing?"#   Page 1/9   $":"";}
+void Choose(unsigned row){
     if(current==Page::Categories){
-        if(row==4)return true;
-        current=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio}[row];return false;
+        current=std::array{Page::Display,Page::Graphics,Page::Controls,Page::Audio}[row];return;
     }
-    if(row==RowCount()-1){current=Page::Categories;return false;}
-    ++toggles;return false;
+    if(current==Page::Controls && row==0)current=Page::Controller;
 }
-bool Back(){if(current==Page::Categories)return true;current=Page::Categories;return false;}
+bool Back(){if(pause_capturing){pause_capturing=false;return false;}if(current==Page::Categories || current==Page::Enhancements)return true;current=current==Page::Controller?Page::Controls:Page::Categories;return false;}
+bool Adjust(unsigned row,int direction){if(!((current==Page::Graphics && row<6) || (current==Page::Controls && (row==3 || row==4))))return false;toggles=unsigned(int(toggles)+direction);return true;}
 bool Update(){return false;}
-bool Capturing(){return false;}
+bool Capturing(){return pause_capturing;}
+bool CapturingController(){return pause_capturing && current==Page::Controller;}
+bool CanChoose(unsigned row){
+    if(current==Page::Enhancements)return row==3;
+    if(current==Page::Graphics || current==Page::Audio)return false;
+    if(current==Page::Controls)return row<3;
+    return true;
+}
+bool CanAdjust(unsigned row){return !pause_capturing && (current==Page::Enhancements?row<3:current==Page::Graphics?row<6:current==Page::Audio && row==0);}
 }
 void sub_000160AF(X86Context&,uint8_t*);
 void sub_00011F64(X86Context&,uint8_t*);
@@ -67,6 +112,8 @@ void sub_00013FCB(X86Context&,uint8_t*);
 void sub_00013751(X86Context&,uint8_t*);
 void sub_00015C6D(X86Context&,uint8_t*);
 void sub_00016992(X86Context&,uint8_t*);
+void sub_00015060(X86Context&,uint8_t*);
+unsigned hud_builds=0;
 static void CheckKontent(bool unlocked) {
     struct Query {void (*fn)(X86Context&,uint8_t*);unsigned count;};
     for(const auto q:{Query{sub_000160AF,64},Query{sub_00011F64,176},Query{sub_00013FCB,8},Query{sub_00013751,16}}) {
@@ -80,6 +127,8 @@ static void CheckKontent(bool unlocked) {
     Check(mk2.eax==(0xAABBCC00u|unsigned(unlocked)) && mk2.esp==0x1004,"MKII follows the same session unlock");
 }
 void sub_000135C6(X86Context&,uint8_t*);
+void sub_00016992(X86Context&,uint8_t*);
+void sub_00015060(X86Context&,uint8_t*);
 namespace kernel {
 void Return(X86Context& ctx,uint32_t value,int args){ctx.eax=value;ctx.esp+=4+args*4;}
 uint32_t R32(uint32_t address) { return memory[address]; }
@@ -97,13 +146,20 @@ uint32_t CallGuest(X86Context& ctx,uint32_t target,std::initializer_list<uint32_
         Check(ctx.ecx==0x653bc0 && args.size()==8,"acknowledgement uses the original sound manager and ABI");
         Check(*args.begin()==0x5ce79082,"only the Nexus unlock requests vo_sk_combo_counter_190_1");
     }
+    else if(target==0x16992) {memory[ctx.esp+4]=*args.begin();sub_00016992(ctx,nullptr);result=ctx.eax;}
+    else if(target==0x152dc0) {result=measured_width;}
+    else if(target==0x152ce0) {
+        Check(args.size()==7 && args.begin()[0]==320 && args.begin()[3]==2,"page indicator uses the native centered footer font");
+        indicator_text=args.begin()[4];indicator_y=args.begin()[1];
+    }
+    else if(target==0x15060) {sub_00015060(ctx,nullptr);}
     else Check(false,"unexpected guest call");
     ctx.esp=0xdead;ctx.eax=0xbeef;ctx.ecx=0xcafe;return result;
 }
 }
 static std::string GuestText(uint32_t address) {
     std::string result;
-    for(unsigned i=0;i<64;++i) {
+    for(unsigned i=0;i<512;++i) {
         const uint32_t value=memory[(address+i)&~uint32_t(3)];
         const char glyph=char(value >> ((i%4)*8));
         if(!glyph)return result;
@@ -135,7 +191,25 @@ X86_FUNC(__imp__sub_00011F64){ctx.eax=0xAABBCC00;ctx.esp+=4;}
 X86_FUNC(__imp__sub_00013FCB){ctx.eax=0xAABBCC00;ctx.esp+=4;}
 X86_FUNC(__imp__sub_00013751){ctx.eax=0xAABBCC00;ctx.esp+=4;}
 X86_FUNC(__imp__sub_00015C6D){ctx.eax=0xAABBCC00;ctx.esp+=4;}
-X86_FUNC(__imp__sub_00016992){ctx.eax=0x1234;ctx.esp+=4;}
+X86_FUNC(__imp__sub_00016992){
+    const auto label=memory[ctx.esp+4];
+    if(label==610 || label==997) {
+        const std::string text="Localized $ + ~";
+        for(unsigned i=0;i<=text.size();++i) { const auto a=0x7000+i,w=a&~3u,shift=(a%4)*8; memory[w]=(memory[w]&~(255u<<shift))|(uint32_t(uint8_t(text[i]))<<shift); }
+        ctx.eax=0x7000;
+    } else if(label==876) {
+        ctx.eax=0x7100;
+    } else if(label==0x58c || label==0x591) {
+        const std::string text=label==0x58c?"= Select  | Exit  {/} Navigate":"= Accept | Exit {/} Navigate </> Adjust";
+        for(unsigned i=0;i<=text.size();++i) {
+            const auto address=0x7000+i,word=address&~3u,shift=(address%4)*8;
+            memory[word]=(memory[word]&~(255u<<shift))|(uint32_t(uint8_t(text[i]))<<shift);
+        }
+        ctx.eax=0x7000;
+    } else ctx.eax=0x1234;
+    ctx.esp+=4;
+}
+X86_FUNC(__imp__sub_00015060){++hud_builds;ctx.esp+=4;}
 X86_FUNC(__imp__sub_0001332D) {
     const uint32_t source[]={0x1a4,0x15263,0x1a5,0x11bcc,0x1a7,0x16262,0xffffffff,0};
     const uint32_t other[]={0x1a3,0x15506,0x1a4,0x15263,0x1a5,0x11bcc,0x1a7,0x16262,0xffffffff,0};
@@ -145,10 +219,35 @@ X86_FUNC(__imp__sub_0001332D) {
     }
     for(unsigned i=0;i<10;++i)memory[0x4f1ce0+i*4]=other[i];
     memory[0x4054]=0x5000;memory[0x4064]=3;
+    memory[0x4084]=memory[0x4088]=std::bit_cast<uint32_t>(1.f);
     ctx.esp+=4;ctx.eax=0x12345678;
 }
 bool exercise_pause=false,exercise_locked_pause=false;
+bool exercise_options_return=false;
+unsigned options_visits=0;
 X86_FUNC(__imp__sub_00012BA8) {
+    if(exercise_options_return) {
+        ++options_visits;
+        X86Context builder;sub_0001332D(builder,nullptr);
+        if(options_visits==2) {
+            Check(memory[0x406c]==1,"returning from retail Options restores its Select root row");
+            const auto before=native_pause_events;
+            X86Context held_back;memory[held_back.esp+4]=0x4000;memory[held_back.esp+8]=6;
+            sub_00015687(held_back,nullptr);
+            Check(held_back.eax==1 && native_pause_events==before,
+                  "the B which left Options cannot also close the restored Select menu");
+        }
+        memory[0x4efa5c]=options_visits==1?1:0;
+
+        if(options_visits==1) {
+            const auto before=hud_builds;X86Context hud;sub_00015060(hud,nullptr);
+            Check(hud_builds==before && hud.esp==0x1004,"Options defers gameplay HUD reconstruction while Select remains paused");
+            X86Context footer;memory[footer.esp+4]=0x591;sub_00016992(footer,nullptr);
+            Check(GuestText(footer.eax)=="= Accept | Back {/} Navigate </> Adjust",
+                  "retail Options keeps its adjustment hints and labels B as Back");
+        }
+        ctx.eax=0xabcd;ctx.esp+=4;return;
+    }
     if(exercise_locked_pause || exercise_pause) {
         X86Context list;sub_0001332D(list,nullptr);
         Check(list.esp==0x1004 && list.eax==0x12345678,"adding a pause entry preserves the original builder ABI");
@@ -158,33 +257,44 @@ X86_FUNC(__imp__sub_00012BA8) {
               memory[0x4f1cd8]==0xffffffff,"Continue, Options and Exit Game keep their original source definition");
         if(exercise_locked_pause) {
             const auto rows=memory[0x4054];
-            Check(memory[0x4064]==5 && rows!=0x5000 && memory[rows+40]==0xffffffff,
-                  "locked gameplay pause adds only settings and exit, preserving its native rows");
-            Check(memory[rows+16]==0xffffff00 && memory[rows+24]==0x1a7 && memory[rows+28]==0x16262,
-                  "pause settings must precede Exit Game while retaining the native return-to-main-menu callback");
+            Check(memory[0x4064]==6 && rows!=0x5000 && memory[rows+48]==0xffffffff,
+                  "locked pause includes separate settings and enhancements before its exit rows");
+            Check(memory[rows+16]==0xffffff00 && memory[rows+24]==0xffffff09 &&
+                  memory[rows+32]==0x1a7 && memory[rows+36]==0x16262,
+                  "Enhancements follows settings while Exit Game retains its native callback");
         }
     }
     if(exercise_pause) {
         const auto rows=memory[0x4054];
-        Check(memory[0x4064]==6 && rows!=0x5000 && memory[rows+40]==0x19f &&
-              memory[rows+44]==0x135c6 && memory[rows+48]==0xffffffff,
+        Check(memory[0x4064]==7 && rows!=0x5000 && memory[rows+48]==0x19f &&
+              memory[rows+52]==0x135c6 && memory[rows+56]==0xffffffff,
               "unlocked pause adds settings, desktop exit, Nexus and a terminator in owned storage");
         for(unsigned i=0;i<4;++i)Check(memory[rows+i*4]==memory[0x5000+i*4],
               "root additions preserve original Continue and Options callbacks");
-        Check(memory[rows+16]==0xffffff00 && memory[rows+24]==memory[0x5010] && memory[rows+28]==memory[0x5014],
+        Check(memory[rows+16]==0xffffff00 && memory[rows+24]==0xffffff09 &&
+              memory[rows+32]==memory[0x5010] && memory[rows+36]==memory[0x5014],
               "Exit Game follows settings with its original label and callback");
         Check(memory[0x4f1cd8]==0xffffffff && memory[0x4f1ce0]==0x1a3 &&
               memory[0x4f1cf8]==0x1a7 && memory[0x4f1d00]==0xffffffff,
               "native three-item source and unrelated four-item definition are never overwritten");
-        auto event=[](unsigned selected,unsigned event_id) {
+        auto release_input=[] {
+            const auto pressed=memory[0x67c66a];memory[0x67c66a]=0;memory[0x67c668]=0;
+            X86Context released;released.ecx=0x4ef3c8;sub_000142EB(released,nullptr);
+            memory[0x67c66a]=pressed;
+        };
+        auto event=[&](unsigned selected,unsigned event_id,bool consumed=false) {
+            release_input();
             X86Context result;memory[result.esp+4]=0x4000;memory[result.esp+8]=event_id;
             memory[0x406c]=selected;
             sub_00015687(result,nullptr);
-            Check(result.esp==0x1004 && result.eax==0,"custom pause action preserves native event ABI");
+            Check(result.esp==0x1004 && result.eax==unsigned(consumed),"custom pause action preserves native event ABI");
         };
         event(2,4);
-        Check(memory[0x4064]==5 && memory[0x4054]!=rows && memory[0x406c]==0,
+        Check(memory[0x4064]==4 && memory[0x4054]!=rows && memory[0x406c]==0,
               "recompilation settings opens the shared display, graphics, controls and audio groups");
+        X86Context footer;memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="= Select  | Back  {/} Navigate" && footer.esp==0x1004,
+              "a nested Select page labels B as Back while preserving its other captions and icons");
         X86Context no_nexus;no_nexus.ecx=0x4ef3c8;memory[0x67c66a]=0x80;
         sub_000142EB(no_nexus,nullptr);
         Check(opens==0,"Nexus X shortcut does not interrupt pause recompilation settings");
@@ -193,48 +303,114 @@ X86_FUNC(__imp__sub_00012BA8) {
         Check(memory[fps_label.eax]==0x72746e45,
               "native label lookup exposes the first native pause category");
         event(2,4);
-        Check(memory[0x4064]==6 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,
+        Check(memory[0x4064]==5 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,
               "controls category opens with controller, keyboard, mouse, deadzone and rumble");
-        event(3,4);event(4,4);
+        pause_capturing=true;
+        X86Context captured_b;memory[captured_b.esp+4]=0x4000;memory[captured_b.esp+8]=6;
+        sub_00015687(captured_b,nullptr);
+        Check(captured_b.eax==1 && !pause_capturing &&
+              openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,
+              "B cancels capture in place and consumes the native close event");
+        captured_b={};memory[captured_b.esp+4]=0x4000;memory[captured_b.esp+8]=6;
+        sub_00015687(captured_b,nullptr);
+        Check(captured_b.eax==1 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,
+              "repeated B from the same press cannot leave a second page");
+        X86Context released;released.ecx=0x4ef3c8;sub_000142EB(released,nullptr);
+        event(3,3,true);event(4,3,true);
         Check(toggles==2,"deadzone and rumble options dispatch through the native menu");
-        event(5,4);
-        Check(memory[0x4064]==5 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
+        event(0,4);
+        pause_capturing=true;
+        event(1,6,true);event(1,8,true);
+        Check(pause_capturing && memory[0x406c]==1,"Native Back events must leave the controller capture on its current row");
+        footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="Hold B to Cancel","Controller capture replaces the native Back legend with just the hold instruction");
+        using namespace openshao::recomp;
+        const auto held_at=raw::Clock::now();
+        raw::Begin(raw::Device::Controller);raw::Controller("",0,held_at);raw::Controller("b",0x20,held_at);
+        raw::Controller("b",0x20,held_at+std::chrono::seconds(1));
+        pause_capturing=false;
+        event(1,6,true);event(1,4,true);
+        Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controller && memory[0x406c]==1,
+              "The same held cancel must not back out or activate a different remapped menu action");
+        raw::Controller("",0);raw::Cancel();
+        footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        X86Context draw_footer;draw_footer.eax=0x1234;
+        memory[draw_footer.esp+4]=320;memory[draw_footer.esp+8]=420;
+        memory[draw_footer.esp+12]=0x7F;memory[draw_footer.esp+20]=footer.eax;
+        openshao::ed_nexus::DrawPausePageIndicator(draw_footer);
+        Check(draw_footer.eax==0x1234 && draw_footer.esp==0x1000 && indicator_y==392 &&
+              GuestText(indicator_text)=="#   Page 1/9   $",
+              "the controller list draws a native page indicator above the button legend without corrupting registers");
+        event(0,6,true);
+        indicator_text=0;openshao::ed_nexus::DrawPausePageIndicator(draw_footer);
+        Check(!indicator_text,"the page indicator stays on paginated lists only");
+        event(0,6,true);
+        Check(memory[0x4064]==4 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
               "return from controls restores category navigation");
         event(1,4);
-        Check(memory[0x4064]==7,"graphics exposes all six shared controls plus Back");
+        Check(memory[0x4064]==6,"graphics exposes all six shared controls without a Back row");
         const auto graphics_rows=memory[0x4054];
-        Check(memory[graphics_rows+7*8]==0xffffffff && memory[graphics_rows+7*8+4]==0,
-              "the seventh graphics row retains its own sentinel within expanded guest storage");
-        X86Context last_label;memory[last_label.esp+4]=memory[graphics_rows+6*8];sub_00016992(last_label,nullptr);
-        Check(memory[last_label.eax]==0x72746e45,"the seventh native row has valid owned text storage");
-        event(0,4);event(1,4);event(2,4);
+        Check(memory[graphics_rows+6*8]==0xffffffff && memory[graphics_rows+6*8+4]==0,
+              "the six graphics rows retain their own sentinel within expanded guest storage");
+        X86Context last_label;memory[last_label.esp+4]=memory[graphics_rows+5*8];sub_00016992(last_label,nullptr);
+        Check(memory[last_label.eax]==0x72746e45,"the last native row has valid owned text storage");
+        for(unsigned row=0;row<6;++row)event(row,4,true);
+        Check(toggles==2,"A never adjusts a native graphics value row");
+        event(0,3,true);event(1,3,true);event(2,3,true);
         Check(toggles==5,"three live graphics settings dispatch in place");
-        event(6,4);
-        event(0,4);Check(memory[0x4064]==4,"display category exposes screen controls and Back");
+        for(unsigned direction:{3u,2u}) {
+            X86Context adjustment;memory[adjustment.esp+4]=0x4000;memory[adjustment.esp+8]=direction;
+            memory[0x406c]=0;const auto before=toggles;
+            sub_00015687(adjustment,nullptr);
+            Check(adjustment.esp==0x1004 && adjustment.eax==1 && memory[0x406c]==0 &&
+                  toggles==(direction==3?before+1:before-1),
+                  "Left and Right adjust the current pause row and preserve its native selection");
+        }
+        event(0,6,true);
+        event(0,4);Check(memory[0x4064]==5,"display category exposes screen controls and Apply/Discard");
+        event(0,6,true);
+        event(3,4);Check(memory[0x4064]==1,"audio category exposes only volume");
+        Check(memory[0x4040]==8,"single-row panels have extra space for their ornate borders");
+        footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="| Back  </> Adjust","a single-row audio page advertises adjustment and Back");
+        event(0,6,true);
+        event(0,6,true);
+        Check(memory[0x4040]==0,"the original border padding returns on longer lists");
+        Check(memory[0x4054]==rows && memory[0x4064]==7 && memory[0x406c]==2,
+              "Back restores the original pause list and selection");
+        footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="= Select  | Exit  {/} Navigate",
+              "the Select root retains B Exit after leaving a nested page");
         event(3,4);
-        event(3,4);Check(memory[0x4064]==2,"audio category exposes volume and back");
-        event(1,4);
-        event(4,4);
-        Check(memory[0x4054]==rows && memory[0x4064]==6 && memory[0x406c]==2,
-              "Return action restores the original pause list and selection");
-        event(4,4);
+        Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Enhancements && memory[0x4064]==4,
+              "Enhancements opens directly from the pause root");
+        footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="| Back  {/} Navigate  </> Adjust",
+              "an adjustable enhancement advertises the native Left/Right action");
+        memory[0x406c]=3;footer={};memory[footer.esp+4]=0x58c;sub_00016992(footer,nullptr);
+        Check(GuestText(footer.eax)=="= Select  | Back  {/} Navigate","a camera submenu hides the adjustment hint");
+        X86Context enhancement_back;memory[enhancement_back.esp+4]=0x4000;memory[enhancement_back.esp+8]=6;
+        sub_00015687(enhancement_back,nullptr);
+        Check(enhancement_back.eax==1 && memory[0x4054]==rows && memory[0x406c]==3,
+              "B returns from Enhancements to its root row without closing gameplay pause");
+        event(5,4);
         Check(memory[0x4064]==2 && memory[0x406c]==0 && memory[0x4054]!=rows,
               "desktop exit confirmation defaults to No and displays the unsaved-progress warning");
         event(0,4);
         Check(desktop_exits==0 && memory[0x4054]==rows,"No returns to pause without exiting");
-        event(4,4);event(1,4);
+        event(5,4);event(1,4);
         Check(desktop_exits==1,"only explicitly confirming Yes requests desktop exit");
         X86Context cancel;memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
-        Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==4,
+        Check(cancel.esp==0x1004 && memory[0x4054]==rows && memory[0x406c]==5,
               "cancel leaves desktop confirmation and returns to pause");
         event(2,4);event(2,4);
         Check(openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Controls,"Back fixture starts inside controls");
-        cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
+        release_input();cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
-        Check(memory[0x4064]==5 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
+        Check(memory[0x4064]==4 && openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories,
               "custom settings Back event returns to categories before leaving the native menu");
-        cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
+        release_input();cancel={};memory[cancel.esp+4]=0x4000;memory[cancel.esp+8]=6;
         sub_00015687(cancel,nullptr);
         Check(memory[0x4054]==rows,"second Back event restores the native pause root");
         event(2,4);event(2,4);
@@ -245,7 +421,7 @@ X86_FUNC(__imp__sub_00012BA8) {
               openshao::pause_recomp::CurrentPage()==openshao::pause_recomp::Page::Categories &&
               native_pause_events==before_b,
               "B inside controls navigates to categories without closing gameplay pause");
-        submenu_b={};memory[submenu_b.esp+4]=0x4000;memory[submenu_b.esp+8]=8;
+        release_input();submenu_b={};memory[submenu_b.esp+4]=0x4000;memory[submenu_b.esp+8]=8;
         sub_00015687(submenu_b,nullptr);
         Check(submenu_b.eax==1 && memory[0x4054]==rows && native_pause_events==before_b,
               "B from categories restores native pause root without leaving gameplay");
@@ -256,14 +432,14 @@ X86_FUNC(__imp__sub_00012BA8) {
         Check(native_pause_events==pause_events+1 && original.eax==0xCC00 && original.esp==0x1004,
               "Continue dispatches to the real native Select-list handler");
         original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=4;
-        memory[0x406c]=3;sub_00015687(original,nullptr);
+        memory[0x406c]=4;sub_00015687(original,nullptr);
         Check(native_pause_events==pause_events+2 && original.eax==0xCC00 && original.esp==0x1004,
               "Exit Game in its new row still dispatches to the native handler");
-        original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=6;
+        release_input();original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=6;
         sub_00015687(original,nullptr);
         Check(native_pause_events==pause_events+3 && original.eax==0xCC00,
               "Back from the native pause root retains the game's original close handler");
-        original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=8;
+        release_input();original={};memory[original.esp+4]=0x4000;memory[original.esp+8]=8;
         sub_00015687(original,nullptr);
         Check(native_pause_events==pause_events+4 && original.eax==0xCC00,
               "native B event 8 is delegated, preserving original pause-exit behavior");
@@ -354,9 +530,25 @@ X86_FUNC(__imp__sub_00012BA8) {
 namespace openshao::difficulty { uint32_t Label(uint32_t, uint32_t) { return 0; } unsigned RefillHeroes(X86Context&) { return ++refills, 2; } }
 namespace openshao::survival { uint32_t Label(uint32_t) { return 0; } }
 namespace openshao::ed_nexus { bool Player2Active() { return player2_live; } }
+namespace openshao::photo_mode { bool Available() { return false; } void OpenFromMenu() {} }
 #include "ed_nexus_hooks.inl"
 
 int main() {
+    {
+        X86Context caption; memory[caption.esp+4]=610; sub_00016992(caption,nullptr);
+        Check(GuestText(caption.eax)=="Localized $ + *", "campaign caption correction runs after native text lookup");
+        X86Context combo;
+        const auto combo_stack=combo.esp;
+        memory[combo.esp+4]=0xFFFFFC00;
+        sub_00016992(combo,nullptr);
+        Check(GuestText(combo.eax)=="Rotacao Fraca" && combo.esp==combo_stack+4,
+              "campaign combo caption resolves native locale and returns owned text");
+        X86Context grapple;
+        memory[grapple.esp+4]=0xFFFFFC03;
+        sub_00016992(grapple,nullptr);
+        Check(GuestText(grapple.eax)=="Pancada na Cabeca\n$ + ^, *",
+              "shared native translations replace the fallback title while retaining the guide command");
+    }
     CheckKontent(false);
     exercise_locked_pause=true;X86Context locked_pause;sub_00012BA8(locked_pause,nullptr);exercise_locked_pause=false;
     memory[0x6c9308]=1;memory[0x6c930c]=0x598430;
@@ -404,5 +596,28 @@ int main() {
     outside.ecx=0x4ef3c8;sub_000142EB(outside,nullptr);
     Check(opens==2,"leaving pause clears its access context");
     Check(sounds==1,"opening and returning from Nexus do not replay the unlock voice");
+    {
+        openshao::ed_nexus::PauseScope scope;
+        X86Context builder;sub_0001332D(builder,nullptr);
+        long_pause_caption=true;
+        openshao::ed_nexus::ShowPausePage(builder,openshao::ed_nexus::PausePage::Settings);
+        const auto list=memory[0x4054];
+        X86Context label;memory[label.esp+4]=memory[list];sub_00016992(label,nullptr);
+        Check(GuestText(label.eax)==std::string(96,'W')+" < Yes >",
+              "translated captions and arrows exceeding the former 64-byte slot remain complete and terminated");
+        measured_width=1000;
+        const auto saved=builder;
+        openshao::ed_nexus::FitPauseList(builder);
+        Check(std::bit_cast<float>(memory[0x4084])==.544f && std::bit_cast<float>(memory[0x4088])==.544f &&
+              builder.esp==saved.esp && builder.ecx==saved.ecx && builder.eax==saved.eax,
+              "oversized captions fit the canvas with matching font scales and preserved guest context");
+        measured_width=120;long_pause_caption=false;
+        openshao::ed_nexus::ShowPausePage(builder,openshao::ed_nexus::PausePage::Root);
+        Check(std::bit_cast<float>(memory[0x4084])==1.f && std::bit_cast<float>(memory[0x4088])==1.f,
+              "shorter pages recover the original font size instead of retaining a prior page's shrink");
+    }
+    exercise_options_return=true;X86Context options;sub_00012BA8(options,nullptr);
+    Check(options_visits==2 && options.esp==0x1004 && options.eax==0xabcd && hud_builds==1,
+          "leaving retail Options reopens Select with the original call ABI");
     std::puts("PASS: frontend isolation, original pause hooks, repeated access and preserved guest ABI");
 }

@@ -27,6 +27,18 @@ int main() {
     const auto enhanced = Read(toml::parse("[enhancements]\nscorpion_unfiltered = true\n"));
     check(!Merge({},Read({}))["enhancements"]["cinematic_bars"].value_or(true),
           "Cinematic bars must be an optional enhancement, disabled for existing and new settings");
+    check(!Merge({},Read({}))["enhancements"]["hold_camera_angle"].value_or(true),
+          "Existing settings must keep the original camera behavior by default");
+    check(Merge({},Read(toml::parse("[enhancements]\nhold_camera_angle = true\n")))["enhancements"]["hold_camera_angle"].value_or(false),
+          "Enabling camera angle hold must survive a complete settings round trip");
+    const auto camera_defaults=Merge({},Read({}));
+    check(camera_defaults["enhancements"]["camera_speed"].value_or(0)==100 &&
+          !camera_defaults["enhancements"]["smooth_camera_framing"].value_or(true),
+          "Existing settings keep the original enhanced camera speed and transitions by default");
+    const auto camera_saved=Merge({},Read(toml::parse("[enhancements]\ncamera_speed = 140\nsmooth_camera_framing = true\n")));
+    check(camera_saved["enhancements"]["camera_speed"].value_or(0)==140 &&
+          camera_saved["enhancements"]["smooth_camera_framing"].value_or(false),
+          "Camera speed and smoothing must round-trip independently of the on/off switch");
     for(bool enabled:{false,true})
         check(Merge({},Read(toml::table{{"enhancements",toml::table{{"cinematic_bars",enabled}}}}))["enhancements"]["cinematic_bars"].value_or(!enabled)==enabled,
               "Both cinematic bar choices must survive a complete configuration round trip");
@@ -35,9 +47,11 @@ int main() {
     check(!without_shadow_setting["enhancements"].as_table()->contains("vertical_shadows") &&
           without_shadow_setting["enhancements"]["scorpion_unfiltered"].value_or(false),
           "Saving preferences must remove the retired Vertical Shadows option while keeping other enhancements");
-    check(Read({}).improved_difficulty && Merge({},Read({}))["enhancements"]["improved_difficulty"].value_or(false) &&
-          !Merge({},Read(toml::parse("[enhancements]\nimproved_difficulty = false\n")))["enhancements"]["improved_difficulty"].value_or(true),
-          "Improved difficulty must be enabled by default and survive a configuration round trip");
+    for(bool enabled:{false,true}) {
+        const toml::table legacy{{"enhancements",toml::table{{"improved_difficulty",enabled}}}};
+        check(Read(legacy)==Read({}) && !Merge(legacy,Read(legacy))["enhancements"].as_table()->contains("improved_difficulty"),
+              "Legacy difficulty toggles must be ignored and removed when saving preferences");
+    }
     check(Merge({}, enhanced)["enhancements"]["scorpion_unfiltered"].value_or(false),
           "The Scorpion enhancement must survive configuration load and save");
     check(Read({}).restore_dialogue && Merge({}, Read({}))["enhancements"]["restore_dialogue"].value_or(false),
@@ -52,6 +66,17 @@ int main() {
     }
     check(!config.bloom_effect, "Settings without a Bloom preference must load with the effect disabled");
     const auto new_settings = Read({});
+    const auto default_bindings = Merge({}, new_settings);
+    check(default_bindings["controller"]["bindings"]["camera_recenter"].value_or(std::string{}) == "leftstick" &&
+          default_bindings["keyboard"]["bindings"]["camera_recenter"][0].value_or(0) == 192,
+          "Camera recenter defaults to L3 and the key below Escape");
+    const auto conflicting_legacy = Read(toml::parse("[controller.bindings]\na = 'leftstick'\n[keyboard.bindings]\na = [192, 0]\n"));
+    const auto migrated_bindings = Merge({}, conflicting_legacy);
+    check(migrated_bindings["controller"]["bindings"]["a"].value_or(std::string{}) == "leftstick" &&
+          migrated_bindings["keyboard"]["bindings"]["a"][0].value_or(0) == 192 &&
+          migrated_bindings["controller"]["bindings"]["camera_recenter"].value_or(std::string{}) == "none" &&
+          migrated_bindings["keyboard"]["bindings"]["camera_recenter"][0].value_or(-1) == 0,
+          "New camera shortcuts must not take over pre-existing custom gameplay bindings");
     check(!new_settings.bloom_effect && !Read(Merge({}, new_settings)).bloom_effect,
           "A new configuration must keep Bloom disabled after loading and saving");
     const auto enabled_effect = Read(toml::parse("bloom_effect = true\n"));
@@ -69,7 +94,7 @@ int main() {
     config.language = "fr";
     const auto merged = Merge(table, config);
     check(merged["custom"].value_or(0) == 42, "Saving must preserve unrelated application settings");
-    check(merged["controller"].as_table()->size() == 3 && merged["controller"]["bindings"].as_table()->size() == 24,
+    check(merged["controller"].as_table()->size() == 3 && merged["controller"]["bindings"].as_table()->size() == 25,
           "Saving must keep only supported controller settings and button mappings");
     check(Read(merged) == config && std::abs(config.deadzone - .23) < .0001, "The settings must survive a complete round trip");
     for(const char* mode:{"original","auto","4:3","16:9","16:10","21:9","32:9"}) {

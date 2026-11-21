@@ -1,5 +1,6 @@
 #include "survival_session.h"
 #include "survival_mode.h"
+#include "fighter_selection.h"
 #include "survival_levels.h"
 #include "survival_unlock.h"
 #include "difficulty.h"
@@ -199,7 +200,7 @@ void FoundryPortal(X86Context& ctx) {
     const uint32_t text=encounter==unlock::Encounter::New?PortalNewLabel:
         encounter==unlock::Encounter::PendingSave?PortalPendingLabel:PortalSavedLabel;
     // Host text ID, resolved by 0x16992.
-    Message(ctx,0,text,Frame::Story);
+    ShowStoryNotice(ctx,text);
     LOGI("Foundry Survival portal: %s",encounter==unlock::Encounter::New?"unlocked pending save":
         encounter==unlock::Encounter::PendingSave?"already unlocked, save pending":"already saved globally");
 }
@@ -221,7 +222,7 @@ void ShowRules(X86Context& ctx) {
 void ShowCompletion(X86Context& ctx) {
     StopAnnouncement(ctx);
     const auto paused_before=kernel::G<uint8_t>(WorldPaused);
-    Message(ctx,0,CompleteLabel,Frame::Story);
+    ShowStoryNotice(ctx,CompleteLabel);
     kernel::W32(MessageManager+0x68C,0x40);
     kernel::G<uint8_t>(WorldPaused)=1;
     intro_pause_owned|=!paused_before;
@@ -252,7 +253,7 @@ bool UpdateCompletion(X86Context& ctx) {
 void Start(X86Context& ctx) {
     StopAnnouncement(ctx);
     ReleaseIntroPause();
-    if(!Starting()){ResetSession();return;}
+    if(!fighter_selection::StartingFor(fighter_selection::Purpose::Survival)){ResetSession();return;}
     completion_shown=false;
     active=true;challenge_played=false;level_one_voice=0;
     intro_fade_tick=0;pending_music=0;
@@ -281,6 +282,10 @@ void VoicePlayed(uint32_t sound,uint32_t handle) {
     if(active && rules==RulesStage::Done && !challenge_played && handle &&
        kernel::R32(0x505970)==RoomForLevel(1) && sound==0xD5FEA8B2)
         level_one_voice=handle;
+}
+
+void ShowStoryNotice(X86Context& ctx, uint32_t text) {
+    Message(ctx,0,text,Frame::Story);
 }
 
 void UpdateVoice(X86Context& ctx) {
@@ -424,9 +429,9 @@ bool FilterLevelMessage(uint32_t info) {
 }
 
 X86_EXTERN_FUNC(__imp__sub_000122D4);
-X86_FUNC(sub_000122D4){__imp__sub_000122D4(ctx,base);openshao::survival::Start(ctx);}
+X86_FUNC(sub_000122D4){openshao::fighter_selection::ApplyStartMode();__imp__sub_000122D4(ctx,base);openshao::survival::Start(ctx);openshao::fighter_selection::FinishStartup();}
 X86_EXTERN_FUNC(__imp__sub_00011DB1);
-X86_FUNC(sub_00011DB1){__imp__sub_00011DB1(ctx,base);openshao::survival::Start(ctx);}
+X86_FUNC(sub_00011DB1){openshao::fighter_selection::ApplyStartMode();__imp__sub_00011DB1(ctx,base);openshao::survival::Start(ctx);openshao::fighter_selection::FinishStartup();}
 X86_EXTERN_FUNC(__imp__sub_000164BF);
 X86_FUNC(sub_000164BF){openshao::survival::RoomLoading();__imp__sub_000164BF(ctx,base);openshao::survival::RoomReady(ctx);}
 X86_EXTERN_FUNC(__imp__sub_00012883);

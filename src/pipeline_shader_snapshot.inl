@@ -17,3 +17,14 @@ bool SnapshotPipelineShaders(uint32_t vertex, uint32_t pixel, gpu::State& out) {
     }
     return vertex != 0;
 }
+
+void SnapshotPipelinePixelPrograms(openshao::pipelines::PixelPrograms& programs) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    gpu::State state{};
+    const gpu::TexInfo textures[4]{};
+    for (const auto& entry : g_ps) {
+        state.ps = entry.second;
+        auto pixel = gpu::MakePixelKey(state, textures);
+        programs.try_emplace(openshao::pipelines::PixelProgramFingerprint(pixel), pixel);
+    }
+}

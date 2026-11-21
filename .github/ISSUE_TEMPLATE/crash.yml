@@ -7,6 +7,8 @@ body:
     attributes:
       value: |
         If the launcher opens, go to **Support** and select **Generate report**. Select **Report a bug** to fill in the environment. Review the diagnostic ZIP before attaching it.
+
+        You can include multiple modes, screens or locations in one report. Group the details by mode, screen or location.
   - type: textarea
     id: environment
     attributes:
@@ -19,6 +21,8 @@ body:
     id: kind
     attributes:
       label: What happened?
+      description: Select all that happened.
+      multiple: true
       options:
         - The game closed
         - The game stopped responding
@@ -31,6 +35,8 @@ body:
     id: moment
     attributes:
       label: When did it happen?
+      description: Select all situations in which it happened.
+      multiple: true
       options:
         - When starting the game
         - During loading
@@ -45,7 +51,9 @@ body:
   - type: dropdown
     id: mode
     attributes:
-      label: Game mode
+      label: Game modes
+      description: Select all modes covered by this report.
+      multiple: true
       options:
         - Story Mode (Single Player)
         - Story Mode (Ko-op)
@@ -71,23 +79,24 @@ body:
   - type: dropdown
     id: difficulty
     attributes:
-      label: Difficulty
-      description: For Story or Survival.
+      label: Difficulty settings
+      description: Select all affected difficulty settings in Story or Survival.
+      multiple: true
       options:
         - Easy
         - Normal
         - Hard
         - Monk
-  - type: input
+  - type: textarea
     id: location
     attributes:
-      label: In-game location or menu
-      description: Enter the chapter, room, arena, Survival level or menu if relevant.
+      label: In-game locations or menus
+      description: List the chapters, rooms, arenas, Survival levels or menus covered by this report, if relevant.
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
-      description: If it happened once, describe what you were doing right before it happened.
+      description: Group the steps by mode, screen or location. For a one-time failure, describe what you were doing immediately before it happened.
       placeholder: |
         1.
         2.
@@ -97,18 +106,20 @@ body:
   - type: textarea
     id: error
     attributes:
-      label: Error message
-      description: Copy the exact text of any message.
+      label: Error messages
+      description: Copy the exact error messages and identify where each one appeared.
       render: text
   - type: dropdown
     id: frequency
     attributes:
       label: How often does it happen?
+      description: If the frequency varies, describe it for each mode, screen or location in the report.
       options:
         - Every time
         - Often
         - Rarely
         - Once
+        - Varies by mode, screen or location
     validations:
       required: true
   - type: textarea

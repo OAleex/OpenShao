@@ -2,6 +2,7 @@
 #include "launcher.h"
 #include "menu_renderer.h"
 #include "survival_mode.h"
+#include "fighter_selection.h"
 #include "app/app.h"
 #include "core/log.h"
 #include <array>
@@ -26,8 +27,9 @@ void EndScene(X86Context&){}
 bool ReplaceGraphic(X86Context&,uint32_t,uint32_t,uint32_t){return false;}
 }
 namespace openshao::recomp {
-static bool active=false,extra_selected=false;
+static bool active=false,extra_selected=false,returning=false;
 bool Active(){return active;}
+bool MainReturning(){return returning;}
 bool ExtraSelected(){return extra_selected;}
 unsigned Selection(){return 0;}
 unsigned SelectorY(){return 188;}
@@ -35,15 +37,20 @@ bool Graphic(X86Context&,uint32_t,uint32_t,uint32_t,uint32_t){return false;}
 }
 namespace openshao::survival {
 static bool medallion_menu=false;
-static bool setup_popup=false;
 static bool transitioning=false;
-static bool character_selection=false;
-static uint32_t player_mode=0;
 bool MedallionMenu(){return medallion_menu;}
 bool Transitioning(){return transitioning;}
+}
+namespace openshao::fighter_selection {
+static bool setup_popup=false;
+static bool character_selection=false;
+static uint32_t player_mode=0;
+static uint32_t locked_portrait=8;
 bool SetupPopup(){return setup_popup;}
+bool RosterBackdrop(){return setup_popup;}
 bool CharacterSelection(){return character_selection;}
 uint32_t PlayerMode(){return player_mode;}
+bool LockedPortrait(uint32_t slot){return slot==locked_portrait;}
 }
 static std::array<uint8_t,8<<20> memory{};
 static openshao::launcher::Settings settings;
@@ -63,6 +70,7 @@ static bool expanded_red=false;
 static bool tutorial_drawing=false;
 static bool pause_drawing=false;
 static bool cinematic_drawing=false;
+static bool cinematic_inset=false;
 static bool health_drawing=false;
 static bool might_drawing=false;
 static bool might_right=false;
@@ -102,6 +110,7 @@ X86_FUNC(__imp__sub_0011D000){
         fill[i].color=0x7F808080;fill[i].uv=0x12345678;
     }
     if(cinematic_drawing)for(unsigned i=0;i<4;++i) {
+        if(cinematic_inset)fill[i].x+=1.f;
         fill[i].y=i%2?-168.5f:-240.5f;fill[i].color=0x7F000000;
     }
     if(artwork_drawing)for(unsigned i=0;i<4;++i) {
@@ -174,8 +183,7 @@ X86_FUNC(__imp__sub_00152AE0){
     OriginalResult(ctx);
 }
 X86_FUNC(__imp__sub_001EF210){
-    // The retail font clamps authored X to 40 before it emits its glyph quad.
-    // Anchor the submitted quad after that clamp, so ultrawide positions survive.
+    // The retail font clamps X to 40 before emitting a glyph; anchor after that clamp so ultrawide positions survive.
     const auto command=kernel::R32(ctx.esp+4);
     const float x=std::max(40.f,std::bit_cast<float>(kernel::R32(command)))-320;
     const float y=std::bit_cast<float>(kernel::R32(command+4))-240;
@@ -271,8 +279,12 @@ X86_FUNC(__imp__sub_00141BF0){
     OriginalResult(ctx);
 }
 #include "difficulty.h"
+namespace openshao::campaign_moves {void FitReferenceDetails(X86Context& c,uint8_t* b,void(*draw)(X86Context&,uint8_t*)){draw(c,b);}}
 namespace openshao::difficulty {bool SaveListText(X86Context&,uint8_t*,TextCall,void(*)(X86Context&,uint8_t*)){return false;}
 void KillPanel(X86Context& ctx,uint8_t* base,void(*original)(X86Context&,uint8_t*)){original(ctx,base);}}
+namespace openshao::ed_nexus {void DrawPausePageIndicator(X86Context&) {}}
+namespace openshao::photo_mode {bool Active() {return false;} bool DrawingControls() {return false;}}
+namespace openshao::kontent {void HideDemo() {}}
 #include "aspect_hooks.inl"
 X86_FUNC(sub_0012FDE0);
 X86_FUNC(sub_001B2C40);
@@ -284,8 +296,22 @@ static void Check(bool ok,const char* text){if(!ok){std::fprintf(stderr,"FAIL: %
 static bool Near(float a,float b){return std::abs(a-b)<.0001f;}
 static float F32(uint32_t address){return std::bit_cast<float>(kernel::R32(address));}
 int main(){
-    // A retail concept viewer has a 588x480 image and a separate footer.
-    // Project the submitted vertices to pixels rather than duplicating its fit helper.
+    constexpr uint32_t fighter=0x58F8A0+5*0x348,vertex_color=0x63F5E4+0x58;
+    openshao::aspect::animation_scene=fighter;
+    openshao::fighter_selection::locked_portrait=5;
+    kernel::W32(fighter+0x2A0,3);
+    X86Context portrait_ctx{};
+    for(const auto [original,expected]: {std::pair{0xFEFEFEFEu,0xFE000000u},
+                                         std::pair{0xB21E32C8u,0xB21E32C8u}}){
+        kernel::W32(0x63F5E0,0);
+        kernel::W32(vertex_color,original);
+        sub_0013FFB0(portrait_ctx,nullptr);
+        Check(kernel::R32(vertex_color)==expected,"locked fighter stays black with its native focus outline");
+    }
+    kernel::W32(0x63F5E0,0);
+    openshao::aspect::animation_scene=0;
+    openshao::fighter_selection::locked_portrait=8;
+    // A retail concept viewer: 588x480 image plus a separate footer, checked as projected pixels.
     kernel::W32(0x59847C,0x7200);kernel::W32(0x74E4,16);
     kernel::W32(0x5985E4,0);kernel::W32(0x5984B0,0x5000);
     kernel::W32(0x4008,0x5000);artwork_drawing=true;
@@ -340,8 +366,7 @@ int main(){
     Check(tutorial_drawn[0]==-288 && tutorial_drawn[4]==300,
           "the same native image owner keeps its original geometry outside the open viewer");
     artwork_drawing=false;kernel::W32(0x5984B0,0);kernel::W32(0x59847C,0);sprites=0;
-    // The retail campaign bar callback identifies the complete health widget,
-    // independently of its texture, color, current fill and animation position.
+    // The retail bar callback identifies the whole health widget, whatever its texture, color, fill or animation.
     settings.aspect_ratio="16:9";health_drawing=true;
     kernel::W32(0x4008,0x5000);kernel::W32(0x5000+0x1FC,0x12EF5);
     X86Context health;kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
@@ -352,8 +377,7 @@ int main(){
     health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
     Check(expanded_red && Near(tutorial_drawn[1],-450.5f),
           "campaign health stays at the top of a tall Automatic viewport");
-    // Ko-op: each player's pieces follow their own corner; a quad crossing the
-    // center widens by the same amount on both sides (21:9 spreads by 240).
+    // Ko-op: pieces follow their corner; a quad crossing the center widens equally on both sides (21:9 by 240).
     settings.aspect_ratio="21:9";kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,2);
     kernel::W32(0x5000+0x1FC,0x12FFE);
     health={};kernel::W32(health.esp+4,0x4000);sub_0011D000(health,nullptr);
@@ -389,8 +413,7 @@ int main(){
         }
     }
     kernel::W32(0x5000+0x1FC,0);health_drawing=false;sprites=0;
-    // The fill, target marker and input glyph use the meter callbacks. The
-    // three frame pieces have a separate callback for each player.
+    // Fill, marker and glyph use the meter callbacks; the three frame pieces have one callback per player.
     might_drawing=true;
     for(const auto [mode,shift]:{std::pair{"original",0.f},std::pair{"16:9",320.f/3},std::pair{"16:10",64.f},
                                  std::pair{"21:9",240.f},std::pair{"32:9",1600.f/3},std::pair{"auto",0.f}}) {
@@ -458,6 +481,13 @@ int main(){
               Near(tutorial_drawn[4],320.f/scale.x-.5f) && Near(tutorial_drawn[1],-240.f/scale.y-.5f) &&
               Near(tutorial_drawn[3],-168.f/scale.y-.5f),
               "Enabled cinematic bars fill the viewport width and retain their native animation and height");
+        cinematic_inset=true;cinematic_drawing=true;ctx={};sub_0011D000(ctx,nullptr);cinematic_drawing=false;cinematic_inset=false;
+        Check(Near(tutorial_drawn[0],-320.f/scale.x-.5f) && Near(tutorial_drawn[4],320.f/scale.x-.5f) &&
+              Near(tutorial_drawn[1],-240.f/scale.y-.5f) && Near(tutorial_drawn[3],-168.f/scale.y-.5f),
+              "Cinematic masks with the native one-pixel inset cover both viewport edges without shifting vertical animation");
+        const auto visible=sprites;
+        settings.cinematic_bars=false;ctx={};sub_0011D000(ctx,nullptr);
+        Check(sprites==visible,"Disabling bars takes effect on the next draw of an already-created cinematic mask");
         settings=openshao::launcher::Read({});
     }
     settings.aspect_ratio="16:9";kernel::W32(0x63F5E0,1);kernel::W32(0x63F5E4+0x10,0x3F800000);
@@ -482,8 +512,7 @@ int main(){
     Check(!openshao::menu::ViewportArrow(1),"arrow clipping exemptions are cleared with the polygon queue");
     float world[2]={-.5f,-.5f};openshao::aspect::CorrectUiVertices(world,1,8);
     Check(world[0]==-.5f && world[1]==-.5f,"unscoped world and post-processing vertices remain unchanged");
-    // The engine's immediate rectangle queue includes the loading fill. Its
-    // fitted border is a separate screen sprite, so both must use one canvas.
+    // The loading fill (rectangle queue) and its border (screen sprite) must share one canvas.
     const float rect[4]={168,328,380,396};
     std::memcpy(kernel::HostPtr(0x7104),rect,16);
     ctx={};ctx.ecx=0x7100;sub_0012FDE0(ctx,nullptr);
@@ -505,8 +534,7 @@ int main(){
         Check(!openshao::aspect::ExpandViewportTint(tint.data(),4,20),"colored sprites are not mistaken for black viewport tints");
         tint=authored;tint[2].x=80;
         Check(!openshao::aspect::ExpandViewportTint(tint.data(),4,20),"partial screen-sprite widgets retain fitted canvas clipping");
-        // Retail transition masks use an oversized 1024x1024 sprite instead
-        // of the pause menu's exact 640x480 rectangle.
+        // Retail transition masks use a 1024x1024 sprite, not the pause menu's 640x480 rectangle.
         tint=authored;
         for(unsigned i=0;i<4;++i) {
             tint[i].x=i<2?-512.f:512.f;tint[i].y=i%2?528.f:-496.f;
@@ -537,8 +565,7 @@ int main(){
     kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x593A40;sub_001B2C40(ctx,nullptr);
     Check(Near(F32(0x63F5F4),-.5f) && Near(F32(0x63F5F8),-80.5f) && Near(F32(0x63F604),639.5f) && !openshao::aspect::flash_polygons[0],
           "the native sky animation fills widescreen with proportional cover scaling");
-    // These are the retail scene instances used by character selection,
-    // Options, Kontent and save selection; their text is drawn separately.
+    // Retail scenes of character select, Options, Kontent and save select; their text is drawn separately.
     for(const uint32_t background:{0x58E4F0u,0x591628u,0x58F210u}) {
         kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=background;sub_001B2C40(ctx,nullptr);
         Check(Near(F32(0x63F5F4),-.5f) && Near(F32(0x63F5F8),-80.5f) && !openshao::aspect::flash_polygons[0],
@@ -556,12 +583,11 @@ int main(){
         Check(Near(F32(0x63F5F4),79.5f) && Near(F32(0x63F5F8),-.5f) && openshao::aspect::flash_polygons[0],
               "map, selector, character art and gauge retain proportional interface fitting");
     }
-    // Retail animation-library entries identify the blurred scenery and its
-    // foreground scenery layer independently of the menu's fitted text.
+    // Animation-library entries identify the blurred and foreground scenery apart from the fitted text.
     kernel::W32(0x7600+0x2E8,0x7A00);kernel::W32(0x7A08,5);kernel::W32(0x7A0C,0x7B00);
     kernel::W32(0x7B48,0x001C000D);
     for(const uint32_t resource:{0x6280E35Fu,0xC46465E6u,0x9587CD64u,0x14BA29FAu,
-                                 0xAB8EFAE9u,0xFEE6AC1Fu,0xB3940E03u,0x137124EAu,0x2BD63191u,
+                                 0xAB8EFAE9u,0xFEE6AC1Fu,0x5E21FDB6u,0xB3940E03u,0x137124EAu,0x2BD63191u,
                                  0x25055CA7u,0xA3DF797Du}) {
         kernel::W32(0x7B4C,resource);
         struct Sample {const char* mode;float left,top,right;};
@@ -583,8 +609,7 @@ int main(){
     kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x7600;kernel::W32(ctx.esp+12,0x001C000D);sub_001B2C40(ctx,nullptr);
     Check(Near(F32(0x63F5F4),79.5f) && Near(F32(0x63F5F8),-.5f) && openshao::aspect::flash_polygons[0],
           "other textures in the same animated menu retain their fitted layout");
-    // Gallery margins must keep the native texel density, including when
-    // automatic output changes orientation. Frame slots stay on one canvas.
+    // Gallery margins keep native texel density in either orientation; frame slots stay on one canvas.
     kernel::W32(0x58F210+0x2E8,0x7A00);kernel::W32(0x7B4C,0x3BF25039);gallery_mesh=true;
     struct GallerySample {const char* mode;unsigned width,height;};
     for(const auto sample:{GallerySample{"original",1280,720},{"16:9",1280,720},{"16:10",1280,720},
@@ -596,8 +621,7 @@ int main(){
         const auto scale=openshao::aspect::CanvasScale(openshao::aspect::Current());
         const uint32_t count=kernel::R32(0x63F5E0);
         Check(count>=2 && count<=512 && count%2==0,"gallery output fits the native polygon queue");
-        // Each triangle edge must sample the same number of authored pixels
-        // per display pixel. Stretching only the borders fails this condition.
+        // Every edge must sample the same authored pixels per display pixel; stretching only borders fails.
         for(unsigned i=0;i<count;++i) {
             const uint32_t record=0x63F5E4+i*0x6C;
             for(unsigned v=1;v<3;++v) {
@@ -643,8 +667,7 @@ int main(){
                   "decorative repetitions render without the fitted-canvas scissor");
         }
         Check(Near(left_edge,-.5f) && Near(right_edge,edge),"partial outer tiles cover the complete viewport without gaps");
-        // Capacity is preflighted: exactly enough slots succeeds; one fewer
-        // leaves every adjacent queue record untouched and uses the safe fit.
+        // Preflight: exact capacity succeeds; one slot short leaves the queue untouched and uses the safe fit.
         const auto first=512-count;
         kernel::W32(0x63F5E0,first);ctx={};ctx.ecx=0x58F210;kernel::W32(ctx.esp+12,0x001C000D);
         sub_001B2C40(ctx,nullptr);
@@ -668,8 +691,7 @@ int main(){
     Check(kernel::R32(0x63F5E0)>2 && Near(F32(0x63F5E4+0x10),79.5f) && Near(F32(0x63F5E4+0x14),-.5f) &&
           !openshao::aspect::flash_polygons[0],
           "the Level Select wall keeps its 4:3 size and extends to the viewport with decorative repeats");
-    // The arena-entry snapshot comes from the Level Select control (another
-    // scene) and starts at y=0.047; it extends like the wall.
+    // The arena-entry snapshot (Level Select control, y=0.047) extends like the wall.
     mesh_top=0.046875f;kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598C90);
     kernel::W32(0x63F5E0,0);ctx={};ctx.ecx=0x7600;kernel::W32(ctx.esp+12,0x001C000D);sub_001B2C40(ctx,nullptr);
     Check(kernel::R32(0x63F5E0)>2 && Near(F32(0x63F5E4+0x10),79.5f) && !openshao::aspect::flash_polygons[0],
@@ -703,11 +725,9 @@ int main(){
     Check(expanded_red,"the native solid-fill sprite expands Game Over's red overlay without changing its color");
     ctx={};kernel::W32(0x752C,0);kernel::W32(0x7544,std::bit_cast<uint32_t>(1.f));sub_0011D000(ctx,nullptr);
     Check(!expanded_red,"full-screen textured artwork remains fitted rather than being treated as a solid fill");
-    // Native GUI image factory and screen-sprite pass: a tutorial's blue band ends at its
-    // portrait; only these message-manager image roles may escape fitting.
+    // Only the message manager's band and portrait roles may escape fitting.
     tutorial_drawing=true;
-    // Retail portrait: centered at 551.5, 239 authored pixels wide. Its old
-    // right edge is 31.5 pixels beyond the stage, independently of aspect.
+    // Retail portrait: centered at 551.5, 239 px wide, right edge 31.5 px past the stage.
     kernel::W32(0x5100+0x1D8,0x7E00);kernel::W32(0x7E04,239u|(170u<<16));
     kernel::W32(0x5100+0xC0,std::bit_cast<uint32_t>(551.5f));
     kernel::W32(0x4008,0x5100);kernel::W32(0x4000,0x7500);
@@ -757,8 +777,7 @@ int main(){
     }
     gui_sprite_result=0x5100;kernel::W32(0x4008,0x5100);
     tutorial_drawing=false;
-    // Pausing a message frees its image cache. Later GUI allocations can reuse
-    // those sprite addresses for the pause backdrop, frame and submenu pieces.
+    // Pausing frees the message image cache; pause sprites can reuse those addresses.
     pause_drawing=true;
     for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
         settings.aspect_ratio=mode;
@@ -815,8 +834,7 @@ int main(){
     Check(Near(band[0].y,356.5f) && Near(band[1].y,479.5f) && band[0].uv==0x1234,
           "the tutorial band follows the bottom of a tall viewport with its authored height and atlas coordinates");
 
-    // Exercise the actual native producer -> queue slot -> copied command ->
-    // deferred font hook. A new unanchored command must erase the slot's tag.
+    // Producer -> queue slot -> copied command -> font hook; a new unanchored command clears the tag.
     auto render_queue=[&](uint32_t index=0) {
         X86Context copy;copy.ecx=0x7800;kernel::W32(copy.esp+4,0x7D00);kernel::W32(copy.esp+8,index);
         sub_001EEC70(copy,nullptr);
@@ -857,8 +875,7 @@ int main(){
         Check(Near(prompt_drawn_x,x+(x<320?-1:1)*320.f/3) && !prompt_clipped,"Ko-op labels follow their player's top corner");
     }
     kernel::W32(0x5ACEBC,0);kernel::W32(0x790088,0);
-    // The game's Danger producer sends a foreground and outline through the
-    // deferred font queue, tagged independently for both players.
+    // Danger sends foreground and outline through the font queue, tagged per player.
     kernel::W32(0x5ACEBC,0x790000);
     for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
         settings.aspect_ratio=mode;openshao::aspect::Output(1000,1500);
@@ -899,8 +916,7 @@ int main(){
     kernel::W32(0x7A00,std::bit_cast<uint32_t>(100.f));
     kernel::W32(0x7800,0);QueueFixture();render_queue();
     Check(Near(prompt_drawn_x,100) && prompt_clipped,"ordinary text reusing a health queue slot keeps its original layout and clipping");
-    // Combo praise, count and multiplier glyphs keep their offset from solo health,
-    // including long labels crossing the canvas midpoint.
+    // Combo glyphs keep their offset from solo health, even for long labels crossing the midpoint.
     kernel::W32(0x5ACEBC,0x790000);kernel::W32(0x790088,0);
     for(const auto producer:{sub_000133A0,sub_000149FD,sub_00016267}) {
         for(const auto mode:{"original","16:9","16:10","21:9","32:9","auto"}) {
@@ -986,10 +1002,9 @@ int main(){
     kernel::W32(0x50FB04,640);kernel::W32(0x50FB08,480);sub_00141BF0(ctx,nullptr);
     Check(Near(F32(0x6000),79.5f) && Near(F32(0x6018),559.5f) && kernel::R32(0x6010)==0xCD000004 && ctx.esp==0x1004,
           "movie fitting preserves its source UVs and the original cdecl return context");
-    // The Versus arena-name producer stays silent under the Survival difficulty popup
-    // (its caption overlapped the description at y=345).
+    // The Versus arena name stays hidden under the Survival difficulty popup (it overlapped y=345).
     auto arena_caption=[&](uint32_t caller,bool popup,uint32_t top,uint32_t parent){
-        openshao::survival::setup_popup=popup;
+        openshao::fighter_selection::setup_popup=popup;
         const uint32_t depth=top==0x596810?2:1;
         kernel::W32(0x6C9308,depth);
         kernel::W32(0x6C9308+depth*4,top);
@@ -1012,7 +1027,7 @@ int main(){
           arena_caption(0x45F0D,true,0x596810,0x598430)[0]==1 &&
           arena_caption(0x45F0D,true,0x598430,0)[0]==1,
           "unrelated text, normal Versus and other menus preserve all native centered font draws");
-    openshao::survival::setup_popup=false;
+    openshao::fighter_selection::setup_popup=false;
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,0x598430);
     kernel::W32(0x59843C,0x7200);kernel::W32(0x7200+0x2A0,6);
     kernel::W32(0x592D20+0xC,0);
@@ -1023,11 +1038,11 @@ int main(){
     ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
     Check(kernel::R32(0x592D20+0xC)==0,
           "The native exit movie must not reactivate a selection sparkle over its transition");
-    kernel::W32(0x7200+0x2A0,6);openshao::survival::setup_popup=true;
+    kernel::W32(0x7200+0x2A0,6);openshao::fighter_selection::setup_popup=true;
     ctx={};ctx.ecx=0x598430;sub_001B2C40(ctx,nullptr);
     Check(kernel::R32(0x592D20+0xC)==0,
           "The Survival setup popup must not reactivate the underlying main-menu sparkle");
-    openshao::survival::setup_popup=false;
+    openshao::fighter_selection::setup_popup=false;
     for(const auto aspect:{4.f/3,16.f/9,16.f/10,21.f/9,32.f/9,3.f/2})for(unsigned pal=0;pal<2;++pal)for(unsigned row=0;row<10;++row) {
         settings.aspect_ratio="auto";openshao::aspect::Output(unsigned(aspect*480),480);
         kernel::W32(0x598468,row);kernel::W32(0x4DF4DC,28);kernel::W32(0x5CE864,pal);
@@ -1038,9 +1053,50 @@ int main(){
         Check(selector_argument_y==133+pal*10+visual*(step-6) && kernel::R32(0x1014)==original_y && ctx.esp==0x101C,
               "all ten main-menu sparkles must follow the compact visual rows and restore the guest argument");
     }
+    kernel::W32(0x59843C,0x7200);kernel::W32(0x4DF4DC,28);kernel::W32(0x5CE864,0);
+    for(unsigned row:{6u,7u,8u}) {
+        openshao::recomp::active=false;kernel::W32(0x598468,row);
+        kernel::W32(0x7200+0x2A0,6);
+        const uint32_t main_y=155+(row%7)*28;
+        ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,main_y);sub_001B2C40(ctx,nullptr);
+        const auto focused_y=selector_argument_y;
+        openshao::recomp::active=true;kernel::W32(0x7200+0x2A0,15);
+        for(uint32_t movie_y:{main_y,main_y-30,main_y-70}) {
+            ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,movie_y);sub_001B2C40(ctx,nullptr);
+            Check(selector_argument_y==focused_y && kernel::R32(0x1014)==movie_y && ctx.esp==0x101C,
+                  "Main's custom exit keeps its last focused white sparkle instead of jumping to Options or custom Display");
+        }
+        openshao::recomp::returning=true;kernel::W32(0x7200+0x2A0,16);
+        for(uint32_t movie_y:{main_y-70,main_y-40,main_y}) {
+            ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,movie_y);sub_001B2C40(ctx,nullptr);
+            Check(selector_argument_y==focused_y && kernel::R32(0x1014)==movie_y,
+                  "Returning from Konfigure must keep the sparkle on its synthetic Main row during clip16");
+        }
+        openshao::recomp::active=false;kernel::W32(0x7200+0x2A0,6);
+        kernel::W32(0x7200+0x340,0);
+        for(uint32_t movie_y:{main_y-70,main_y-40,main_y}) {
+            ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,movie_y);sub_001B2C40(ctx,nullptr);
+            Check(selector_argument_y==focused_y,
+                  "Main's unfinished focus movie must not leave the returned sparkle at the top of the menu");
+        }
+        kernel::W32(0x7200+0x340,1);
+        ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,main_y);sub_001B2C40(ctx,nullptr);
+        Check(selector_argument_y==focused_y,
+              "The completed Main focus clip must join the last selected sparkle position without a jump");
+        openshao::recomp::returning=false;
+    }
+    openshao::recomp::active=true;kernel::W32(0x6C930C,0x5985E8);
+    ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,300);sub_001B2C40(ctx,nullptr);
+    Check(selector_argument_y==openshao::recomp::SelectorY() && kernel::R32(0x1014)==300,
+          "Only the actual custom Options scene moves the sparkle to the settings selection");
+    openshao::recomp::active=false;kernel::W32(0x6C930C,0x598430);
+    kernel::W32(0x598468,4);kernel::W32(0x7200+0x2A0,15);
+    ctx={};ctx.ecx=0x592D20;kernel::W32(ctx.esp+20,200);sub_001B2C40(ctx,nullptr);
+    Check(selector_argument_y==200+28-36+int(openshao::menu::MainListAdjustment(5)),
+          "Retail Options keeps its native transitional sparkle position");
+    kernel::W32(0x7200+0x2A0,6);
     openshao::survival::medallion_menu=true;kernel::W32(0x6C930C,0x598430);
-    // The Graphic mock returns false: test both the unfiltered native batch and the
-    // filtered composition without an aspect requeue.
+    // Graphic mock returns false: check the native batch and the filtered composition without a requeue.
     const uint32_t saved_main_scene=kernel::R32(0x59843C);
     kernel::W32(0x59843C,0x7600);
     kernel::W32(0x7600+0x2E8,0x7A00);

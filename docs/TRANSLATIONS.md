@@ -1,34 +1,37 @@
-# Offer a fan translation mod
+# Help translate OpenShao
 
-Have you made a fan translation of Shaolin Monks and would like to see it as an OpenShao mod?
-Please get in touch.
+Offer to translate OpenShao into a language that is not yet available.
+The maintainer can contact you to agree on the work and provide the translation materials and instructions.
 
-OpenShao runs the original English, French, German, Spanish and Italian releases. Other languages
-are unofficial fan translation mods, installed as optional [language packs](LANGUAGE_PACKS.md).
-One exists today: the Brazilian Portuguese fan translation, with translated text, fonts and a full
-fan dub ([credits](TRANSLATION_CREDITS.md)). Fan translations are not affiliated with or endorsed
-by the owners of Mortal Kombat, and they never include the game itself.
+## Offer your help
 
-## How to contact
+Open an [Offer translation help issue](https://github.com/OAleex/OpenShao/issues/new?template=fan_translation.yml).
+Select the languages you would like to translate OpenShao into.
+The list excludes languages already available in the game or through published language pack mods.
+If you select **Other**, specify the languages or regional variants in the next field.
+The maintainer can review offers for languages outside the list.
 
-Open a [Fan translation mod issue](https://github.com/OAleex/OpenShao/issues/new?template=fan_translation.yml).
-The form asks for the details below.
+Provide a contact method that the maintainer can use, such as an email address, Discord username or profile that accepts messages.
+The issue is public.
 
-Include:
+## Coordinate the translation
 
-- The language and region, and who worked on it (names or nicknames for the credits).
-- What it covers: menus and in-game text, fonts, subtitles, voices, movies. Say what is finished
-  and what is still in progress.
-- How it was made: the tools used, and whether any part used AI or machine translation.
-- A sample: a few screenshots or a short gameplay clip, and some translated lines.
-- Confirmation that you own the work or have permission from everyone involved to share it.
+Discuss the language, scope and next steps with the maintainer.
+The maintainer can provide the files, explain what needs translation and arrange how to exchange the work.
+The maintainer coordinates review, testing, author credits and publication with the contributors.
 
-## Files
+Follow the project's [rules for game files and private data](../CONTRIBUTING.md#game-files-and-private-data) when sharing materials.
 
-Share screenshots, short clips or download links.
-Send only your own work. Never send game files (the original game, disc images or extracted game
-files) or sensitive data, such as passwords, personal information or other private files.
-A sample is enough for the first contact. Packaging is arranged later, together: mods ship as
-patches that apply to each player's own copy of the game.
+## Launcher text
 
-Nothing is published without your agreement, and every mod credits its authors.
+The launcher text is in `resources/launcher/`, one JSON file for each language.
+The launcher offers the same languages as the game. Add a launcher file when the game has the language.
+
+1. Copy `en.json` and name the copy with the language code, such as `pl.json`.
+2. Set `language` to the code and `name` to the language's own name.
+3. Translate each value in `strings`. Keep each key.
+4. Keep each placeholder in braces, such as `{version}`, without translation.
+5. Use only Latin characters up to U+00FF. The launcher font has no other characters.
+6. Rebuild the executable. The build embeds all files.
+
+The `launcher_text` test checks that each file has all keys and the same placeholders.

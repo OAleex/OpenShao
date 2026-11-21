@@ -35,8 +35,7 @@ void Buttons(unsigned port,uint16_t held,uint16_t pressed,uint16_t repeated) {
     kernel::W16(Input+0x16,repeats);
 }
 }
-// Retail boundaries: the intro returns true on either player's Start or its
-// natural end; the pause predicate does not consume the native input snapshot.
+// Intro returns true on either Start or its end; the pause predicate keeps the input snapshot.
 X86_FUNC(__imp__sub_000140B6) {
     const bool done=natural_completion || (kernel::R16(Input+0x26)&0x800) ||
         (kernel::R16(Input+0xBE)&0x800);
@@ -45,8 +44,7 @@ X86_FUNC(__imp__sub_000140B6) {
 X86_FUNC(__imp__sub_00011104) {
     ctx.eax=0xAABBCC00u|unsigned(native_pause_allowed);ctx.ecx=0x87654321;ctx.esp+=4;
 }
-// Match the generated game's weak imports so the regression also exercises
-// the unfixed retail boundaries before the host hooks are linked.
+// Weak imports like the generated game, so the unfixed retail path is also exercised.
 X86_WEAK_FUNC(sub_000140B6,__imp__sub_000140B6)
 X86_WEAK_FUNC(sub_00011104,__imp__sub_00011104)
 namespace {

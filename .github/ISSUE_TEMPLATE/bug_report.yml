@@ -8,6 +8,8 @@ body:
       value: |
         Use **Report a bug** on the launcher's **Support** page to fill the environment field automatically.
 
+        You can include multiple modes, screens or locations in one report. Group the details by mode, screen or location.
+
         For a crash, freeze or startup failure, use the [crash form](https://github.com/OAleex/OpenShao/issues/new?template=crash.yml).
         To suggest a change, use [New feature](https://github.com/OAleex/OpenShao/issues/new?template=feature_request.yml) or [Quality of life](https://github.com/OAleex/OpenShao/issues/new?template=quality_of_life.yml).
   - type: textarea
@@ -22,6 +24,8 @@ body:
     id: area
     attributes:
       label: Where does it happen?
+      description: Select all modes or screens covered by this report.
+      multiple: true
       options:
         - Story Mode
         - Survival Mode
@@ -39,6 +43,8 @@ body:
     id: players
     attributes:
       label: Players
+      description: Select all ways you played when the problem occurred.
+      multiple: true
       options:
         - Single Player
         - Ko-op
@@ -66,23 +72,24 @@ body:
   - type: dropdown
     id: difficulty
     attributes:
-      label: Difficulty
-      description: For Story or Survival.
+      label: Difficulty settings
+      description: Select all affected difficulty settings in Story or Survival.
+      multiple: true
       options:
         - Easy
         - Normal
         - Hard
         - Monk
-  - type: input
+  - type: textarea
     id: location
     attributes:
-      label: In-game location
-      description: Enter the chapter, room, arena or Survival level if relevant.
+      label: In-game locations or menus
+      description: List the chapters, rooms, arenas, Survival levels or menus covered by this report, if relevant.
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
-      description: List each action from a save or from the main menu.
+      description: List each action from a save or the main menu. Group the steps by mode, screen or location when they differ.
       placeholder: |
         1.
         2.
@@ -93,24 +100,27 @@ body:
     id: expected
     attributes:
       label: Expected behavior
-      description: Describe what you expected OpenShao to do.
+      description: Describe what you expected in each affected mode, screen or location.
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
       label: Actual behavior
+      description: Describe what happened in each affected mode, screen or location.
     validations:
       required: true
   - type: dropdown
     id: frequency
     attributes:
       label: How often does it happen?
+      description: If the frequency varies, describe it for each mode, screen or location in the report.
       options:
         - Every time
         - Often
         - Rarely
         - Once
+        - Varies by mode, screen or location
     validations:
       required: true
   - type: textarea

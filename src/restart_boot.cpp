@@ -1,6 +1,7 @@
 #include "restart.h"
 #include "kernel/kernel.h"
 #include <atomic>
+#include <cstring>
 #include <string_view>
 
 namespace openshao::restart {
@@ -22,11 +23,11 @@ X86_FUNC(sub_00128DE0) {
     if(openshao::restart::Resuming() && startup) {
         LOGR("Language restart: skipped startup movie %s",name.c_str());
         // The retail movie wrapper treats four as normal end-of-playback. Its caller cleans the arguments.
-        kernel::Return(ctx,4,0);return;
-    }
-    __imp__sub_00128DE0(ctx,base);
+        kernel::Return(ctx,4,0);
+    } else __imp__sub_00128DE0(ctx,base);
     if(startup) {
-        // Give the logo the saved brightness, as Press START does.
+        // Give the logo the saved brightness, as Press START does. A language restart skips the movies but
+        // still shows the loading screen before the profile loads, so it gets the preference too.
         const auto saved=ctx;
         kernel::CallGuest(ctx,0x123A50,{kernel::R32(0x4DF5C0)});
         ctx=saved;
@@ -43,6 +44,13 @@ X86_FUNC(sub_00013391) {
     kernel::W32(0x514738,previous);
     const auto saved=ctx;
     kernel::CallGuest(ctx,0x146C9,{});
+    ctx=saved;
+    // Match the title's 0x198-word options snapshot so native Cancel can restore the loaded profile.
+    std::memcpy(kernel::HostPtr(0x4E5780),kernel::HostPtr(0x4DF5C0),0x660);
+    // The title also initializes the calibration draft and applies the loaded brightness.
+    const auto brightness=kernel::R32(0x4DF5C0);
+    kernel::W32(0x598308,brightness);
+    kernel::CallGuest(ctx,0x123A50,{brightness});
     ctx=saved;
     LOGR("Language restart: native profile initialized; save_space_ready=%u",kernel::G<uint8_t>(0x59E5F4));
     openshao::restart::MainMenuReady();

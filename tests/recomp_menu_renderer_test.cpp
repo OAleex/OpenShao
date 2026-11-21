@@ -163,6 +163,45 @@ int main() {
     check(icon_ids.empty() && icons.size()==1 && icons[0].args[0]==250 && icons[0].args[1]==410 && icons[0].args[2]==0x60 && icons[0].args[3]==2 &&
           std::string(static_cast<const char*>(kernel::HostPtr(icons[0].args[4])))=="<>",
         "The adjustment hint must draw the exact native gallery direction glyph through the icon font instead of keyboard direction words");
+    icons.clear();icon_ids.clear();NativeButton(ctx,250,410,Button::Navigate);
+    check(icon_ids.empty() && icons.size()==1 && icons[0].args[2]==0x60 && icons[0].args[3]==2 &&
+          std::string(static_cast<const char*>(kernel::HostPtr(icons[0].args[4])))=="{/}",
+          "Navigation must use the original Up/Down icon-font sequence");
+    // Give the boundary fixture the one-glyph strings returned by the retail button catalog.
+    for(const uint32_t id:{0x5B2u,0x5B3u,0x5B5u})std::memcpy(kernel::HostPtr(0x700000+id*4),"=",2);
+    for(const auto* locale:{"en","fr","de","es","it","pt-BR"}) {
+        settings.language=locale;
+        const auto text=[&](const char* key){return std::string(Catalog::Builtin().Get(locale,key));};
+        for(const bool restart:{false,true})for(size_t count=1;count<=4;++count) {
+            const std::array<FooterHint,4> hints{{
+                {Button::Back,text("footer.back")},{Button::Navigate,text("footer.navigate")},
+                {Button::Adjust,text("settings.adjust_hint")},
+                {restart?Button::Accept:Button::Preview,text(restart?"settings.apply_changes":"settings.listen_hint")}
+            }};
+            icons.clear();draws.clear();NativeFooter(ctx,410,std::span(hints).first(count));
+            check(icons.size()==count && draws.size()==count*2,"Every available footer action must render its native icon and complete caption");
+            float previous_right=37;
+            for(size_t i=0;i<count && i<icons.size() && i*2+1<draws.size();++i) {
+                const auto& icon=icons[i];const auto& caption=draws[i*2+1];
+                const float icon_x=float(icon.args[0]),caption_x=std::bit_cast<float>(caption.args[0]);
+                const auto rendered=std::string(static_cast<const char*>(kernel::HostPtr(caption.args[3])));
+                const float scale=std::bit_cast<float>(caption.args[5]);
+                const float icon_width=float(std::strlen(static_cast<const char*>(kernel::HostPtr(icon.args[4])))*14);
+                const float caption_right=caption_x+float(rendered.size())*14*scale;
+                check(rendered==EncodeNative(hints[i].text,std::string_view(locale)=="pt-BR"),"Localized footer captions must fit without shortening their strings");
+                check(icon_x>=55 && icon_x>=previous_right+17 && caption_x>=icon_x+icon_width+5 && caption_right<=608.05f,
+                      "Footer groups must stay inside the menu canvas with clear gaps between icons and captions");
+                check(scale>0 && scale<=.90001f && icon.args[1]==410 && std::bit_cast<float>(caption.args[1])==410,
+                      "Footer captions must retain their common baseline and fit at or below their preferred size");
+                check(std::abs(scale-std::bit_cast<float>(draws[1].args[5]))<.00001f,
+                      "Long actions must share the footer's caption scale instead of shrinking alone to tiny text");
+                previous_right=caption_right;
+            }
+            check(ctx.esp==0x3000 && ctx.eax==123 && ctx.ecx==456,"Measuring and drawing a complete footer must preserve guest registers");
+            if(count==1 && !draws.empty())check(std::abs(std::bit_cast<float>(draws.back().args[5])-.9f)<.00001f,
+                "Short footer captions must retain their preferred size when space is available");
+        }
+    }
     check(MainHighlight(6,6)==5 && MainHighlight(15,6)==4 && MainHighlight(17,5)==5 && MainHighlight(8,0)==0 && MainHighlight(19,6)==5,
         "Main-menu clip states must identify the authored highlight during selection, exit, return and attract transitions");
     for(const auto* locale:openshao::launcher::languages) {

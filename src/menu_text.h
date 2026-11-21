@@ -15,6 +15,8 @@ public:
     std::string_view Get(std::string_view locale,std::string_view id) const;
     std::string_view Graphic(uint32_t crc) const;
 };
+// Resolves catalog captions and keyboard names used by both settings menus.
+std::string Caption(std::string_view locale,std::string_view key);
 std::string EncodeNative(std::string_view utf8,bool translated_font,size_t limit=95);
 std::string EncodeNativeMultiline(std::string_view utf8,bool translated_font,size_t limit=127);
 float FitScale(float width,float preferred,float available);

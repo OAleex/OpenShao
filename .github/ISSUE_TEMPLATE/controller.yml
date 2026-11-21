@@ -1,0 +1,96 @@
+name: Controller, keyboard or mouse problem
+description: Controller not detected, wrong buttons, vibration, stick or second-player problems, keyboard or mouse input.
+title: "[Input] "
+labels: ["input", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You can include several devices or modes in one report. Group the details by device.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Paste the environment copied by **Report a bug** on the launcher's Support page. Otherwise, enter your OpenShao version and operating system.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Problem type
+      multiple: true
+      options:
+        - Controller not detected
+        - Controller detected late or lost after reconnecting
+        - Wrong buttons or mapping
+        - Button prompts show the wrong controller
+        - No vibration or weak vibration
+        - Stick drift, deadzone or camera movement
+        - Second player controller (Ko-op or Versus)
+        - Keyboard input
+        - Mouse input
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Devices
+      description: Controller brand and model (for example Xbox 360, Xbox Series, DualShock 4, DualSense, Switch Pro, generic), and which player uses each one.
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      multiple: true
+      options:
+        - USB cable
+        - Bluetooth
+        - Wireless adapter or receiver
+        - Through Steam Input
+        - Through DS4Windows, DSX or another remapping tool
+  - type: dropdown
+    id: modes
+    attributes:
+      label: Where it happens
+      multiple: true
+      options:
+        - Launcher
+        - Menus
+        - Solo
+        - Ko-op
+        - Versus
+        - Survival
+        - Pause menu
+  - type: dropdown
+    id: vibration
+    attributes:
+      label: Vibration setting
+      description: The setting in Konfigure Recompilation > Controls.
+      options:
+        - "On"
+        - "Off"
+        - Not relevant
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe what happens, what you expected and the steps to reproduce it, such as connecting the controller before or after starting the game.
+    validations:
+      required: true
+  - type: textarea
+    id: mappings
+    attributes:
+      label: Custom mappings
+      description: List any buttons, keys or mouse actions you changed, if relevant.
+  - type: textarea
+    id: mods
+    attributes:
+      label: Enabled mods and language packs
+      description: List relevant mods if you did not attach a diagnostic report.
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Recording and diagnostic report
+      description: Attach a short recording or a reviewed diagnostic ZIP from the launcher's Support page if available.

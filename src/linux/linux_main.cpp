@@ -32,6 +32,7 @@
 #include "linux/linux_platform.h"
 #include "linux/virtual_keys.h"
 #include "performance_overlay.h"
+#include "photo_mode.h"
 #include "runtime_paths.h"
 #include "support_report.h"
 #include "restart.h"
@@ -251,6 +252,10 @@ void HandleEvent(const SDL_Event& e, bool& running) {
         const unsigned key = linux_input::VirtualKey(e.key.scancode);
         if (key == VK_F9) {
             performance::Message(down ? 0x100 : 0x101, 0x78, e.key.repeat ? intptr_t(1) << 30 : 0);
+            return;
+        }
+        if (key == VK_F12) {
+            photo_mode::Message(down ? 0x100 : 0x101, 0x7B, e.key.repeat ? intptr_t(1) << 30 : 0);
             return;
         }
         if (key == VK_F10) {

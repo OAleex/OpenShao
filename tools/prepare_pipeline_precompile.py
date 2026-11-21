@@ -165,7 +165,8 @@ def adapt_d3d8(d3d, replace_once):
     """Programs the title creates while loading assets release the recipes that use them."""
     # After the platform headers the adaptation puts first.
     d3d = replace_once(d3d, '#include "platform_compat.h"\n#include <cstdint>\n',
-        '#include "platform_compat.h"\n#include <cstdint>\n#include "pipeline_precompile.h"\n#include "pipeline_assets.h"\n')
+        '#include "platform_compat.h"\n#include <cstdint>\n#include "pipeline_precompile.h"\n#include "pipeline_assets.h"\n'
+        '#include "pipeline_catalog.h"\n')
     d3d = replace_once(d3d, 'std::recursive_mutex& Lock() { return g_lock; }',
         'std::recursive_mutex& Lock() { return g_lock; }\n#include "pipeline_shader_snapshot.inl"')
     d3d = replace_once(d3d,

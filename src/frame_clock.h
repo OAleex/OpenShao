@@ -6,7 +6,8 @@ namespace openshao::frames {
 // Guest simulation uses 60 steps per second, independently of the output cadence.
 class Clock {
 public:
-    unsigned Take(int64_t now) {
+    // Steps beyond limit are dropped, so a late output slows gameplay down instead of bursting updates.
+    unsigned Take(int64_t now,unsigned limit=8) {
         if(!started_ || now<last_ || now-last_>250000000) {
             started_=true;origin_=last_=now;steps_=1;alpha_=0;++epoch_;return 1;
         }
@@ -15,8 +16,8 @@ public:
         alpha_=double(elapsed*60%1000000000ull)/1000000000.;
         const auto expected=elapsed*60/1000000000ull+1;
         if(expected<=steps_)return 0;
-        const auto count=unsigned(std::min<uint64_t>(8,expected-steps_));
-        steps_+=count;return count;
+        const auto count=unsigned(std::min<uint64_t>(std::max(1u,limit),expected-steps_));
+        steps_=expected;return count;
     }
     double Alpha()const{return alpha_;}
     uint64_t Epoch()const{return epoch_;}

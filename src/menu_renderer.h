@@ -1,6 +1,8 @@
 #pragma once
 #include <bitset>
 #include <cstdint>
+#include <span>
+#include <string>
 #include <string_view>
 struct X86Context;
 namespace openshao::menu {
@@ -14,8 +16,10 @@ inline constexpr float MainOrnamentOffset=-2;
 inline constexpr float MainOrnamentExtension=40;
 inline constexpr unsigned MainVisualRow(unsigned row){return row==MainGameModeRow?3:row>=3?row+1:row;}
 inline constexpr float MainListAdjustment(unsigned visual_row){return 14.f-6.f*visual_row;}
-enum class Button {Accept,Back,Adjust,Preview};
+enum class Button {Accept,Back,Adjust,Preview,Navigate,X,Y,LeftStick,RightStick,Triggers,Shoulders,None};
+struct FooterHint {Button button;std::string text;};
 void NativeButton(X86Context& ctx,int x,int y,Button button);
+void NativeFooter(X86Context& ctx,int y,std::span<const FooterHint> hints);
 void MainControllerNotice(X86Context& ctx,uint32_t text,unsigned alpha,float scale);
 // Replaces one of Main's first rows for this scene, keeping its native motion and fade.
 void OverrideMainRow(unsigned row,std::string_view text,unsigned max_alpha=MainSelectedAlpha);

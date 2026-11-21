@@ -45,6 +45,8 @@
 #include "pipeline_precompile.h"
 #include "pipeline_assets.h"
 #include "pipeline_source_cache.h"
+#include "photo_mode.h"
+#include "photo_mode_effects.h"
 #include "raster_compat.h"
 #include "runtime_paths.h"
 #include "sfd_filter_compat.h"
@@ -550,7 +552,11 @@ public:
     void SyncLate(uint32_t data) override;
     bool DeliverLate(uint32_t data) override;
     void RecordLate(uint32_t data) override;
-    void Flush() override { Submit(true); }
+    // the GPU is idle after it: every report asked for so far is written, as a title waiting on one expects
+    void Flush() override {
+        Submit(true);
+        DeliverReports();
+    }
     void WaitGpuFrame(uint64_t frame) override {
         const uint64_t fence = present_fences_[frame % (kFrames + 1)].load(std::memory_order_acquire);
         if (fence) WaitFence(fence);
@@ -628,7 +634,7 @@ private:
     void FillTextureConstants(const State& s, const DrawTextures& stages, DrawConstants& c);
     void FillTexelConstants(int i, const TextureDesc& d, const DrawTextures& stages, DrawConstants& c);
     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages, Bindings& b);
-    void EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, VkSampler out[4]);
+    void EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, bool fixed, VkSampler out[4]);
     VkSampler EnsureSampler(const VkSamplerCreateInfo& ci);
     void SetViewportScissor(const State& s, uint32_t gw);
     void SetBlendFactorStencilRef(const State& s);
@@ -2377,7 +2383,8 @@ VkSampler VulkanBackend::EnsureSampler(const VkSamplerCreateInfo& ci) {
     return smp;
 }
 
-void VulkanBackend::EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, VkSampler out[4]) {
+void VulkanBackend::EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp, bool fixed,
+                                        VkSampler out[4]) {
     uint32_t aniso = app::Get().aniso;
     float max_bias = gpu_props_.limits.maxSamplerLodBias;
     for (int i = 0; i < 4; i++) {
@@ -2400,9 +2407,11 @@ void VulkanBackend::EnsureStageSamplers(const State& s, const DrawTextures& stag
             sd.minFilter = sd.magFilter = VK_FILTER_LINEAR;
             sd.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
         }
-        // Unit coordinates cover one tile; clamp them to avoid wrapping into the opposite edge.
-        sd.addressModeU = Address(clamp && t[kTssAddressU] == kTaddressWrap ? kTaddressClamp : t[kTssAddressU]);
-        sd.addressModeV = Address(clamp && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
+        // Unit coordinates cover one tile; clamp them to avoid wrapping into the opposite edge, unless the fixed
+        // function moves this stage's out of that range with a texture matrix or generates them (upstream 6c63e71)
+        const bool unit = clamp && !(fixed && ((t[kTssTexCoordIndex] >> 16 & 7) || (t[kTssTextureTransformFlags] & 7)));
+        sd.addressModeU = Address(unit && t[kTssAddressU] == kTaddressWrap ? kTaddressClamp : t[kTssAddressU]);
+        sd.addressModeV = Address(unit && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
         sd.addressModeW = Address(t[kTssAddressW]);
         sd.mipLodBias = std::clamp(Bits(t[kTssMipLodBias]), -max_bias, max_bias);
         sd.minLod = float(t[kTssMaxMipLevel]);
@@ -2684,7 +2693,6 @@ void FillTransformConstants(const State& s, GuestExtent size, DrawConstants& c) 
     MatMul(wvp, vpm, full);
     Transpose(full, c.wvp);
     Transpose(wv, c.wv);
-    // normals take the inverse transpose of the upper 3x3
     float n[16] = {};
     InverseTranspose3x3(wv, n);
     Transpose(n, c.wvn);
@@ -2777,7 +2785,8 @@ bool UnitTexcoords(const Assembled& a, const DrawTextures& stages) {
     constexpr uint32_t kSmallDrawVertices = 4096;  // most vertices a small draw has
     if (!a.vertices.empty() || !a.vertex_count || a.vertex_count > kSmallDrawVertices) return false;
     bool any = false;
-    for (int r = 0; r < 16; r++) {
+    constexpr int kPositionRegister = 0;  // D3DVSDE_POSITION; 2D sprites send x, y in pixels as FLOAT2 (upstream b69b4bb)
+    for (int r = kPositionRegister + 1; r < 16; r++) {
         const VertexElement& e = a.elements[size_t(r)];
         if (!(a.regs >> r & 1) || e.format != DXGI_FORMAT_R32G32_FLOAT) continue;
         const VertexBuffer& vb = a.buffers[e.buffer];
@@ -2801,7 +2810,8 @@ void VulkanBackend::SetTextureViewsAndSamplers(const State& s, const Assembled& 
             b.image[i] = dummy_[kind < 4 ? kind : kTex2D]->view;
         }
     }
-    EnsureStageSamplers(s, stages, UnitTexcoords(a, stages), b.sampler);
+    const bool fixed = !a.pretransformed && !((s.vs_handle & 1) && s.vs && !s.vs->program.empty());
+    EnsureStageSamplers(s, stages, UnitTexcoords(a, stages), fixed, b.sampler);
 }
 
 // viewport covers the target, the guest viewport is in the shader; scissor clips to it
@@ -3256,6 +3266,33 @@ void VulkanBackend::BlitFrame(Target& t) {
     float uv[4] = {0, 0, 1, 1};
     SetViewport((w - vw) / 2, (h - vh) / 2, vw, vh);
     SetScissor(0, 0, int32_t(bb_w_), int32_t(bb_h_));
+    // Photo mode presents through its own pass: the options panel backdrop and the chosen effects.
+    openshao::photo_mode::PreviewParams photo_preview;
+    if (openshao::photo_mode::Preview(aspect, photo_preview)) {
+        auto& pso = blit_psos_[0x50484F544FULL ^ uint64_t(swap_format_)];
+        if (!pso) {
+            uint64_t h;
+            PipelineParts p;
+            p.vs = Compile(openshao::photo_mode::PreviewShader(), "vs", vkshader::Stage::Vertex, h);
+            p.ps = Compile(openshao::photo_mode::PreviewShader(), "psmain", vkshader::Stage::Fragment, h);
+            if (p.vs && p.ps) {
+                p.vs_entry = "vs";
+                p.ps_entry = "psmain";
+                p.color = swap_format_;
+                pso = CreatePipeline(p);
+            }
+        }
+        if (pso) {
+            Alloc cb = Upload(256, 256);
+            const float c[8] = {uv[0], uv[1], uv[2], uv[3], gamma_ ? 1.0f : 0.0f, 0, 1, 1};
+            std::memcpy(cb.cpu, c, sizeof(c));
+            std::memcpy(cb.cpu + sizeof(c), &photo_preview, sizeof(photo_preview));
+            VkImageView views[4] = {t.res->view, lut_->view};
+            VkSampler samplers[4] = {blit_samplers_[0], blit_samplers_[1], blit_samplers_[2], blit_samplers_[3]};
+            DrawFullScreen(pso, cb, views, samplers);
+            return;
+        }
+    }
     Blit(*t.res, uv, {.gamma = gamma_, .taps = openshao::sfd::PresentationTaps(), .rtv = swap_format_});
 }
 
@@ -3373,6 +3410,13 @@ void VulkanBackend::Present(const Surface& front) {
     Target* t = EnsureTarget(front, false);
     if (t && LatchCpuWrite(*t)) UploadTarget(*t, front);
     if(capture && t)CaptureFrame(*t);
+    // Photo mode copies the game frame at render size, before the window letterbox and the overlay are drawn.
+    if(t && openshao::photo_mode::ShotRequested()) {
+        std::vector<uint8_t> photo;
+        const ImageP down=Shrink(*t->res,t->w,t->h,{.mul=t->range});
+        if(!down || !ReadBack(*down,t->w,t->h,photo))photo.clear();
+        openshao::photo_mode::SaveShot(std::move(photo),t->w,t->h,openshao::aspect::Output(bb_w_,bb_h_));
+    }
     if (ramp_dirty_) UploadGammaRamp();
     Transition(*lut_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 

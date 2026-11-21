@@ -7,6 +7,8 @@ body:
     attributes:
       value: |
         A screenshot helps show a visual problem. A short video helps show stutter or animation problems.
+
+        You can include multiple modes, screens or locations in one report. Group the details by mode, screen or location.
   - type: textarea
     id: environment
     attributes:
@@ -35,12 +37,13 @@ body:
     id: renderers
     attributes:
       label: Does the other renderer show the same problem?
-      description: Windows offers Direct3D 12 and Vulkan on the launcher's Graphics page.
+      description: Windows offers Direct3D 12 and Vulkan on the launcher's Graphics page. Describe any differences between modes or screens below.
       options:
         - It also happens with the other renderer
         - It happens only with the renderer in the environment
         - I did not test the other renderer
         - Not available on my system
+        - Results vary by mode, screen or location
   - type: dropdown
     id: characters
     attributes:
@@ -57,16 +60,16 @@ body:
         - Kitana
         - Reptile
         - Other (modded character)
-  - type: input
+  - type: textarea
     id: location
     attributes:
-      label: In-game location or menu
-      description: Enter the chapter, room, arena, Survival level or menu if relevant.
+      label: In-game locations or menus
+      description: List the chapters, rooms, arenas, Survival levels or menus covered by this report, if relevant.
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: Describe what you see, what you expected and how to reproduce it.
+      description: For each mode, screen or location, describe what you see, what you expected and how to reproduce it.
     validations:
       required: true
   - type: textarea

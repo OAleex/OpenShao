@@ -1,5 +1,6 @@
 #include "strip_orientation.h"
 #include "pipeline_assets.h"
+#include "async_load_guard.h"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -7,15 +8,16 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
-static std::array<uint8_t, 0x10000> memory{};
+static std::array<uint8_t, 0x20000> memory{};
 static uint32_t room = 0xA7;
 static uint32_t load_phase = 0, load_record = 0;
-// The hook's parser/ABI test has no asynchronous compilation work. The actual
-// queue and load gate have their own dependency/completion regression tests.
+// No async compilation here; the queue and load gate have their own tests.
 namespace openshao::pipelines {
 void RoomLoading(uint32_t){}
 void BeginPipelineLoad(){}
+void PrepareCatalogPipelines(uint32_t){}
 void SealPipelineLoad(){}
 bool PipelineLoadPending(){return false;}
 void EndPipelineLoad(){}
@@ -87,6 +89,20 @@ static uint32_t callback_material=0;
 static bool fail_create=false, expect_repair=false;
 static unsigned alpha_adds = 0;
 static float submitted_distance = 0;
+static uint32_t allocator_result = 0, failure_record = 0, failure_bytes = 0, failure_output = 0;
+static unsigned allocations = 0, load_failures = 0;
+namespace mem {
+bool IsCommitted(uint32_t address) { return address >= kUserLow && address != 0xDEAD0000u; }
+}
+namespace openshao::async_load {
+[[noreturn]] void Stop(const char*, uint32_t record, uint32_t requested, uint32_t destination) {
+    ++load_failures; failure_record = record; failure_bytes = requested; failure_output = destination;
+    throw std::runtime_error("expected asset load failure");
+}
+}
+X86_FUNC(__imp__sub_001050A0) {
+    ++allocations;ctx.eax=allocator_result;ctx.esp+=4;
+}
 X86_FUNC(__imp__sub_0017AA40) {
     ++load_calls;callback_material=kernel::R32(0x4500);
     ctx.eax=123;ctx.ecx=0x4321;ctx.esp+=4;
@@ -110,6 +126,43 @@ X86_FUNC(__imp__sub_00131070) {
 #include "strip_orientation_hooks.inl"
 
 int main() {
+    load_phase=0;room=0xA0;load_record=0x4400;
+    kernel::W32(0x1000,0x17AB3A);kernel::W32(0x1008,0x2000);
+    allocator_result=0;
+    try {X86Context failed;sub_001050A0(failed,nullptr);Check(false,"allocation failure must stop before issuing guest I/O");}
+    catch(const std::runtime_error&) {}
+    Check(allocations==1 && load_failures==1 && failure_record==0x4400 && failure_bytes==0x2000 && failure_output==0,
+          "a failed Async_DataLoad allocation is reported at the exact call site");
+    allocator_result=0x20000;
+    X86Context allocated;sub_001050A0(allocated,nullptr);
+    Check(allocated.eax==0x20000 && allocated.esp==0x1004 && allocations==2 && load_failures==1,
+          "successful native allocations preserve the guest ABI");
+    kernel::W32(0x1000,0x123456);allocator_result=0;
+    X86Context unrelated;sub_001050A0(unrelated,nullptr);
+    Check(unrelated.eax==0 && unrelated.esp==0x1004 && load_failures==1,
+          "unrelated original allocation semantics stay untouched");
+    Check(!openshao::async_load::GuestSpan(0,1) &&
+          !openshao::async_load::GuestSpan(0xFFFFFFF0u,0x100) &&
+          !openshao::async_load::CommittedSpan(0xDEAD0000u,0x1000) &&
+          openshao::async_load::CommittedSpan(0x20000,0x2000),
+          "guest load output must be non-null, committed, and free of address wraparound");
+    load_phase=2;load_record=0x14000;kernel::W32(load_record+8,0);kernel::W32(load_record+0x10,0x1000);
+    kernel::W32(load_record+0x30,1);
+    const auto before=load_calls;
+    try {X86Context bad_decode;sub_0017AA40(bad_decode,nullptr);Check(false,"null output must never reach the EWDF decoder");}
+    catch(const std::runtime_error&) {}
+    Check(load_calls==before && load_failures==2 && failure_output==0,
+          "an async output pointer lost after allocation is rejected before decompression");
+    kernel::W32(load_record+8,0xDEAD0000u);
+    try {X86Context uncommitted;sub_0017AA40(uncommitted,nullptr);Check(false,"uncommitted output must not be decompressed");}
+    catch(const std::runtime_error&) {}
+    Check(load_calls==before && load_failures==3 && failure_output==0xDEAD0000u,
+          "uncommitted output is reported before the guest decoder runs");
+    kernel::W32(load_record+8,0x20000);
+    X86Context valid_decode;sub_0017AA40(valid_decode,nullptr);
+    Check(load_calls==before+1 && load_failures==3 && valid_decode.esp==0x1004,
+          "valid compressed assets continue into the original loader without ABI changes");
+    load_phase=0;kernel::W32(load_record+0x30,0);load_calls=0;
     room=0xAA;load_phase=3;load_record=0x4400;
     kernel::W32(0x4408,0x4500);kernel::W32(0x440C,4);kernel::W32(0x4500,0xE1);
     X86Context house_load;sub_0017AA40(house_load,nullptr);

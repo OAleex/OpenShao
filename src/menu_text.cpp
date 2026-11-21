@@ -1,7 +1,10 @@
 #include "menu_text.h"
+#include "input_bindings.h"
 #include "mods/json.h"
 #include "menu_text_data.h"
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <stdexcept>
@@ -20,8 +23,10 @@ Catalog Catalog::Parse(std::string_view text) {
     Catalog catalog;
     for(const auto& [locale,labels]:std::get<mods::Json::Object>(root.At("languages").value))
         for(const auto& [id,label]:std::get<mods::Json::Object>(labels.value)) {
-            // Survival frames (unlock and completion) use the framed multiline format.
-            if(id.starts_with("survival.unlock_") || id=="survival.complete")EncodeNativeMultiline(label.Text(),false,127);
+            // The native story notification supports multiple lines.
+            if(id.starts_with("survival.unlock_") || id=="survival.complete" ||
+               id=="campaign.fatality_compartment" || id=="campaign.ally_fatality_compartment")
+                EncodeNativeMultiline(label.Text(),false,127);
             else EncodeNative(label.Text(),false,id.starts_with("system.")?255:95);
             catalog.languages_[Lower(locale)].emplace(id,label.Text());
         }
@@ -48,6 +53,29 @@ std::string_view Catalog::Get(std::string_view locale,std::string_view id) const
 }
 std::string_view Catalog::Graphic(uint32_t crc) const {
     const auto found=graphics_.find(crc);return found==graphics_.end()?std::string_view{}:found->second;
+}
+std::string Caption(std::string_view locale,std::string_view key) {
+    const auto& catalog=Catalog::Builtin();
+    if(const auto text=catalog.Get(locale,key);!text.empty())return std::string(text);
+    // SDL's numbered paddles replaced the directional names used by the existing catalog.
+    constexpr std::string_view paddle_prefix="source.paddle";
+    constexpr std::array<std::string_view,4> paddle_captions{
+        "source.rightpaddle1","source.leftpaddle1","source.rightpaddle2","source.leftpaddle2"};
+    if(key.size()==paddle_prefix.size()+1 && key.starts_with(paddle_prefix) && key.back()>='1' && key.back()<='4')
+        return std::string(catalog.Get(locale,paddle_captions[key.back()-'1']));
+    if(key.starts_with("key.")) {
+        int code=0;
+        const auto digits=key.substr(4);
+        const auto end=digits.data()+digits.size();
+        const auto parsed=std::from_chars(digits.data(),end,code);
+        if(parsed.ec==std::errc{} && parsed.ptr==end) {
+            auto label=bindings::KeyLabel(code);
+            if(label.starts_with("Numpad "))return std::string(catalog.Get(locale,"key.numpad"))+" "+label.substr(7);
+            if(label.starts_with("Key "))return std::string(catalog.Get(locale,"key.generic"))+" "+std::to_string(code);
+            return label;
+        }
+    }
+    return std::string(key);
 }
 std::string EncodeNative(std::string_view text,bool translated,size_t limit) {
     std::string result;

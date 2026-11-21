@@ -1,8 +1,4 @@
-"""Build the native executable and release package, with optional tests.
-
-Windows uses the selected LLVM toolchain and Visual Studio's CMake.
-Linux uses Clang, CMake and Ninja. --linux also builds the Linux package in WSL.
-"""
+"""Build the native executable and release package (Windows, Linux or WSL), with optional tests."""
 import argparse
 import os
 from pathlib import Path, PureWindowsPath
@@ -12,8 +8,7 @@ import sys
 
 SDK_REVISION = 'f7b13fdbf9560a3b3928aea24e37c789b24408f0'
 
-# Ubuntu and Debian package names. SDL is built from source: without these headers its X11, Wayland and audio
-# back ends are left out and the game cannot open a window or play sound.
+# Ubuntu/Debian packages; without these headers SDL builds with no X11, Wayland or audio.
 LINUX_PACKAGES = ('clang lld cmake ninja-build git python3 pkg-config libx11-dev libxext-dev libxrandr-dev '
                   'libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev '
                   'wayland-protocols libdecor-0-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev '

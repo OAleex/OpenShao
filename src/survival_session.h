@@ -8,6 +8,7 @@ void AnnounceRules(X86Context& ctx);
 void StopAnnouncement(X86Context& ctx);
 void VoicePlayed(uint32_t sound, uint32_t handle);
 void UpdateVoice(X86Context& ctx);
+void ShowStoryNotice(X86Context& ctx, uint32_t text);
 bool ActiveSession();
 // Returns true when the Foundry portal requested Survival 1 (the load is skipped).
 bool InterceptFoundryPortal(X86Context& ctx, uint32_t destination);

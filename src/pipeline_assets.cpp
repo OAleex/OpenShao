@@ -1,4 +1,5 @@
 #include "pipeline_assets.h"
+#include "pipeline_catalog.h"
 #include "pipeline_screen_state.h"
 #include <algorithm>
 #include <array>
@@ -28,6 +29,7 @@ bool trace_recipes = false;
 uint32_t trace_predicted = 0, trace_observed = 0;
 bool trace_catalogued = false;
 bool common_screens_warmed = false, library_screens_warmed = false;
+std::array<bool, 256> completed_catalog_rooms{};
 std::unordered_set<uint64_t> interface_programs;
 uint32_t trace_objects = 0;
 thread_local Batch load_batch = 0;
@@ -129,16 +131,30 @@ void Trace(const Recipe& r, const char* source) {
          Hex(&r.vertex, sizeof(r.vertex)).c_str());
     LOGR("asset recipe %s: pixel=%s", source, Hex(&r.pixel, sizeof(r.pixel)).c_str());
 }
+void NotePrediction(const Recipe& recipe) {
+    std::lock_guard lock(describer_mutex);
+    if (predicted_keys.insert(KeyHash({recipe.key, recipe.key_size})).second && trace_recipes && trace_predicted++ < 1024)
+        Trace(recipe, "predicted");
+}
+
 bool Predict(Batch batch, const PipelineCandidate& candidate, const gpu::State& state,
              std::vector<Recipe>* prepared = nullptr) {
     Recipe recipe{};
     const auto program = state.vs ? std::span<const uint32_t>(state.vs->program) : std::span<const uint32_t>{};
     if (!DescribeCandidate(candidate, recipe) || !Submit(batch, recipe, program)) return false;
     if (prepared) prepared->push_back(recipe);
-    std::lock_guard lock(describer_mutex);
-    if (predicted_keys.insert(KeyHash({recipe.key, recipe.key_size})).second && trace_recipes && trace_predicted++ < 1024)
-        Trace(recipe, "predicted");
+    NotePrediction(recipe);
     return true;
+}
+
+#include "pipeline_catalog_data.inl"
+
+std::span<const CatalogEntry> RoomCatalog(uint64_t layout) {
+    if (layout == kVulkanCatalogLayout) return kVulkanCatalog;
+#ifdef _WIN32
+    if (layout == kD3D12CatalogLayout) return kD3D12Catalog;
+#endif
+    return {};
 }
 
 // Keep pass recipes, not guest addresses, so copies of a model need not re-enumerate.
@@ -495,6 +511,7 @@ void SetCandidateDescriber(CandidateDescriber callback) {
     descriptions.clear();
     description_order.clear();
     prepared_passes.clear(); prepared_order.clear(); prepared_bytes = 0;
+    completed_catalog_rooms.fill(false);
     ++description_generation;
     if (describer) {
         predicted_keys.clear(); observed_keys.clear(); first_ready = first_late = first_missing = 0;
@@ -684,6 +701,51 @@ void CapturePipelineObject(uint32_t object, uint32_t source_type) {
     for (uint32_t i = 0; i < count; ++i) Unit(object, Read(units + i * 4), load_batch, source_type);
     if (temporary) { SealPipelineLoad(); EndPipelineLoad(); }
 }
+void PrepareCatalogPipelines(uint32_t room) {
+    if (!load_batch || room >= completed_catalog_rooms.size() || Status(load_batch).state == BatchState::Disabled) return;
+    uint64_t generation;
+    {
+        std::lock_guard lock(describer_mutex);
+        if (completed_catalog_rooms[room]) return;
+        generation = description_generation;
+    }
+    const auto catalog = RoomCatalog(ActiveRecipeLayout());
+    if (catalog.empty()) return;
+    PixelPrograms programs;
+    d3d::SnapshotPipelinePixelPrograms(programs);
+    const auto room_mask = uint32_t{1} << (room % 32);
+    unsigned submitted = 0, unavailable = 0;
+    bool complete = true;
+    for (const auto& entry : catalog) {
+        if (!(entry.rooms[room / 32] & room_mask)) continue;
+        const auto pixel = programs.find(entry.pixel_program);
+        if (!HasRegisteredProgram(entry.vertex.program) || (entry.pixel_program && pixel == programs.end())) {
+            ++unavailable;
+            complete = false;
+            continue;
+        }
+        Recipe recipe{};
+        recipe.vs_source = entry.vs_source;
+        recipe.ps_source = entry.ps_source;
+        recipe.vertex = entry.vertex;
+        recipe.pixel = entry.pixel;
+        if (entry.pixel_program) RestorePixelProgram(recipe.pixel, pixel->second);
+        recipe.key_size = entry.key_size;
+        std::memcpy(recipe.key, entry.key.data(), entry.key_size);
+        if (Submit(load_batch, recipe)) {
+            NotePrediction(recipe);
+            ++submitted;
+        } else complete = false;
+    }
+    if (complete) {
+        // Successful recipes stay in the precompiler across the room's asset batches.
+        std::lock_guard lock(describer_mutex);
+        if (generation == description_generation) completed_catalog_rooms[room] = true;
+    }
+    if (submitted || unavailable) LOGR("asset pipeline catalog: room %02X, submitted %u, shaders unavailable %u",
+                                       room, submitted, unavailable);
+}
+
 void SealPipelineLoad() { if (load_batch) SealBatch(load_batch); }
 bool PipelineLoadPending() {
     if (!load_batch) return false;

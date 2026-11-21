@@ -1,7 +1,7 @@
 add_library(openshao_audio_effects STATIC src/audio_effect_chain.cpp src/audio_reverb.cpp src/audio_crosstalk.cpp)
 target_include_directories(openshao_audio_effects PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(openshao_audio_effects PRIVATE -O3 -fno-strict-aliasing -fwrapv)
-foreach(audio_check IN ITEMS fixed_point crosstalk reverb effect_chain mix_bins speaker_mix render i3dl2 output)
+foreach(audio_check IN ITEMS fixed_point crosstalk reverb effect_chain mix_bins speaker_mix fold render i3dl2 output)
     add_executable(recomp_audio_${audio_check}_test tests/recomp_audio_${audio_check}_test.cpp)
     target_link_libraries(recomp_audio_${audio_check}_test PRIVATE openshao_audio_effects)
     add_test(NAME recomp_audio_${audio_check} COMMAND recomp_audio_${audio_check}_test)

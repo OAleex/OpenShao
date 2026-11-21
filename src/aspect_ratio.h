@@ -56,8 +56,7 @@ inline Rect FitArtwork(float width,float height,Scale scale) {
     return bounds;
 }
 enum class TutorialSprite {None,Panel,Portrait};
-// TopSplit pushes vertices to their side (only center-crossing quads widen); TopStretch maps the Ko-op bar linearly.
-// KoopComboRight mirrors player one's inset (the retail layout runs past the right edge).
+// TopSplit moves vertices to their side, TopStretch maps the Ko-op bar linearly, KoopComboRight mirrors P1's inset.
 enum class UiAnchor {None,TopLeft,TopRight,BottomLeft,BottomRight,TutorialPrompt,TopSplit,TopStretch,KoopComboRight,EnemyLeft,EnemyRight};
 inline constexpr float KoopComboInset=78;
 inline thread_local UiAnchor sprite_anchor=UiAnchor::None;

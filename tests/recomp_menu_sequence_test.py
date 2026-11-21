@@ -1,8 +1,4 @@
-"""Capture a sequence of original menu frames using only an owned hidden window.
-
-Manual real-disc regression; all runtime data stays beside a private copy of the
-executable. Inspect the resulting images as well as the assertions below.
-"""
+"""Capture original menu frames from an owned hidden window (manual real-disc regression)."""
 import argparse
 import ctypes
 from ctypes import wintypes

@@ -5,6 +5,9 @@ namespace openshao::ed_nexus {
 void FrontendInput(X86Context& ctx, uint8_t* base);
 bool Unlocked();
 bool GameplayPaused();
+// The Select pause shows its root list, with no settings page, capture or Nexus open.
+bool PauseRootShown();
+void DrawPausePageIndicator(X86Context& ctx);
 bool KontentUnlocked();
 float PlayerDamage();  // debug damage multiplier for the players' hits, 1 when off
 // Debug Player 2: the live game mode is Ko-op (state + 0x88 == 1).

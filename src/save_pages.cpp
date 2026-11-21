@@ -120,7 +120,7 @@ std::string GameText(X86Context& ctx, uint32_t id) {
 }
 // Native font glyphs: # and $ are the left and right triggers, = and | are A and B, * is X.
 std::string IndicatorText() {
-    return "#   " + Native("save.page") + " " + std::to_string(book.Shown()) + "/" + std::to_string(PageCount) + "   $";
+    return PageIndicator(Native("save.page"),book.Shown(),PageCount);
 }
 std::string QuestionText(X86Context& ctx) {
     return Native("save.delete_prompt") + "   = " + GameText(ctx, YesText) + "   | " + GameText(ctx, NoText);

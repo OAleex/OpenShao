@@ -1,4 +1,5 @@
 #include "survival_mode.h"
+#include "fighter_selection.h"
 #include "survival_unlock.h"
 #include "survival_session.h"
 #include "difficulty.h"
@@ -23,6 +24,7 @@ openshao::launcher::Settings settings;
 unsigned failures=0,announcements=0,stops=0,native_entries=0,popup_pushes=0,versus_rosters=0,native_mode_entries=0,unexpected_native_entries=0,connected_players=2,controller_notices=0;
 int confirming_source=0;
 uint32_t difficulty_logic_mode=~0u;
+uint32_t startup_mode=~0u;
 bool globally_unlocked=true,kontent_unlocked=false;
 std::vector<std::string> captions;
 void Check(bool value,const char* reason){if(!value){++failures;std::fprintf(stderr,"FAIL: %s\n",reason);}}
@@ -41,6 +43,7 @@ X86_EXTERN_FUNC(sub_0001313E);
 namespace kernel {
 uint8_t* g_base=memory.data();
 uint32_t CallGuest(X86Context& ctx,uint32_t fn,const uint32_t* args,size_t count) {
+    if(fn==0x11DB1 && count==0){startup_mode=R32(0x598468);Return(ctx,77,0);return 77;}
     if(fn==0x1B5070)return connected_players;
     if(fn==0x16992 && count==1 && args[0]==0xDE)return 0x7400;
     if(fn==0x1B4E60){W32(ctx.ecx+0xC,uint32_t(confirming_source));return 0;}
@@ -94,6 +97,7 @@ X86_FUNC(__imp__sub_00015C86){
     kernel::Return(ctx,0,2);
 }
 namespace openshao::difficulty {
+void DrawFighterHint(X86Context&,std::string_view,std::string_view){}
 void Select(X86Context&,Mode){Check(false,"difficulty must keep its original input and selection policy");}
 void DrawPopup(X86Context& ctx,uint8_t*){
     difficulty_logic_mode=kernel::R32(0x598468);
@@ -137,9 +141,47 @@ static void Graphics(){
           !openshao::survival::HideMainCaption("kontent.title"),
           "the Survival pages keep Main's first rows for their options and hide the other Main captions");
 }
+static void SharedSurvivalKoopRoundtrip(){
+    using namespace openshao;
+    survival::Started();
+    SavedUnlocks(0xFF);
+    kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);
+    kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
+    auto ctx=Context(Main,0x4000,0x40);
+    fighter_selection::Begin(ctx, memory.data(),
+        fighter_selection::Purpose::Survival, 1, 1);
+    Check(fighter_selection::CharacterSelection(), "roster starts for Survival");
+    Check(fighter_selection::PlayerMode() == 1, "real mode remains Ko-op");
+    Check(kernel::R32(0x598468) == 2, "portraits use Versus presentation");
+    Check(!fighter_selection::StartingFor(fighter_selection::Purpose::Campaign),
+          "Survival entry never becomes a campaign start");
+    if(!fighter_selection::CharacterSelection())return;
+    Settle();
+    Check(RosterEquals({0,1,2,3,4,5,6,7}),"shared Survival entry retains the saved Versus roster");
+    ctx=Context(Popup);kernel::W32(ctx.esp,0x50381);sub_0001313E(ctx,memory.data());
+    ctx=Context(Popup,0,0x20);
+    Check(fighter_selection::PopupInput(ctx,memory.data()) && fighter_selection::CharacterSelection() &&
+          kernel::R32(0x598468)==2,"shared difficulty Back restores Versus portraits");
+    ctx=Context(Popup);kernel::W32(ctx.esp,0x50381);sub_0001313E(ctx,memory.data());
+    ctx=Context(Popup,0,0x40);
+    Check(fighter_selection::PopupInput(ctx,memory.data()) &&
+          fighter_selection::StartingFor(fighter_selection::Purpose::Survival) &&
+          !fighter_selection::StartingFor(fighter_selection::Purpose::Campaign) &&
+          kernel::R32(Popup+8)==0x11DB1,"shared re-confirmation schedules only native Survival Ko-op startup");
+    Check(kernel::R32(0x598468)==2,"after Accept the roster keeps the Versus portraits until the game starts");
+    // The start hook (survival_session.cpp) hands the real mode to the native callback.
+    fighter_selection::ApplyStartMode();
+    ctx=Context();const auto result=kernel::CallGuest(ctx,kernel::R32(Popup+8),{});
+    Check(result==77 && startup_mode==1,"the dispatched native Ko-op callback sees the real gameplay mode");
+    fighter_selection::FinishStartup();
+    Check(!fighter_selection::StartingFor(fighter_selection::Purpose::Survival) &&
+          !fighter_selection::CharacterSelection() && !fighter_selection::SetupPopup(),
+          "startup releases the shared selector");
+}
 int main(){
     using namespace openshao::survival;
-    settings.language="en";settings.improved_difficulty=true;
+    using namespace openshao::fighter_selection;
+    settings.language="en";
     SavedUnlocks((1u<<0)|(1u<<3)|(1u<<4)|(1u<<6));
     kernel::W32(RetailKontent+0xC,KontentScene);kernel::W32(Main+0xC,MainScene);kernel::W32(Popup+0xC,PopupScene);memory[PopupScene+0x340]=1;
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);memory[0x67C674]=1;
@@ -224,7 +266,7 @@ int main(){
           "with the debug menu's unlock-all Kontent, reentering the roster offers every Versus fighter like Versus");
     kontent_unlocked=false;
     ctx=Context(Popup);kernel::W32(ctx.esp,0x50381);sub_0001313E(ctx,memory.data());
-    Check(!CharacterSelection() && SetupPopup() && kernel::R32(0x598468)==2 && kernel::R32(List+8)==4 && !Starting(),
+    Check(!CharacterSelection() && SetupPopup() && kernel::R32(0x598468)==2 && kernel::R32(List+8)==4 && !StartingFor(Purpose::Survival),
           "native difficulty builder restores the Versus portrait mode immediately even after its own Solo/Ko-op write");
     ctx=Context(Popup);Check(PopupInput(ctx,memory.data()) && kernel::R32(0x598468)==2 && difficulty_logic_mode==2,
           "idle difficulty redraw keeps the Versus background mode for all eight portraits");
@@ -235,10 +277,12 @@ int main(){
     ctx=Context(Popup);kernel::W32(ctx.esp,0x50381);sub_0001313E(ctx,memory.data());
     Check(kernel::R32(0x598468)==2 && SetupPopup(),
           "native difficulty reentry immediately restores all Versus portraits before any popup input tick");
-    ctx=Context(Popup,0,0x40);Check(PopupInput(ctx,memory.data()) && Starting() && kernel::R32(Popup+8)==0x11DB1,"native difficulty Accept schedules Ko-op directly, with no frontend rules popup");
-    Check(kernel::R32(0x598468)==1 && difficulty_logic_mode==1,
-          "only beginning the session restores the real Ko-op gameplay mode");
-    Started();Check(!Starting() && !MedallionMenu(),"startup releases the frontend view");
+    ctx=Context(Popup,0,0x40);Check(PopupInput(ctx,memory.data()) && StartingFor(Purpose::Survival) && kernel::R32(Popup+8)==0x11DB1,"native difficulty Accept schedules Ko-op directly, with no frontend rules popup");
+    Check(kernel::R32(0x598468)==2 && difficulty_logic_mode==1,
+          "Accept starts Ko-op while the roster keeps every Versus portrait on screen");
+    ApplyStartMode();
+    Check(kernel::R32(0x598468)==1,"only beginning the session restores the real Ko-op gameplay mode");
+    FinishStartup();Started();Check(!StartingFor(Purpose::Survival) && !MedallionMenu(),"startup releases the frontend view");
     kernel::W32(0x6C9308,1);kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
     ctx=Context();Open(ctx,memory.data());Settle();Back();
     Check(!MedallionMenu() && Top()==Main && kernel::R32(0x598468)==9 && native_mode_entries==0 &&
@@ -252,28 +296,27 @@ int main(){
                                                          "keyboard Enter confirms Single Player through the full native Versus roster entry");
     Check(kernel::R32(Characters+0x30)==0,"synthetic Enter without a native A edge chooses an actually connected player source");
     Check(kernel::R32(0x8104)==0,"synthetic menu A must not modify the native input buffer after the callback");
-    Started();kernel::W32(0x67C674,0);kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
+    FinishStartup();Started();kernel::W32(0x67C674,0);kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
     ctx=Context();Open(ctx,memory.data());Settle();Accept();Settle();
     confirming_source=-1;Accept();
     Check(CharacterSelection() && kernel::R32(Characters+0x30)==0 && native_entries==4 && native_mode_entries==0,
           "keyboard-only Solo selects P1 even when the retail physical-controller mask is empty");
-    Started();
-    // A different save can unlock the entire retail Versus roster. The
-    // Survival filter must follow those bits rather than freeze a subset.
+    FinishStartup();Started();
+    // Another save can unlock the whole roster; the Survival filter must follow those bits.
     SavedUnlocks(0xFF);
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);
     kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);memory[0x67C674]=1;
     ctx=Context();Open(ctx,memory.data());Settle();Accept();Settle();Accept();Settle();
     Check(CharacterSelection() && RosterEquals({0,1,2,3,4,5,6,7}) && kernel::R32(0x598468)==2,
           "a fully unlocked save keeps every native Versus fighter selectable in Survival");
-    Started();
+    FinishStartup();Started();
     SavedUnlocks((1u<<2)|(1u<<3)|(1u<<4));
     kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);
     kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
     ctx=Context();Open(ctx,memory.data());Settle();Accept();Settle();Accept();Settle();
     Check(CharacterSelection() && RosterEquals({2,3,4}),
           "changing to a partially unlocked save removes fighter options from the next Survival entry");
-    Started();kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);
+    FinishStartup();Started();kernel::W32(0x6C9308,1);kernel::W32(0x6C930C,Main);
     kernel::W32(Main+0x18,0);kernel::W32(Main+0x1C,0);
     globally_unlocked=false;
     const auto old_announcements=announcements,old_entries=native_entries;
@@ -289,5 +332,6 @@ int main(){
     globally_unlocked=true;Input();Accept();Settle();
     Check(announcements==old_announcements+1 && MedallionMenu(),
           "saving a global unlock makes the same menu entry available immediately");
+    SharedSurvivalKoopRoundtrip();
     std::printf("Survival frontend: %u failures\n",failures);return failures?1:0;
 }

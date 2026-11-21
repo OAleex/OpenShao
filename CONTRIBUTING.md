@@ -28,16 +28,18 @@ Keep these mods separate from restorations in the base game. Use the supported m
 The current mod system has limited extensibility.
 The same rules on game files, private data and licensing apply to mod submissions.
 
-## Fan translation mods
+## Translation help
 
-Made a fan translation or fan dub of the game? See [Offer a fan translation mod](docs/TRANSLATIONS.md).
-Use the Fan translation mod issue form. Do not open pull requests with translated game data.
+Want to translate OpenShao into your language?
+See [Help translate OpenShao](docs/TRANSLATIONS.md) and use the Offer translation help issue form.
+The maintainer can then provide the translation materials and instructions.
 
 ## Issues and pull requests
 
 - For a bug, describe what happened, what you expected and how to reproduce it.
   Include the OpenShao version and relevant system details. See the
   [reporting instructions](README.md#how-do-i-report-a-problem).
+  Group the details by mode, screen or location if your report covers several.
 - Keep each PR focused. Explain the problem, the change and how you checked it.
 - Understand every change you submit. Be ready to explain the code and address review feedback.
 - Test the affected behavior. State what you tested and what still needs checking.

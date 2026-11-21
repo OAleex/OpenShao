@@ -28,8 +28,7 @@ namespace openshao { Options options; }
 static void Check(bool value,const char* description) {
     if (!value) { std::fprintf(stderr,"FAIL: %s (%s)\n",description,SDL_GetError()); std::exit(1); }
 }
-// The real game only calls controller::Update from its Win32 timer.
-// Never refresh SDL separately here: that would hide an input pump bug.
+// The game calls Update only from its Win32 timer; refreshing SDL here would hide a pump bug.
 static void Tick() { openshao::controller::Update(); }
 static Uint16 low_motor=0, high_motor=0;
 static bool SDLCALL Motor(void*,Uint16 low,Uint16 high) { low_motor=low; high_motor=high; return true; }
@@ -231,6 +230,19 @@ int main() {
     Check(p.connected,"hot-plug connected");
     Check(p.lx==0 && p.ly==0,"stick drift inside default deadzone is neutral");
     Check(p.rx==0 && p.ry==0 && p.analog[6]==0 && p.analog[7]==0,"neutral right stick and triggers");
+    SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_LEFT_STICK,true);Tick();
+    Check(openshao::controller::CameraRecenterDown() && (input::Poll(0).buttons&0x40),
+          "L3 activates camera recenter and still reaches the guest as a native stick click");
+    openshao::launcher::Settings camera_remapped;
+    camera_remapped.bindings[openshao::bindings::RecenterCamera]="rightstick";
+    openshao::controller::Configure(camera_remapped);Tick();
+    Check(!openshao::controller::CameraRecenterDown(),"The old L3 binding stops recentering after a remap");
+    SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_LEFT_STICK,false);
+    SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_RIGHT_STICK,true);Tick();
+    Check(openshao::controller::CameraRecenterDown() && (input::Poll(0).buttons&0x80),
+          "The new controller binding can recenter without taking away the native click");
+    SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_RIGHT_STICK,false);
+    openshao::controller::Configure({});Tick();
     SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_SOUTH,true);
     SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,true);
     SDL_SetJoystickVirtualButton(joy,SDL_GAMEPAD_BUTTON_START,true);
@@ -301,8 +313,7 @@ int main() {
     auto third=Attach("OpenShao synthetic replacement"); Check(third!=0,"reconnect replacement");
     Tick(); Check(input::Poll(0).connected && input::Poll(1).connected,"reconnect fills free port");
     SDL_DetachVirtualJoystick(second); SDL_DetachVirtualJoystick(third); Tick();
-    // Exercise the real HWND timer bridge: Poll must receive the new state
-    // without the game thread or test calling Update directly.
+    // Real HWND timer bridge: Poll gets the new state without anyone calling Update.
     WNDCLASSW wc{};wc.lpfnWndProc=TestWindow;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"OpenShaoControllerTest";
     Check(RegisterClassW(&wc)!=0,"register owned hidden test window");
     HWND window=CreateWindowExW(WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW,wc.lpszClassName,L"",WS_POPUP,0,0,16,16,nullptr,nullptr,wc.hInstance,nullptr);
@@ -379,8 +390,7 @@ int main() {
     Check(input::Poll(0).connected && input::Poll(1).connected,"hidden fixture can connect after the game is already running");
     DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);
     openshao::controller::Shutdown();
-    // Reproduce launching normally, navigating on keyboard, then connecting a
-    // gamepad after selecting Ko-op. No dedicated launch flag is involved.
+    // Normal launch, keyboard navigation, then a gamepad connected after choosing Ko-op.
     openshao::options.background=false;openshao::options.virtual_gamepads=0;
     openshao::controller::Load(&automatic);
     input::Init();openshao::controller::SetFocused(true);
@@ -402,8 +412,7 @@ int main() {
     Check(input::Poll(0).connected && input::Poll(1).connected && !input::Poll(1).buttons,
           "solo advertises keyboard plus controller to unlock Ko-op while keeping player two neutral");
     SDL_DetachVirtualJoystick(late);Tick();openshao::controller::Shutdown();
-    // The input used to navigate the menu must not change the fixed PC rule.
-    // Even when START was pressed on the controller, keyboard is P1 in co-op.
+    // Keyboard is P1 in co-op even when START was pressed on the controller.
     openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
     late=Attach("OpenShao gamepad primary");late_joy=SDL_OpenJoystick(late);
     SDL_SetJoystickVirtualButton(late_joy,SDL_GAMEPAD_BUTTON_START,true);Tick();
@@ -431,8 +440,7 @@ int main() {
     second=Attach("OpenShao automatic second reconnect");Tick();
     Check(input::Poll(0).connected && input::Poll(1).connected,"second gamepad reconnect restores its original player");
     SDL_DetachVirtualJoystick(first);SDL_DetachVirtualJoystick(second);Tick();openshao::controller::Shutdown();
-    // A keyboard-only solo session must accept a newly connected gamepad on
-    // P1 immediately, then give it P2 when the user enters co-op by keyboard.
+    // Keyboard-only solo: a new gamepad gets P1 at once, then P2 when co-op starts.
     keyboard_active=true;
     openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
     auto switched=Attach("OpenShao solo hotplug pad");auto* switched_joy=SDL_OpenJoystick(switched);
@@ -447,8 +455,7 @@ int main() {
           "keyboard-selected Ko-op moves the live controller to player two");
     SDL_CloseJoystick(switched_joy);SDL_DetachVirtualJoystick(switched);Tick();
     openshao::controller::Shutdown();
-    // Simulate a driver that changes its device list while its SDL add/remove
-    // notifications are consumed by another component of the event loop.
+    // A driver changes its device list while another component consumes the SDL add/remove events.
     keyboard_active=false;
     openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
     auto unnoticed=Attach("OpenShao missed hotplug event");
@@ -481,8 +488,31 @@ int main() {
     openshao::keyboard::Message(nullptr,WM_KILLFOCUS,0,0,&key_result);p={};openshao::keyboard::Poll(0,p);
     Check(!p.analog[1] && !p.rx,"focus loss clears remapped keyboard input");
     openshao::keyboard::Configure({});
-    // The opening key belongs to gameplay, but its release can arrive after
-    // the custom menu starts consuming keyboard input. It must still release P1.
+    constexpr intptr_t below_escape_scan=0x29<<16;
+    openshao::keyboard::Message(nullptr,WM_KEYDOWN,VK_OEM_7,below_escape_scan,&key_result);
+    Check(openshao::keyboard::CameraRecenterDown() &&
+          openshao::bindings::VirtualKey(SDL_SCANCODE_GRAVE)==openshao::bindings::KeyBelowEscape,
+          "The physical key below Escape works with the Windows apostrophe VK and the SDL grave scancode");
+    openshao::keyboard::Message(nullptr,WM_KEYUP,VK_OEM_7,below_escape_scan,&key_result);
+    Check(!openshao::keyboard::CameraRecenterDown(),"Releasing the physical key clears the camera shortcut");
+    openshao::bindings::Keyboard legacy_keyboard;
+    legacy_keyboard.keys[0]={VK_OEM_7,0};
+    openshao::keyboard::Configure(legacy_keyboard);
+    openshao::keyboard::Message(nullptr,WM_KEYDOWN,VK_OEM_7,below_escape_scan,&key_result);
+    p={};openshao::keyboard::Poll(0,p);
+    Check(p.analog[0]==255 && !openshao::keyboard::CameraRecenterDown(),
+          "The physical camera default must yield to a previously mapped layout-specific virtual key");
+    openshao::keyboard::Message(nullptr,WM_KEYUP,VK_OEM_7,below_escape_scan,&key_result);
+    openshao::bindings::Keyboard camera_keyboard;
+    camera_keyboard.keys[openshao::bindings::RecenterCamera]={'P','U'};
+    openshao::keyboard::Configure(camera_keyboard);
+    openshao::keyboard::Message(nullptr,WM_KEYDOWN,VK_OEM_7,below_escape_scan,&key_result);
+    Check(!openshao::keyboard::CameraRecenterDown(),"The default keyboard shortcut no longer recenters after remapping");
+    openshao::keyboard::Message(nullptr,WM_KEYUP,VK_OEM_7,below_escape_scan,&key_result);
+    openshao::keyboard::Key('U',true);
+    Check(openshao::keyboard::CameraRecenterDown(),"The alternate keyboard shortcut can recenter");
+    openshao::keyboard::Key('U',false);openshao::keyboard::Configure({});
+    // A gameplay key released after the custom menu opens must still release P1.
     keyboard_active=true;
     openshao::controller::Load(&automatic);input::Init();openshao::controller::SetFocused(true);
     for(bool messages:{true,false}) {

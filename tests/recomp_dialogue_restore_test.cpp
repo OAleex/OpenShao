@@ -51,11 +51,11 @@ uint32_t SaveSlotTransfers() { return save_slot_transfers; } }
 namespace openshao::launcher { const Settings& Current() { return settings; } }
 namespace openshao::ed_nexus { bool GameplayPaused() { return paused; } }
 namespace openshao::survival {void VoicePlayed(uint32_t,uint32_t){} void UpdateVoice(X86Context&){} bool FilterLevelMessage(uint32_t){return false;} bool DeferMusic(uint32_t){return defer_survival_music;} void TriggerActivated(X86Context&,uint32_t,bool){} }
+namespace openshao::campaign_finishers {void Update(X86Context&){}}
 namespace kernel {
 uint8_t* g_base = memory.data();
 uint32_t CallGuest(X86Context& ctx, uint32_t fn, const uint32_t* args, size_t count) {
-    // Guest execution is the external boundary. The host hooks and their state
-    // below are production code; the native message renderer is tested in-game.
+    // Guest execution is the boundary; the hooks below are production code.
     if (fn == 0x1A76D0) return G<uint8_t>(0x6C4198);
     if (fn == 0x1353F && !count) {
         ++native_music_stops;
@@ -207,8 +207,7 @@ X86_FUNC(__imp__sub_00014985) {
     kernel::G<uint8_t>(0x5144F8) = 1;
     Original(ctx, 3);
 }
-// Retail forwarding before restoration also links, so the missing behavior
-// produces a failing assertion rather than an unresolved symbol.
+// Retail forwarding also links, so missing behavior fails an assertion instead of the link.
 X86_WEAK_FUNC(sub_00014985, __imp__sub_00014985)
 X86_EXTERN_FUNC(sub_001A1880);
 X86_EXTERN_FUNC(sub_001A1850);
@@ -514,8 +513,7 @@ int main() {
     kernel::W32(0x6C03DC, 0); tick();
     check(sounds.size() == 2 && sounds[0][2] == 0x11110000 && sounds[1][2] == 0x22220000,
           "New native requests must wait behind older recovered lines");
-    // Retail audiostreambuffer holds +4 until audiostreamplay transfers the
-    // handle to +8; neither belongs to the original vosound/caption slot.
+    // audiostreambuffer holds +4 until audiostreamplay moves it to +8; neither is the vosound slot.
     reset(); kernel::W32(0x6C03DC, 1); voice(0, 0x12345678);
     kernel::W32(0x6C03DC, 0);
     kernel::W32(0x69654C, 0xABCD1234); kernel::W32(0x696550, 0x5000);
@@ -553,8 +551,7 @@ int main() {
     reset(); kernel::W16(0x5D38B6, 1); voice(0, 0, 0x871111EC, 1);
     check(last_native_sound == 0xEFD60587 && !kernel::R32(0x2100),
           "Kung Lao's connected moon event must use its existing original recording and restore the script bytes");
-    // Native once gates check trigger+0x70 bit1: _d_kl_moon2b (0x401) and the 0x403
-    // moon triggers must keep separate gates.
+    // Once gates use trigger+0x70 bit1: _d_kl_moon2b (0x401) and the 0x403 triggers stay separate.
     for (uint32_t trigger : {0x2500u, 0x2600u}) {
         reset(); kernel::W16(0x5D38B6, 1);
         kernel::W32(trigger + 0x70, 0x401);
@@ -946,8 +943,7 @@ int main() {
     activate(96, 0x9A955116, 0, 1, 33); tick();
     std::this_thread::sleep_for(std::chrono::milliseconds(1600)); tick();
     check(sounds.size() == 1 && sounds[0][2] == 0xBEC5353E, "Either gate opening carries the warning");
-    // Tombs Map 31 has a connected text-58 event and two unused original
-    // entrance takes. The chosen voice follows the actual lead character.
+    // Tombs Map 31 text 58 has two unused entrance takes; the voice follows the lead character.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         const uint32_t expected = hero == 0 ? 0xB8867E92u : 0x82BE2BB9u;
         reset(); definitions({0xB8867E92,0x82BE2BB9});
@@ -971,8 +967,7 @@ int main() {
     reset(); definitions({0xB8867E92,0x82BE2BB9}); kernel::W32(0x505970,30);
     kernel::W16(0x5D38B6,69);
     check(caption_lookup(58)==0,"An unrecognized lead actor must not voice the Soul Tombs entrance");
-    // Evil Monastery Map 1 has an original unvoiced Wall Climb hint (text237)
-    // reached by _d_txt_help; the matching hero's 1_04 recording can voice it.
+    // Evil Monastery Map 1 Wall Climb hint (text 237, _d_txt_help) gets the hero's 1_04 take.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         const uint32_t expected = hero == 0 ? 0xADA2A592u : 0x20A640F3u;
         reset(); definitions({0xADA2A592,0x20A640F3});
@@ -1032,8 +1027,7 @@ int main() {
         settings.restore_dialogue = false; kernel::W32(0x6C03DC, 0); voice(0, family.source);
         check(last_native_sound == family.source, "Disabling restoration must retain every original scripted family");
     }
-    // Baraka's phase1/2 07 taunt stays retail; only native phase3 06_1 may queue a
-    // single supplemental reaction.
+    // Baraka's phase 1/2 07 taunt stays retail; only phase 3 06_1 may queue one extra reaction.
     const std::vector<uint32_t> baraka_reactions{0xF26D1CDF,0xB5CD660F,0x88AD4FBF,
         0x37CA2251,0x706A5881,0x4D0A7131,0x91BD29E5,0xD61D5335,0xEB7D7A85};
     for (const auto seed : {0u, 1u, 1234u}) {
@@ -1079,8 +1073,7 @@ int main() {
         check(sounds.size()==2 && sounds.back()[2]==0xF26D1CDF,
               "After authentic phase3 speech, co-op and solo Baraka each allow one late reaction");
     }
-    // Solo never gets retail 08_1: a real phase3 06 request reaches both approved 08
-    // alternatives, then its late reaction plays last.
+    // Solo: a phase 3 06 request reaches both approved 08 takes, then the late reaction.
     for (const uint32_t seed : {0u, 1u}) {
         reset();definitions({0x9F25265E,0xA2450FEE,0xF26D1CDF});
         kernel::W32(0x505970,15);kernel::W16(0x5D38B6,56);
@@ -1103,8 +1096,7 @@ int main() {
         check(sounds.size()==2,
               "Repeating phase3 cannot loop either solo Baraka speech or reaction");
     }
-    // A missing take falls back to the other loaded one; with neither, keep the
-    // original phase3 voice and the later reaction.
+    // A missing take falls back to the other; with neither, keep the phase 3 voice and reaction.
     reset();definitions({0xA2450FEE,0xF26D1CDF});
     kernel::W32(0x505970,15);kernel::W16(0x5D38B6,56);
     kernel::W32(0x5D1AB8+0x68,0xBABA);kernel::W32(0x5ACEBC,0x3500);
@@ -1123,8 +1115,7 @@ int main() {
     kernel::W32(0x5ACEBC,0x3500);settings.restore_dialogue=false;
     voice(0,0xA0553378,0xAECADCD8);kernel::W32(0x6C03DC,0);tick();
     check(sounds.empty(),"Disabling dialogue recovery preserves original Baraka only");
-    // LF Map 5's two Mileena 5_03 takes address both monks and never replace 5_02, her
-    // entrance or other actors' and rooms' taunts.
+    // LF Map 5 Mileena 5_03 takes address both monks and never replace other taunts.
     for (int scenario = 0; scenario < 5; ++scenario) {
         reset(); definitions({0xBEAE2A44,0xF90E5094});
         kernel::W32(0x505970, scenario == 2 ? 133 : 132);
@@ -1143,16 +1134,14 @@ int main() {
     caption_lookup_sound=0x901D2B23; variation_seed=1;
     check(caption_lookup(62)==0xC2F07D8D,
           "Both original forest-craving hints must be reachable at the repaired original caption");
-    // Respond to the authentic Forest Map 1 tree hint only AFTER its Raiden
-    // caption starts a native voice; neither lookup nor an unvoiced hint is a cue.
+    // Forest Map 1 tree hint: respond only after Raiden's caption starts a native voice.
     auto forest_caption = [&](uint32_t text, uint32_t sound, uint32_t handle) {
         kernel::G<uint8_t>(0x4E74E0) = 1;
         kernel::W32(0x4E74F8, text);
         kernel::W32(0x4E74E4, sound);
         kernel::W32(0x4E74E8, handle);
     };
-    // Evil Monastery Map 4 Fist of Ruin tutorial (text100): Liu's Kitana remark may follow,
-    // never interrupt it or play in another room.
+    // EM Map 4 Fist of Ruin tutorial (text 100): Liu's Kitana remark follows, never interrupts.
     for (int scenario=0;scenario<6;++scenario) {
         reset();definitions(scenario==4 ? std::vector<uint32_t>{} :
                             std::vector<uint32_t>{0xA6A85EC8});
@@ -1174,8 +1163,7 @@ int main() {
     tick();kernel::G<uint8_t>(0x4E74E0)=0;tick();
     check(sounds.size()==1 && sounds.back()[2]==0xA6A85EC8,
           "Fist of Ruin type6 popup can be a visible message without a normal caption audio handle");
-    // Foundry Map 11 background warriors (_d_bgchar01) have no native sound request: one
-    // guarded editorial line after the room settles.
+    // Foundry Map 11 background warriors (_d_bgchar01): one guarded line after the room settles.
     for (const auto hero : {int16_t(0),int16_t(1)}) {
         reset();definitions({0xA09578E5,0x7B43C051});
         kernel::W32(0x505970,74);kernel::W16(0x5D38B6,hero);
@@ -1196,8 +1184,7 @@ int main() {
         for(unsigned i=0;i<95;++i)tick();
         check(sounds.empty(),"Foundry spectator remarks must not play in wrong room, without bank/hero or disabled recovery");
     }
-    // Forest Map 10 = room 137 (debug 138 is a display index). _d_snakes (91FD0438/19) starts
-    // the emergence; entering or prebuffering E8F451C7 proves nothing.
+    // Forest Map 10 is room 137; _d_snakes (91FD0438/19) starts the scene, E8F451C7 alone proves nothing.
     reset();definitions({0x919A865F});kernel::W32(0x505970,137);
     kernel::W16(0x5D38B6,1);tick();
     check(sounds.empty(),"Forest snake guidance must not play on map entry");
@@ -1250,8 +1237,7 @@ int main() {
     kernel::G<uint8_t>(0x4E74E0)=0;tick();
     check(sounds.size()==1 && sounds.back()[2]==0x919A865F,
           "Raiden can play once when the native snake stream and caption are finished");
-    // Retail may show the snake camera yet reject its stream: a real _d_snakes activation plus
-    // the cinematic edge delivers Raiden after the scene, never during it.
+    // Snake stream rejected: _d_snakes plus the cinematic edge still delivers Raiden after the scene.
     reset();definitions({0x919A865F});activate(137,0x91FD0438u,1,1,19);
     kernel::G<uint8_t>(0x6C4198)=1;tick();
     check(sounds.empty(),"A visual snake cinematic in progress cannot be interrupted by Raiden");
@@ -1264,8 +1250,7 @@ int main() {
     kernel::G<uint8_t>(0x6C4198)=1;tick();
     kernel::G<uint8_t>(0x6C4198)=0;tick();
     check(sounds.empty(),"An unrelated cinematic without original snake activation must not request Raiden");
-    // Independent source: the 17C0B0 PLAY callback accepting E8F451C7, even when
-    // activatetrigger 170330 bypassed our wrapper.
+    // The 17C0B0 PLAY callback for E8F451C7 counts even when 170330 bypassed our wrapper.
     reset();definitions({0x919A865F});kernel::W32(0x505970,137);
     original_stream_event(0xE8F451C7);tick();
     check(sounds.empty(),"A native script audiostreamplay request alone cannot prove Raiden's scene has played");
@@ -1284,8 +1269,7 @@ int main() {
     check(sounds.empty(),"Accepted native snake PLAY must wait for proof that sound truly started");
     native_stream_playing=true;tick();
     check(sounds.empty(),"Native snake audio must not be interrupted even without an activation hook");
-    // Retail may erase the original tag immediately while the native sound
-    // continues. The PLAY hook's saved handle must survive this cleanup.
+    // Retail may clear the tag while the sound plays; the PLAY hook's handle must survive.
     kernel::W32(0x69654C,0);kernel::W32(0x696554,0);
     tick();
     check(sounds.empty(),"Clearing a retail stream tag must not allow Raiden over active snake audio");
@@ -1300,14 +1284,12 @@ int main() {
     kernel::W32(0x69654C,0xE8F451C7);kernel::W32(0x696550,0x5000);
     original_stream_play(0xE8F451C7);
     native_stream_playing=true;tick();native_stream_playing=false;
-    // Another future cinematic is prebuffered in a DIFFERENT native slot;
-    // it is not playing and must not suppress Raiden after snake audio ends.
+    // A cinematic prebuffered in another slot is not playing and must not block Raiden.
     kernel::W32(0x696558,0x12345678);kernel::W32(0x69655C,0x6000);
     tick();
     check(sounds.size()==1 && sounds.back()[2]==0x919A865F,
           "A separate future prebuffer must not permanently suppress Raiden after the snake stream ends");
-    // Neither merely buffering a room-load sample nor a rejected PLAY request
-    // authorizes Raiden, even when the visual room is correct.
+    // Buffering a room-load sample or a rejected PLAY never authorizes Raiden.
     reset();definitions({0x919A865F});kernel::W32(0x505970,137);
     kernel::W32(0x69654C,0xE8F451C7);kernel::W32(0x696550,0x5000);
     tick();native_stream_playing=true;tick();native_stream_playing=false;tick();
@@ -1387,8 +1369,7 @@ int main() {
     check(sounds.size() == 1 && sounds.back()[2] == 0x33A9328C,
           "An already playable original Forest hint must also retain its voice before the reply");
 
-    // Map 1's original post-stream title text54 is silent. Raiden's stage
-    // exposition follows only a caption that the native UI actually displayed.
+    // Map 1 title text 54 is silent; Raiden follows only a caption the UI displayed.
     reset(); definitions({0xD64BB4B8}); kernel::W32(0x505970, 192);
     forest_caption(54, 0, 0); tick();
     check(sounds.empty(), "Raiden's Monastery introduction must not overlap its native title");
@@ -1429,8 +1410,7 @@ int main() {
         tick(); kernel::G<uint8_t>(0x4E74E0) = 0; tick();
         check(sounds.empty(), "Raiden's Monastery exposition must require the true title and loaded source");
     }
-    // Living Forest's exact authored title runs after its original intro.
-    // The available Liu Kang opening thought cannot be assigned to Kung Lao.
+    // Living Forest title after its intro; Liu's opening thought never goes to Kung Lao.
     reset(); definitions({0xC629944C}); kernel::W32(0x505970, 128);
     kernel::W16(0x5D38B6, 0); forest_caption(55, 0, 0); tick();
     check(sounds.empty(), "Liu's forest entrance line cannot replace the original area title");
@@ -1465,8 +1445,7 @@ int main() {
     kernel::W32(0x514508, 0x12344321); tick();
     check(sounds.empty(), "A scene replacement must invalidate an extra still waiting outside the voice queue");
 
-    // The second tree's original text63 is voiced by Smoke. Raiden's unused
-    // 2_03 guidance should complement that voice, not replace or duplicate it.
+    // Second tree text 63 is Smoke's; Raiden's unused 2_03 complements it, never replaces it.
     reset(); definitions({0xC33F8FCE}); kernel::W32(0x505970, 129);
     forest_caption(63, 0x01DD37EB, 0); tick();
     kernel::G<uint8_t>(0x4E74E0) = 0; tick();
@@ -1490,8 +1469,7 @@ int main() {
         tick(); kernel::G<uint8_t>(0x4E74E0) = 0; tick();
         check(sounds.empty(), "The second tree reply requires Smoke's real played hint in the correct room");
     }
-    // The original Monastery marker is informational only: it must not queue
-    // the rejected Liu Kang tower comment for either playable monk.
+    // The Monastery marker never queues the rejected Liu Kang tower comment.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         reset(); definitions({0x1F827982}); kernel::W32(0x505970, 192);
         kernel::W16(0x5D38B6, hero); forest_caption(115, 0, 0); tick();
@@ -1499,8 +1477,7 @@ int main() {
         check(sounds.empty(), "Evil Monastery marker must not restore rejected tower speech");
     }
 
-    // Warrior Shrine: the door stream follows the offering; title is mtxt_shrine. A visit only
-    // counts once cs_wu_shi_13_2 (800DFF7A) has started and ended.
+    // Warrior Shrine (mtxt_shrine): a visit counts once cs_wu_shi_13_2 (800DFF7A) started and ended.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         const auto expected = hero == 0 ? 0x29314E8Bu : 0xE5E6EFA6u;
         reset(); definitions({0x29314E8B, 0xE5E6EFA6}); kernel::W32(0x505970, 108);
@@ -1550,8 +1527,7 @@ int main() {
     kernel::W32(0x696554, 0x5000); native_stream_playing = true; tick();
     settings.restore_dialogue = false; native_stream_playing = false; tick();
     check(sounds.empty(), "Disabled restoration cannot add shrine commentary after the native scene");
-    // Wu Shi Map 11: four alternative takes; pick one hero line only after the first
-    // voiced scene really ends.
+    // Wu Shi Map 11: one of four takes, only after the first voiced scene ends.
     for (const auto hero : {int16_t(0), int16_t(1)}) for (uint32_t take : {0u, 1u}) {
         const uint32_t expected = hero == 0 ? (take ? 0x96DE55A2u : 0xD17E2F72u)
                                             : (take ? 0x172550E4u : 0x50852A34u);
@@ -1582,8 +1558,7 @@ int main() {
     kernel::W32(0x69654C, 0x50329483); kernel::W32(0x696554, 0x5000);
     native_stream_playing=false; tick();
     check(sounds.empty(), "Wu Shi's voice must never play without observing its original CS start");
-    // The user explicitly rejected both optional Foundry Map 5 lines.
-    // The original stamping stream must never enqueue those removed voices.
+    // Owner rejected both Foundry Map 5 lines; the stamping stream never queues them.
     for (const auto hero : {int16_t(0), int16_t(1)}) {
         reset(); definitions({0x0AA55E0E, 0x67D43C24});
         kernel::W32(0x505970, 68); kernel::W16(0x5D38B6, hero);
@@ -1611,8 +1586,7 @@ int main() {
     voice(0,0x6B25C1AE); kernel::W32(0x6C03DC,0); tick();
     check(sounds.size()==1 && sounds[0][2]==0x2C85BB7E,
           "Sub-Zero's original off-boat cue must permit his contextual departure follow-up once");
-    // Keep Sub-Zero's original help voice, but never add the rejected
-    // catapult/barrier advice just because the help event fired.
+    // Keep Sub-Zero's help voice without the rejected catapult/barrier advice.
     for (uint32_t iteration = 0; iteration < 2; ++iteration) {
         if (!iteration) {
             reset(); definitions({0x5645E81E}); kernel::W32(0x505970,44);
@@ -1653,8 +1627,7 @@ int main() {
         activate(96, 0xB001C237, 5); tick(); tick();
         check(sounds.empty(), "Only Liu Kang or Kung Lao answer");
     }
-    // Soul Tombs/Baraka: Liu 16_05 is replaced only for solo Kung Lao; never in Ko-op,
-    // other rooms, without definitions or with recovery off.
+    // Liu 16_05 is replaced only in solo Kung Lao play, in that room, with recovery on.
     for (int scenario=0; scenario<6; ++scenario) {
         reset(); definitions(scenario == 4 ? std::vector<uint32_t>{} :
                              std::vector<uint32_t>{0x530DACE6});
@@ -1667,8 +1640,7 @@ int main() {
         check(last_native_sound == expected && kernel::R32(0x2100)==0x6935F9CD,
               "Baraka's standalone original line may select Kung only in the valid solo-Kung context");
     }
-    // Scorpion's 04 taunt plays first; 02_1 is an optional once follow-up, never a
-    // replacement, loop or another actor's trigger.
+    // Scorpion's 04 taunt first; 02_1 is a once-only follow-up, never a replacement.
     reset(); definitions({0x168B9C83}); kernel::W32(0x505970,160);
     kernel::W16(0x5D38B6,52); kernel::W32(0x5D1AB8+0x68,0x9000); tick();
     check(sounds.empty(),"Scorpion cannot speak an added line solely on boss room entry");
@@ -1700,8 +1672,7 @@ int main() {
         kernel::W32(0x6C03DC,0);tick();
         check(sounds.empty(),"Scorpion's extra speech must reject incorrect room, actor, option or bank");
     }
-    // Evil Monastery Map 4: text45 opens the three-sister fight; the Mileena joke waits
-    // for it to end with all three still present.
+    // EM Map 4 text 45 opens the sister fight; the Mileena joke waits with all three present.
     auto three_sisters = [&] {
         for (uint32_t i=0;i<3;++i) {
             const uint32_t at=0x5D1AB8+(i+2)*0x3238;
@@ -1737,8 +1708,7 @@ int main() {
         tick();kernel::G<uint8_t>(0x4E74E0)=0;tick();
         check(sounds.empty(),"The three-woman joke requires true start and opponents; freeing Kitana cancels it");
     }
-    // Spare EM4 lines are one-shot fight comments: only the end of Mileena's original
-    // attack animations may schedule them.
+    // Spare EM4 lines are scheduled only by the end of Mileena's attack animations.
     auto mileena_anim = [&](uint32_t anim) {
         kernel::W32(0x1004,3);kernel::W32(0x1008,anim);
         X86Context ctx{};ctx.esp=0x1000;
@@ -1784,8 +1754,7 @@ int main() {
     activate(195,2447738644u,0,1,4);mileena_anim(1700);tick();
     check(sounds.size()==1 && sounds.back()[2]==0x804E23CE,
           "Freeing Kitana must cancel any later Mileena combat taunt, not erase the original scene");
-    // Forest Map 5 never plays Evil Monastery voices: only its loaded bank, no host PCM
-    // or cross-bank substitution.
+    // Forest Map 5 uses only its loaded bank: no EM voices, host PCM or cross-bank swaps.
     reset();definitions({0x0ACC1FAF,0x4D6C657F});
     kernel::W32(0x505970,132);kernel::W16(0x5D38B6,66);
     kernel::W32(0x5D1AB8+0x68,0xB000);
@@ -1900,8 +1869,7 @@ int main() {
     // Owner removed Raiden's vo_rdn_help_gl_ps2_1 ("defeat these enemies") from _d_tutor01.
     reset(); definitions({0x2AD7B0C5}); activate(96,0x30A4AFE0,0); tick();
     check(sounds.empty(), "The deleted _d_tutor01 target must stay silent");
-    // Ermac phase activations come from the room script (not the live Ermac); a phase
-    // cinematic can clear the queue, so hold the request until it ends.
+    // Ermac phases come from the room script; hold the request until a phase cinematic ends.
     reset();definitions({0x14DC5B86,0x29BC7236});
     kernel::W16(0x5D38B6+0x3238,68);
     kernel::W32(0x5D1AB8+0x3238+0x68,0xE123);
@@ -1936,8 +1904,7 @@ int main() {
     activate(108,0x5A3297F2u,0,1,13);
     kernel::W32(0x639224,0x80020000);tick();
     check(sounds.empty(),"Replacing the game world must cancel Ermac's previous phase");
-    // The genuine phase activation's callback actor may be an out-of-range
-    // script/controller sentinel. The boss lives independently in actor slot1.
+    // The phase callback actor can be a script sentinel; the boss lives in actor slot 1.
     reset();definitions({0x14DC5B86});
     kernel::W32(0x505970,108);
     kernel::W16(0x5D38B6+0x3238,68);
@@ -1950,8 +1917,7 @@ int main() {
     tick();
     check(sounds.size()==1 && sounds.back()[2]==0x14DC5B86,
           "Ermac phase dispatch may originate from a script actor outside native actor slots");
-    // A nonzero sound definition is not proof the native sound factory
-    // created a handle. A failed Play must not irreversibly consume the cue.
+    // A sound definition is no proof of a handle; a failed Play must not consume the cue.
     reset();definitions({0x14DC5B86});
     kernel::W16(0x5D38B6+0x3238,68);
     kernel::W32(0x5D1AB8+0x3238+0x68,0xE123);
@@ -2156,8 +2122,7 @@ int main() {
         native_audio(0xF5F029C2, true); tick();
         check(heard(catapult) == 0, "Catapult remarks belong to Wu Shi Map 08");
     }
-    // Retail voices can bypass vosound: Liu 16_05 at either native entry becomes the Soul Tombs
-    // alternative for solo Kung (voices baked into films are out of scope).
+    // Liu 16_05 at either native entry becomes the solo Kung alternative (film audio excluded).
     for (const bool banked : {false, true}) {
         for (int scenario=0;scenario<6;++scenario) {
             reset(); definitions(scenario == 4 ? std::vector<uint32_t>{} :
@@ -2177,8 +2142,7 @@ int main() {
     native_audio(0x457D44DD); // Different, real Liu projectile comment
     check(sounds.back()[2]==0x457D44DD,
           "Baraka Kung voice fix must never rewrite unrelated Liu dialogue requests");
-    // Typed animation: buffer 6935F9CD at frame 1300, PLAY the same tag at 1450. The audio
-    // becomes Kung, but the slot tag stays Liu so PLAY/DELETE find the handle.
+    // Buffer 6935F9CD at frame 1300, PLAY at 1450: audio becomes Kung, the tag stays Liu.
     auto stream_sound = [&](uint32_t sound) {
         kernel::W32(0x1004,sound);
         X86Context ctx{};ctx.esp=0x1000;

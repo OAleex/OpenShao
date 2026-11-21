@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 namespace openshao::recomp {
-enum class Page {Home,Display,Graphics,Controls,Controller,Keyboard,KeyboardAlternate,Mouse,Audio,Language,Enhancements};
+enum class Page {Home,Display,Graphics,Controls,Controller,Keyboard,KeyboardAlternate,Mouse,Audio,Language,Enhancements,EnhancedCamera,Interface};
 struct Row {std::string key,value;bool action=false;};
 class Model {
     launcher::Settings initial_,draft_;
@@ -22,6 +22,8 @@ public:
     bool KeyboardBinding(size_t row,int slot,int key);
     std::string Conflict(size_t row)const;
     void Discard(){draft_=initial_;page_=Page::Home;}
+    void Revert(){draft_=initial_;}
+    void Commit(){initial_=draft_;}
     bool Dirty()const{return draft_!=initial_;}
     std::string Title()const;
 };

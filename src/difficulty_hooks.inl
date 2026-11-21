@@ -29,7 +29,6 @@ void W8(uint32_t address, uint8_t value) { kernel::G<uint8_t>(address) = value; 
 bool Valid(uint32_t address, uint32_t size) {
     return address && address <= 0xFFFFFFFFu - size && mem::IsCommitted(address) && mem::IsCommitted(address + size - 1);
 }
-bool Enabled() { return launcher::Current().improved_difficulty; }
 bool PtBr() { return mods::SameLanguage(launcher::Current().language, "pt-BR"); }
 std::string_view Text(std::string_view id) {
     return menu::Catalog::Builtin().Get(launcher::Current().language, id);
@@ -58,49 +57,77 @@ bool IsHero(uint32_t object) {
     return object == HeroObjects + HeroStride || object == HeroObjects + 2 * HeroStride;
 }
 
-// Totem clearance beside the saves, keyed by page slot (page 1 = native 1..9) and record fingerprint.
-std::filesystem::path ProgressFile() { return paths::SaveRoot() / "openshao-monk-progress.txt"; }
-// Each line: slot, fingerprint, cleared rooms, then the heroes' health at the totem (-1 unknown).
+// Totem clearance and health beside the save pages, keyed by page slot (page 1 = native 1..9) and record fingerprint.
+std::filesystem::path SaveFolder() {
+    const auto& drives = restart::ActiveSaveDirectory();
+    return drives.empty() ? paths::SaveRoot() : drives;
+}
+std::filesystem::path ProgressFile() { return SaveFolder() / "openshao-monk.bin"; }
+// Earlier versions kept a text file in the saves root; it is converted on the first read.
+std::filesystem::path LegacyProgressFile() { return paths::SaveRoot() / "openshao-monk-progress.txt"; }
+bool StoreSlots(const std::vector<MonkSlot>& slots) {
+    try {
+        files::AtomicWrite(ProgressFile(), EncodeMonkSlots(slots));
+        return true;
+    } catch (const std::exception& error) {
+        LOGW("openshao difficulty: cannot write Monk progress: %s", error.what());
+        return false;
+    }
+}
+std::vector<MonkSlot> ReadSlots() {
+    std::error_code error;
+    const auto path = ProgressFile();
+    std::vector<MonkSlot> slots;
+    if (std::filesystem::exists(path, error)) {
+        std::ifstream file(path, std::ios::binary);
+        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        if (DecodeMonkSlots(bytes, slots)) return slots;
+        // Keep a damaged or edited file aside; its saves load without Monk clearance.
+        const auto aside = files::UniqueSibling(path, ".damaged-");
+        std::filesystem::rename(path, aside, error);
+        LOGW("openshao difficulty: Monk progress is damaged, moved to %s", files::Utf8(aside.filename()).c_str());
+        return {};
+    }
+    const auto legacy = LegacyProgressFile();
+    if (!std::filesystem::exists(legacy, error)) return {};
+    std::ifstream file(legacy, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (!file.is_open() || file.bad()) {
+        LOGW("openshao difficulty: cannot read the old Monk progress file; it stays for the next start");
+        return {};
+    }
+    file.close();
+    // An unreadable line keeps the text file, so nothing is lost.
+    const bool complete = ParseMonkText(text, slots);
+    std::vector<MonkSlot> check;
+    // Remove the text file only after the binary file reads back with the same entries.
+    if (complete && StoreSlots(slots)) {
+        std::ifstream stored(path, std::ios::binary);
+        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stored)), std::istreambuf_iterator<char>());
+        stored.close();
+        if (DecodeMonkSlots(bytes, check) && check == slots) {
+            std::filesystem::remove(legacy, error);
+            LOGI("openshao difficulty: converted %zu Monk progress entries to the binary file", slots.size());
+        }
+    }
+    return slots;
+}
 std::bitset<512> LoadRooms(uint32_t slot, uint64_t print, std::array<int32_t, 2>& health) {
     health = {-1, -1};
-    std::ifstream file(ProgressFile());
-    std::string line;
-    while (std::getline(file, line)) {
-        std::istringstream fields(line);
-        uint32_t stored = 0; std::string hash, rooms;
-        if (!(fields >> stored >> hash >> rooms) || stored != slot) continue;
-        if (hash != std::to_string(print)) return {};
-        int32_t first = -1, second = -1;
-        if (fields >> first) { health[0] = first; if (fields >> second) health[1] = second; }
-        return ParseRooms(rooms);
+    for (const auto& stored : ReadSlots()) {
+        if (stored.slot != slot) continue;
+        if (stored.print != print) return {};
+        health = stored.health;
+        return stored.rooms;
     }
     return {};
 }
 void SaveRooms(uint32_t slot, uint64_t print, const std::bitset<512>& rooms, const std::array<int32_t, 2>& health) {
-    std::error_code error;
-    const auto path = ProgressFile();
-    auto temporary = path;
-    temporary += ".tmp";
-    std::vector<std::string> lines;
-    {
-        std::ifstream file(path);
-        std::string line;
-        while (std::getline(file, line)) {
-            std::istringstream fields(line);
-            uint32_t stored = 0;
-            if ((fields >> stored) && stored != slot && stored >= 1 &&
-                stored <= save_pages::PageCount * save_pages::SlotsPerPage) lines.push_back(line);
-        }
-    }
-    lines.push_back(std::to_string(slot) + " " + std::to_string(print) + " " + SerializeRooms(rooms) + " " +
-                    std::to_string(health[0]) + " " + std::to_string(health[1]));
-    {
-        std::ofstream file(temporary, std::ios::trunc);
-        for (const auto& line : lines) file << line << '\n';
-        if (!file) { LOGW("openshao difficulty: cannot write Monk progress"); return; }
-    }
-    std::filesystem::rename(temporary, path, error);
-    if (error) LOGW("openshao difficulty: cannot replace Monk progress: %s", error.message().c_str());
+    std::vector<MonkSlot> slots;
+    for (const auto& stored : ReadSlots())
+        if (stored.slot != slot && stored.slot >= 1 && stored.slot <= save_pages::PageCount * save_pages::SlotsPerPage) slots.push_back(stored);
+    slots.push_back({slot, print, rooms, health});
+    StoreSlots(slots);
 }
 
 void ApplyGlobals(Mode selected) {
@@ -198,14 +225,16 @@ float Measure(X86Context& ctx, const std::string& encoded) {
     ctx = saved;
     return float(int32_t(width));
 }
-void Centered(X86Context& ctx, float y, std::string_view id, float scale) {
-    const auto text = Text(id);
+void CenteredText(X86Context& ctx, float y, std::string_view text, float scale, float available, bool title=false) {
     if (text.empty()) return;
     const float width = Measure(ctx, menu::EncodeNative(text, PtBr()));
     // The drawn line is a little wider than the native measure; keep a margin inside the canvas.
-    const float fitted = menu::FitScale(width, scale, 540);
+    const float fitted = menu::FitScale(width, scale, available);
     if (fitted <= 0) return;
-    menu::NativeLabel(ctx, 320 - width * fitted / 2, y, text, fitted, 254, false, true, 540);
+    menu::NativeLabel(ctx, 320 - width * fitted / 2, y, text, fitted, 254, title, true, available);
+}
+void Centered(X86Context& ctx, float y, std::string_view id, float scale) {
+    CenteredText(ctx,y,Text(id),scale,540);
 }
 bool EnsureMenu() {
     if (menu_storage) return true;
@@ -235,12 +264,13 @@ constexpr SlotCall SlotCalls[] = {
     {0x44A5B, Column::Level, true}, {0x44B5D, Column::Level, true}, {0x44CA8, Column::Level, true},
     {0x44AAC, Column::Progress, true}, {0x44BAC, Column::Progress, true}, {0x44CF7, Column::Progress, true},
     {0x44BFB, Column::Time, true},
+    {0x9F60F, Column::Name, false},
     {0x9F641, Column::Level, false}, {0x9F663, Column::Progress, false}, {0x9F685, Column::Time, false},
 };
 // Column centres and widths; the name column keeps its native left edge.
 struct Layout { float level, progress, time, difficulty, width[5], right; };
 constexpr Layout MenuLayout{280, 380, 468, 565, {110, 110, 80, 60, 100}, 630};
-constexpr Layout SaveLayout{292, 378, 440, 506, {0, 104, 40, 60, 58}, 539};
+constexpr Layout SaveLayout{292, 378, 440, 506, {87, 104, 40, 60, 58}, 539};
 constexpr float MenuScale = .85f, SaveScale = .85f;
 
 float FloatArg(X86Context& ctx, uint32_t offset) { return std::bit_cast<float>(kernel::R32(ctx.esp + offset)); }
@@ -294,7 +324,7 @@ bool SaveListText(X86Context& ctx, uint8_t* base, TextCall call, void (*original
     const SlotCall* found = nullptr;
     for (const auto& item : SlotCalls) if (item.caller == caller) { found = &item; break; }
     if (!found) return false;
-    const TextCall expected = !found->menu ? TextCall::Plain
+    const TextCall expected = !found->menu ? (found->column == Column::Name ? TextCall::PlainLeft : TextCall::Plain)
                             : found->column == Column::Header || found->column == Column::Name ? TextCall::Left : TextCall::Centered;
     if (call != expected) return false;
     const Layout& layout = found->menu ? MenuLayout : SaveLayout;
@@ -323,7 +353,7 @@ bool SaveListText(X86Context& ctx, uint8_t* base, TextCall call, void (*original
     if (found->menu) {
         sx = FloatArg(ctx, 24); sy = FloatArg(ctx, 28);
         const float scaled = sx * MenuScale;
-        const float fit = index ? menu::FitScale(TextWidth(ctx, text, flags), scaled, layout.width[index]) : scaled;
+        const float fit = menu::FitScale(TextWidth(ctx, text, flags), scaled, layout.width[index]);
         const float applied = fit > 0 ? fit : scaled;
         sy = sy * applied / sx;
         sx = applied;
@@ -331,9 +361,11 @@ bool SaveListText(X86Context& ctx, uint8_t* base, TextCall call, void (*original
         SetFloatArg(ctx, 28, sy);
     }
     if (!found->menu) {
-        // The in-game list's plain text cannot fit: use the scaled centered call.
+        // The in-game list uses unscaled text. Retain the name's left edge.
         const float fit = menu::FitScale(TextWidth(ctx, text, flags), SaveScale, layout.width[index]);
-        if (fit > 0) DrawText(ctx, TextCall::Centered, centre, y, color, flags, text, fit, fit);
+        const bool name = found->column == Column::Name;
+        const float x = name ? float(int32_t(kernel::R32(ctx.esp + 4))) : centre;
+        if (fit > 0) DrawText(ctx, name ? TextCall::Left : TextCall::Centered, x, y, color, flags, text, fit, fit);
         kernel::Return(ctx, 0, 0);
         if (found->column != Column::Time) return true;
         if (const uint32_t label = SlotDifficultyText(ctx, slot)) {
@@ -394,7 +426,7 @@ X86_EXTERN_FUNC(__imp__sub_001B0F70);
 X86_FUNC(sub_001B0F70) {
     if (kernel::R32(ctx.esp) != BuilderReturn) { __imp__sub_001B0F70(ctx, base); return; }
     menu_expanded = false;
-    if (!Enabled() || !EnsureMenu()) { __imp__sub_001B0F70(ctx, base); return; }
+    if (!EnsureMenu()) { __imp__sub_001B0F70(ctx, base); return; }
     const uint32_t menu = ctx.ecx, top = ctx.esp + 0x14, visible = ctx.esp + 0x1C;
     {
         Restore32 count{ctx.esp + 4, kernel::R32(ctx.esp + 4)}, table{ctx.esp + 8, kernel::R32(ctx.esp + 8)}, y{top, kernel::R32(top)},
@@ -413,6 +445,13 @@ X86_FUNC(sub_001B0F70) {
 
 // Difficulty popup input and hints; the description follows the highlighted row.
 X86_EXTERN_FUNC(__imp__sub_00011D8E);
+void openshao::difficulty::DrawFighterHint(X86Context& ctx, std::string_view name,
+                                          std::string_view message) {
+    CenteredText(ctx,159,name,1.15f,450,true);
+    CenteredText(ctx,219,Text(message),.85f,450);
+    const std::array hints{menu::FooterHint{menu::Button::Back,std::string(Text("fighter.close"))}};
+    menu::NativeFooter(ctx,286,hints);
+}
 void openshao::difficulty::DrawPopup(X86Context& ctx,uint8_t* base) {
     const uint32_t menu = ctx.ecx;
     popup_footer = menu_expanded && menu == popup_menu;
@@ -434,7 +473,7 @@ void openshao::difficulty::DrawPopup(X86Context& ctx,uint8_t* base) {
     }
 }
 X86_FUNC(sub_00011D8E) {
-    if(openshao::survival::PopupInput(ctx,base))return;
+    if(openshao::fighter_selection::PopupInput(ctx,base))return;
     openshao::difficulty::DrawPopup(ctx,base);
 }
 
@@ -676,6 +715,7 @@ X86_FUNC(sub_00015F51) {
 
 uint32_t save_slot_transfers = 0;
 uint32_t openshao::difficulty::SaveSlotTransfers() { return save_slot_transfers; }
+void openshao::difficulty::ConvertLegacyProgress() { ReadSlots(); }
 
 // Save-slot copy-in. A Monk record is normalized to native Hard and becomes the return point.
 X86_EXTERN_FUNC(__imp__sub_00015038);

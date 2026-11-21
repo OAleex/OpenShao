@@ -1,6 +1,5 @@
 #pragma once
-// HLSL to SPIR-V via glslang; D3D registers map to one descriptor set:
-// b0-b1 -> bindings 0-1, t0-t3 -> 2-5, s0-s3 -> 6-9.
+// HLSL to SPIR-V via glslang: b0-b1 -> bindings 0-1, t0-t3 -> 2-5, s0-s3 -> 6-9.
 #include <cstdint>
 #include <string>
 #include <vector>

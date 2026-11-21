@@ -12,7 +12,7 @@ std::array<uint8_t,4096> bytes{};
 uint32_t selected=0,top_menu=0x598430,top_depth=1,rumble_mask=0,load_popup_mode=0;
 bool survival_characters=false,survival_popup=false;
 uint32_t survival_players=0;
-namespace openshao::survival {
+namespace openshao::fighter_selection {
 bool CharacterSelection(){return survival_characters;}
 bool SetupPopup(){return survival_popup;}
 uint32_t PlayerMode(){return survival_players;}
@@ -62,8 +62,7 @@ int main() {
     Check(modes.size()==1 && !modes.back(),"selecting Single Player restores shared input");
     modes.clear();menu={};menu.ecx=0x123456;kernel::W32(menu.esp+4,0x598DF0);sub_00015C86(menu,nullptr);
     Check(modes.empty(),"other menu instances do not change player assignment");
-    // The original main-menu callback does not run again after the character
-    // panel opens. XInputGetState must still switch to two independent ports.
+    // The main-menu callback stops once the character panel opens; XInputGetState must still split ports.
     frontend_poll=true;
     original_called=false;
     modes.clear();selected=1;top_menu=0x598430;

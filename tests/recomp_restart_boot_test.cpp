@@ -8,6 +8,7 @@ static std::array<uint8_t,8<<20> memory{};
 static unsigned movies=0,route=99,profiles=0;
 static unsigned brightness_calls=0,movies_at_brightness=0;
 static uint32_t brightness=0;
+static uint32_t profile_brightness=0x3F000000;
 namespace kernel {
 uint8_t* g_base=memory.data();
 uint32_t CallGuest(X86Context& ctx,uint32_t fn,const uint32_t* args,size_t count) {
@@ -17,7 +18,8 @@ uint32_t CallGuest(X86Context& ctx,uint32_t fn,const uint32_t* args,size_t count
         ctx.esp=0xBAD;ctx.eax=0xBAD;ctx.ebx=0xBAD;return 0;
     }
     if(fn!=0x146C9 || count || R32(0x6C930C)!=0x598430)std::abort();
-    ++profiles;G<uint8_t>(0x59E5F4)=1;W32(0x4DF5C0,0x3F000000);
+    ++profiles;G<uint8_t>(0x59E5F4)=1;W32(0x4DF5C0,profile_brightness);
+    W32(0x4DF5C4,std::bit_cast<uint32_t>(.75f));W32(0x4DFC1C,0x11223344);
     ctx.esp=0xBAD;ctx.eax=0xBAD;return 0;
 }
 }
@@ -49,6 +51,23 @@ int main() {
     check(profiles==1,"Ordinary frontend returns must not reload the profile or repeat storage dialogs");
     movie("D:\\FRONT\\MOVIES\\OPENING.SFD");check(movies==3,"Later opening/movie playback must use the original path after the one-shot restart finishes");
     for(const auto value:{0.f,.23f,.5f,1.f}) {
+        profile_brightness=std::bit_cast<uint32_t>(value);
+        kernel::W32(0x598308,std::bit_cast<uint32_t>(.87f));
+        kernel::W32(0x4E5780,std::bit_cast<uint32_t>(.87f));
+        kernel::W32(0x4E5DDC,0);kernel::W32(0x4E5DE0,0x55667788);
+        const auto before_calls=brightness_calls;
+        BeginResume(true);ctx.esp=0x1000;ctx.ebx=0x11223344;sub_00013391(ctx,memory.data());
+        check(brightness_calls==before_calls+1 && brightness==profile_brightness,
+              "Restart must apply the loaded profile brightness to rendering even when the title is skipped");
+        check(kernel::R32(0x598308)==profile_brightness,
+              "Restart must initialize the native calibration slider from the loaded profile, including zero");
+        check(kernel::R32(0x4E5780)==profile_brightness && kernel::R32(0x4E5784)==std::bit_cast<uint32_t>(.75f) &&
+              kernel::R32(0x4E5DDC)==0x11223344 && kernel::R32(0x4E5DE0)==0x55667788,
+              "Restart must initialize the complete native options snapshot used when cancelling an edit");
+        check(ctx.esp==0x1004 && ctx.eax==0 && ctx.ebx==0x11223344,
+              "Restoring restart brightness must preserve the frontend callback context");
+    }
+    for(const auto value:{0.f,.23f,.5f,1.f}) {
         const auto bits=std::bit_cast<uint32_t>(value);
         kernel::W32(0x4DF5C0,bits);
         for(const char* path:{"D:\\FRONT\\MOVIES\\MIDWAY.SFD","d:/front/movies/opening.sfd"}) {
@@ -66,7 +85,11 @@ int main() {
     const auto previous_calls=brightness_calls;
     movie("D:\\FRONT\\MOVIES\\END006.SFD");
     check(brightness_calls==previous_calls,"Other movie exits must retain their native brightness behavior");
-    BeginResume(true);movie("D:\\FRONT\\MOVIES\\MIDWAY.SFD");
-    check(brightness_calls==previous_calls && ctx.eax==4,"Skipped restart movies must not apply a new gamma ramp");
+    kernel::W32(0x4DF5C0,std::bit_cast<uint32_t>(.23f));
+    BeginResume(true);ctx.ebx=0x11223344;movie("D:\\FRONT\\MOVIES\\MIDWAY.SFD");
+    check(brightness_calls==previous_calls+1 && brightness==std::bit_cast<uint32_t>(.23f) && movies_at_brightness==movies,
+          "The loading screen after a language restart must use the saved brightness although the movies are skipped");
+    check(ctx.eax==4 && ctx.esp==0x1004 && ctx.ebx==0x11223344,
+          "Applying brightness to a skipped restart movie must keep the native end-of-playback result and stack");
     return failed?1:0;
 }

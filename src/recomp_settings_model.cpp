@@ -20,11 +20,14 @@ std::string Model::Title()const {
     case Page::Keyboard:return "settings.keyboard";case Page::KeyboardAlternate:return "settings.alternate";
     case Page::Mouse:return "settings.mouse";case Page::Audio:return "recomp.audio";case Page::Language:return "settings.language";
     case Page::Enhancements:return "recomp.enhancements";
+    case Page::EnhancedCamera:return "settings.enhanced_camera";
+    case Page::Interface:return "recomp.interface";
     }
     return "recomp.title";
 }
 void Model::Back() {
-    if(page_==Page::KeyboardAlternate)page_=Page::Keyboard;
+    if(page_==Page::EnhancedCamera)page_=Page::Enhancements;
+    else if(page_==Page::KeyboardAlternate)page_=Page::Keyboard;
     else if(page_==Page::Controller || page_==Page::Keyboard || page_==Page::Mouse)page_=Page::Controls;
     else page_=Page::Home;
 }
@@ -34,15 +37,16 @@ std::vector<Row> Model::Rows()const {
     const auto& s=draft_;
     switch(page_) {
     case Page::Home:
-        for(const auto* id:{"recomp.display","recomp.graphics","recomp.controls","recomp.audio","settings.language","settings.save","settings.discard"})add(id,{},true);
+        for(const auto* id:{"recomp.display","recomp.graphics","recomp.controls","recomp.audio","settings.language","recomp.interface"})add(id,{},true);
         break;
     case Page::Display:
         add("settings.mode","value."+s.display_mode);add("settings.width",s.width?std::to_string(s.width):"value.desktop");
         add("settings.height",s.height?std::to_string(s.height):"value.desktop");add("settings.aspect",s.aspect_ratio=="original"?"4:3":s.aspect_ratio=="auto"?"value.auto":s.aspect_ratio);
-        add("settings.desktop",{},true);break;
+        add("settings.desktop",{},true);
+        add("settings.apply",{},true);add("settings.discard_display",{},true);break;
     case Page::Graphics:
         add("settings.scale",std::to_string(s.render_percent)+"%");add("settings.aniso",s.aniso?std::to_string(s.aniso)+"x":"value.game_default");
-        add("settings.vsync",Toggle(s.vsync));add("settings.bloom_effect",Toggle(s.bloom_effect));add("settings.fps",Toggle(s.show_fps));
+        add("settings.vsync",Toggle(s.vsync));add("settings.bloom_effect",Toggle(s.bloom_effect));
         add("settings.frame_rate",s.vsync?"value.display_refresh":std::to_string(s.fps_cap)+" FPS");break;
     case Page::Controls:
         add("settings.controller",{},true);add("settings.keyboard",{},true);add("settings.mouse",{},true);
@@ -50,7 +54,7 @@ std::vector<Row> Model::Rows()const {
     case Page::Controller:
     case Page::Keyboard:
     case Page::KeyboardAlternate:
-        for(unsigned i=0;i<24;++i) {
+        for(unsigned i=0;i<bindings::Count;++i) {
             add("binding."+std::string(bindings::keys[i]),page_==Page::Controller?Source(s.bindings[i]):"key."+std::to_string(s.keyboard.keys[i][page_==Page::KeyboardAlternate?1:0]),true);
         }
         if(page_==Page::Keyboard)add("settings.alternate",{},true);
@@ -69,22 +73,30 @@ std::vector<Row> Model::Rows()const {
         add("settings.scorpion_unfiltered",Toggle(s.scorpion_unfiltered));
         add("settings.restore_dialogue",Toggle(s.restore_dialogue));
         add("settings.cinematic_bars",Toggle(s.cinematic_bars));
-        add("settings.improved_difficulty",Toggle(s.improved_difficulty));
-        add("settings.save",{},true);add("settings.discard",{},true);break;
+        add("settings.enhanced_camera",">",true);break;
+    case Page::EnhancedCamera:
+        add("settings.camera_enabled",Toggle(s.hold_camera_angle));
+        add("settings.camera_speed",std::to_string(s.camera_speed)+"%");
+        add("settings.camera_smoothing",Toggle(s.smooth_camera_framing));break;
+    case Page::Interface:
+        add("settings.fps",Toggle(s.show_fps));
+        add("settings.notifications",Toggle(s.screenshot_notifications));break;
     }
     return rows;
 }
 void Model::Enter(size_t row) {
+    if(page_==Page::Enhancements && row==3){page_=Page::EnhancedCamera;return;}
     if(page_==Page::Home) {
-        constexpr enum Page pages[]={Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Language};
+        constexpr enum Page pages[]={Page::Display,Page::Graphics,Page::Controls,Page::Audio,Page::Language,Page::Interface};
         if(row<std::size(pages))page_=pages[row];return;
     }
     if(page_==Page::Controls) {
         if(row<3){constexpr enum Page pages[]={Page::Controller,Page::Keyboard,Page::Mouse};page_=pages[row];}
         return;
     }
-    if(page_==Page::Keyboard && row==24){page_=Page::KeyboardAlternate;return;}
-    if((page_==Page::Controller && row==24) || (page_==Page::Keyboard && row==25) || (page_==Page::KeyboardAlternate && row==24)) {
+    if(page_==Page::Keyboard && row==bindings::Count){page_=Page::KeyboardAlternate;return;}
+    if((page_==Page::Controller && row==bindings::Count) || (page_==Page::Keyboard && row==bindings::Count+1) ||
+       (page_==Page::KeyboardAlternate && row==bindings::Count)) {
         if(page_==Page::Controller){draft_.bindings=bindings::controller_defaults;draft_.deadzone=.15;draft_.rumble=true;}
         else draft_.keyboard={};
     }
@@ -92,29 +104,24 @@ void Model::Enter(size_t row) {
     if(page_==Page::Display && row==4)draft_.width=draft_.height=0;
 }
 bool Model::ControllerBinding(size_t row,std::string source) {
-    if(row>=24 || !bindings::ValidSource(source))return false;
+    if(row>=bindings::Count || !bindings::ValidSource(source))return false;
     source=bindings::CanonicalSource(std::move(source));
-    if(source!="none")for(size_t i=0;i<draft_.bindings.size();++i)
-        if(i!=row && bindings::CanonicalSource(draft_.bindings[i])==source)return false;
+    if(!bindings::ControllerConflicts(draft_.bindings,row,source).empty())return false;
     draft_.bindings[row]=std::move(source);return true;
 }
 bool Model::KeyboardBinding(size_t row,int slot,int key) {
-    if(row>=24 || slot<0 || slot>=2 || !bindings::ValidKey(key))return false;
+    if(row>=bindings::Count || slot<0 || slot>=2 || !bindings::ValidKey(key))return false;
     if(!bindings::KeyboardConflicts(draft_.keyboard,unsigned(row),slot,key).empty())return false;
     draft_.keyboard.keys[row][slot]=key;return true;
 }
 std::string Model::Conflict(size_t row)const {
-    if(row>=24)return {};
+    if(row>=bindings::Count)return {};
     if(page_==Page::Keyboard || page_==Page::KeyboardAlternate) {
         const int slot=page_==Page::KeyboardAlternate?1:0;
         return bindings::KeyboardConflicts(draft_.keyboard,unsigned(row),slot,draft_.keyboard.keys[row][slot]);
     }
-    std::string result;
-    if(page_==Page::Controller && draft_.bindings[row]!="none")for(unsigned i=0;i<24;++i)
-        if(i!=row && draft_.bindings[i]==draft_.bindings[row]) {
-            if(!result.empty())result+=", ";result+=bindings::labels[i];
-        }
-    return result;
+    if(page_==Page::Controller)return bindings::ControllerConflicts(draft_.bindings,row,bindings::CanonicalSource(draft_.bindings[row]));
+    return {};
 }
 void Model::Change(size_t row,int direction) {
     if(row>=Rows().size() || !direction)return;
@@ -127,19 +134,19 @@ void Model::Change(size_t row,int direction) {
         if(row==3){std::array<std::string,6> modes;for(unsigned i=0;i<6;++i)modes[i]=aspect::modes[i];Cycle(s.aspect_ratio,modes,delta);}break;
     case Page::Graphics:
         if(row==0)number(s.render_percent,5,25,400);if(row==1)Cycle(s.aniso,std::array{0,2,4,8,16},delta);
-        if(row==2)s.vsync=!s.vsync;if(row==3)s.bloom_effect=!s.bloom_effect;if(row==4)s.show_fps=!s.show_fps;
-        if(row==5 && !s.vsync)Cycle(s.fps_cap,frames::RateOptions,delta);break;
+        if(row==2)s.vsync=!s.vsync;if(row==3)s.bloom_effect=!s.bloom_effect;
+        if(row==4 && !s.vsync)Cycle(s.fps_cap,frames::RateOptions,delta);break;
     case Page::Controls:
         if(row==3)s.deadzone=std::clamp(std::round(s.deadzone*100+delta)/100,0.,.5);if(row==4)s.rumble=!s.rumble;break;
     case Page::Controller:
-        if(row<24){
+        if(row<bindings::Count){
             std::array<std::string,bindings::sources.size()> choices;std::copy(bindings::sources.begin(),bindings::sources.end(),choices.begin());
             auto candidate=s.bindings[row];
             for(size_t attempt=0;attempt<choices.size();++attempt){Cycle(candidate,choices,delta);if(ControllerBinding(row,candidate))break;}
         }break;
     case Page::Keyboard:
     case Page::KeyboardAlternate:
-        if(row<24){
+        if(row<bindings::Count){
             const int slot=page_==Page::KeyboardAlternate?1:0;int candidate=s.keyboard.keys[row][slot];
             for(unsigned attempt=0;attempt<256;++attempt){candidate=(candidate+(delta<0?255:1))%256;if(KeyboardBinding(row,slot,candidate))break;}
         }break;
@@ -158,7 +165,15 @@ void Model::Change(size_t row,int direction) {
         if(row==0)s.scorpion_unfiltered=!s.scorpion_unfiltered;
         if(row==1)s.restore_dialogue=!s.restore_dialogue;
         if(row==2)s.cinematic_bars=!s.cinematic_bars;
-        if(row==3)s.improved_difficulty=!s.improved_difficulty;
+        break;
+    case Page::EnhancedCamera:
+        if(row==0)s.hold_camera_angle=!s.hold_camera_angle;
+        if(row==1)number(s.camera_speed,launcher::CameraSpeedStep,launcher::CameraSpeedMin,launcher::CameraSpeedMax);
+        if(row==2)s.smooth_camera_framing=!s.smooth_camera_framing;
+        break;
+    case Page::Interface:
+        if(row==0)s.show_fps=!s.show_fps;
+        if(row==1)s.screenshot_notifications=!s.screenshot_notifications;
         break;
     default:break;
     }
