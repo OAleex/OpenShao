@@ -15,7 +15,18 @@ struct TempFile {fs::path path;~TempFile(){std::error_code ec;fs::remove(path,ec
 Browser::Browser(const fs::path& root):root_(root) { Refresh(); }
 Browser::~Browser(){Cancel();if(worker_.joinable())worker_.join();}
 BrowserState Browser::View()const{std::lock_guard lock(mutex_);return state_;}
-void Browser::Cancel(){cancel_=true;}
+void Browser::Cancel(){cancel_=true;answered_.notify_all();}
+void Browser::Answer(bool install){
+    {std::lock_guard lock(mutex_);if(!state_.asking)return;answer_=install;state_.asking.reset();++state_.revision;}
+    answered_.notify_all();
+}
+bool Browser::Confirm(const Replacement& what){
+    std::unique_lock lock(mutex_);
+    answer_.reset();state_.asking=what;++state_.revision;
+    answered_.wait(lock,[&]{return answer_.has_value()||cancel_.load();});
+    state_.asking.reset();
+    const bool yes=answer_.value_or(false)&&!cancel_;answer_.reset();return yes;
+}
 Progress Browser::ProgressCallback(){return [this](std::string_view text,uint64_t done,uint64_t total){
     if(cancel_)return false;std::lock_guard lock(mutex_);state_.status=text;
     const auto value=total?uint64_t(ProgressTotal*(static_cast<long double>(std::min(done,total))/total)):0;
@@ -47,9 +58,16 @@ void Browser::Refresh(){Start([this]{
     const auto text=Read(download.path);auto mods=ParseCatalog(text);files::AtomicWrite(cache,text);
     std::lock_guard lock(mutex_);state_.catalog=std::move(mods);state_.status="Mods are up to date";
 },true);}
-void Browser::InstallFile(const fs::path& file,const fs::path& game){Start([this,file,game]{
+void Browser::InstallFile(const fs::path& file,const fs::path& game,bool ask){Start([this,file,game,ask]{
     const auto progress=ProgressCallback();GameReader source(game);
     const auto package=InspectPackage(file,root_,ProgressSlice(progress,0,5000));
+    if(ask) {
+        const auto rows=ReadInstalled(root_);
+        const auto found=std::find_if(rows.begin(),rows.end(),[&](auto& r){return r.mod.id==package->mod.id;});
+        if(found!=rows.end()&&!Confirm({package->mod.name,found->mod.version,package->mod.version})) {
+            std::lock_guard lock(mutex_);state_.status="Installation cancelled";return;
+        }
+    }
     InstallPackage(root_,*package,[&](const Patch& patch){return source.Original(patch);},ProgressSlice(progress,5000,ProgressTotal));
     std::lock_guard lock(mutex_);state_.status="Mod installed";
 });}

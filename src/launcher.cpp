@@ -249,6 +249,7 @@ struct Popup {
     std::function<void()> action;
     bool close_after = false;
     std::string cancel;  // the second button's label; empty shows "Cancel"
+    std::function<void()> on_cancel;  // when the dialog is dismissed instead of confirmed
 };
 
 struct Session {
@@ -298,13 +299,16 @@ struct Session {
     void Message(std::string title, std::string text, bool close_after = false) {
         popup = Popup{std::move(title), std::move(text), {}, {}, close_after};
     }
-    void Confirm(std::string title, std::string text, std::string label, std::function<void()> action) {
-        popup = Popup{std::move(title), std::move(text), std::move(label), std::move(action), false};
+    void Confirm(std::string title, std::string text, std::string label, std::function<void()> action,
+                 std::function<void()> on_cancel = {}) {
+        popup = Popup{std::move(title), std::move(text), std::move(label), std::move(action), false, {}, std::move(on_cancel)};
     }
     void Dismiss() {
         if (!popup) return;
         const bool close = popup->close_after;
+        auto on_cancel = popup->on_cancel;
         popup.reset();
+        if (on_cancel) on_cancel();
         if (close) result = 0;
     }
     void Accept() {
@@ -382,7 +386,22 @@ struct Session {
         return prepared.path;
     }
     void InstallMod(const std::string& id) { if (const auto game = ModGame(); !game.empty()) mods->Install(id, game); }
-    void InstallModFile(const fs::path& file) { if (const auto game = ModGame(); !game.empty()) mods->InstallFile(file, game); }
+    void InstallModFile(const fs::path& file) { if (const auto game = ModGame(); !game.empty()) mods->InstallFile(file, game, true); }
+    // A mod that is already installed is replaced only when the user says so, with the two versions in front of them
+    void PollReplacement() {
+        const auto view = mods->View();
+        if (!view.asking || popup) return;
+        const auto& ask = *view.asking;
+        const int order = mods::CompareVersions(ask.installed, ask.incoming);
+        std::string text;
+        if (order == 0) {
+            text = ask.name + " v" + ask.installed + " is already installed.\n\nInstall it again? The installed files are replaced.";
+        } else {
+            text = ask.name + " is already installed.\n\nInstalled: v" + ask.installed + "  ->  To install: v" + ask.incoming +
+                   "\n\n" + (order > 0 ? "The version to install is older than the installed one. " : "") + "The installed version is replaced.";
+        }
+        Confirm("Mod already installed", text, "Install", [this] { mods->Answer(true); }, [this] { mods->Answer(false); });
+    }
     void RemoveMod(const mods::Mod& mod) {
         const auto id = mod.id;
         Confirm(F("message.remove_title", {{"name", mod.name}}), T("message.remove_text"), T("mods.remove"),
@@ -1105,6 +1124,7 @@ void LanguagePage(Session& s, const Canvas& c, float W, float H) {
 
 void Draw(Session& s, float scale) {
     s.PollGame();
+    s.PollReplacement();
     s.PollReport();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float W = viewport->Size.x / scale, H = viewport->Size.y / scale;
