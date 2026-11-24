@@ -7,7 +7,10 @@
 #include "launcher.h"
 #include "restart.h"
 #include "language_pack.h"
+#include "texture_pack.h"
+#include <cstdlib>
 #include "mods/manager.h"
+#include "mods/mod_settings.h"
 #include "mods/languages.h"
 #include "mods/runtime.h"
 #include "mods/sha256.h"
@@ -38,9 +41,16 @@ std::filesystem::path OriginalPath(const std::filesystem::path& root,std::string
     }
     return path;
 }
+// The texture sources that need no installed mod: the developer mode's folder (the launcher's Developer page), and before it the
+// folder or pack file that OPENSHAO_HD_PACK_DIR names, so a pack can be tried without packaging and installing it
+void AddDevelopmentTexturePacks(std::vector<openshao::texpack::PackSpec>& ordered) {
+    using namespace openshao;
+    if(const auto developer=launcher::DeveloperTextureFolder();!developer.empty())ordered.insert(ordered.begin(),texpack::PackSpec{developer});
+    if(const char* folder=std::getenv("OPENSHAO_HD_PACK_DIR");folder&&*folder)ordered.insert(ordered.begin(),texpack::PackSpec{std::filesystem::path(folder)});
+}
 bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& game,std::string& error) {
     using namespace openshao;
-    language::Disable();mods::StageRoutines({});
+    language::Disable();mods::StageRoutines({});texpack::SetPacks({});
     try {
         const auto selected=options.restart_preflight?options.restart_language:options.validate_language_pack?std::string("pt-BR"):launcher::Current().language;
         auto settings=launcher::Current();settings.language=selected;
@@ -49,6 +59,7 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         const auto voices=settings.voice_language;
         std::vector<language::PackSelection> packs;
         std::vector<mods::RoutineScript> scripts;
+        std::vector<std::pair<std::string,texpack::PackSpec>> hd_packs;  // with the id of the mod, to put them in the user's order
         bool credits=false;
         if(!options.language_pack.empty()){packs.push_back({options.language_pack,selected=="pt-BR",voices=="pt-BR"});credits=selected=="pt-BR";}
         else {
@@ -65,6 +76,18 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                     throw std::runtime_error("Installed mod folder is missing: "+row.mod.name);
                 packs.push_back({pack,true,row.mod.type!="language" || mods::SameLanguage(selected,voices)});
                 if(row.mod.type=="language") {language_ready=true;credits=selected=="pt-BR";}
+                if(row.mod.ostp) {
+                    // checked as it was installed; here only its size, and the reader checks its structure when it opens it
+                    const auto file=pack/"pack.ostp";std::error_code ec;
+                    if(!std::filesystem::is_regular_file(file,ec)||std::filesystem::file_size(file,ec)!=row.mod.ostp->size)
+                        throw std::runtime_error("Installed texture pack file changed: "+row.mod.name);
+                    hd_packs.push_back({row.mod.id,{file,mods::ReadTextureQuality(paths::Mods(),row.mod.id)}});
+                } else if(std::find(row.mod.features.begin(),row.mod.features.end(),"hdtextures")!=row.mod.features.end()) {
+                    const auto index=std::find_if(row.mod.files.begin(),row.mod.files.end(),[](auto& f){return f.path=="hd/index.txt";});
+                    if(index==row.mod.files.end()||mods::Sha256File(pack/"hd/index.txt")!=index->sha256)
+                        throw std::runtime_error("Installed texture pack index changed: "+row.mod.name);
+                    hd_packs.push_back({row.mod.id,pack/"hd"});
+                }
                 for(const auto& path:row.mod.routines) {
                     const auto script=pack/files::FromUtf8(path);
                     const auto file=std::find_if(row.mod.files.begin(),row.mod.files.end(),[&](auto& f){return f.path==path;});
@@ -85,7 +108,13 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
                 if(!voice_ready)throw std::runtime_error("Install and enable a pack for the selected voice language in Mods.");
             }
         }
-        if(packs.empty())return true;
+        if(packs.empty()) {
+            // no mod is active, but the texture sources that need none still apply
+            std::vector<texpack::PackSpec> development;
+            AddDevelopmentTexturePacks(development);
+            texpack::SetPacks(development);
+            return true;
+        }
         const auto* disc=kernel::MountedDisc();
         struct Readers {std::mutex mutex;std::map<std::string,language::ReadAt> files;};
         const auto readers=std::make_shared<Readers>();
@@ -116,12 +145,25 @@ bool MountLanguage(const openshao::setup::Source& source,const app::GameFiles& g
         if(!mounted)return false;
         if(options.validate_language_pack&&!language::ValidateMovies(error))return false;
         mods::StageRoutines(std::move(scripts));
+        // The first pack wins when several have a texture: the order is the user's, from the Mods page
+        std::vector<texpack::PackSpec> ordered;
+        if(!hd_packs.empty()) {
+            std::vector<std::string> installed;
+            for(const auto& row:mods::ReadInstalled(paths::Mods()))if(row.mod.type=="texture")installed.push_back(row.mod.id);
+            const auto order=mods::TextureOrder(paths::Mods(),installed);
+            const auto rank=[&](const std::string& id){return std::find(order.begin(),order.end(),id)-order.begin();};
+            std::stable_sort(hd_packs.begin(),hd_packs.end(),[&](const auto& a,const auto& b){return rank(a.first)<rank(b.first);});
+            for(auto& pack:hd_packs)ordered.push_back(std::move(pack.second));
+        }
+        // The development sources come before every texture mod
+        AddDevelopmentTexturePacks(ordered);
+        texpack::SetPacks(ordered);
         const auto& stats=language::Statistics();
         LOGR("Language resources: text=%s voices=%s",selected.c_str(),voices.c_str());
         LOGR("Mods ready: packs=%zu resources=%u voices=%u occurrences=%u movies=%u",packs.size(),stats.archive.resources,
              stats.archive.voice_names,stats.archive.voice_occurrences,stats.movies);
         return true;
-    }catch(const std::exception& e){error=e.what();language::Disable();mods::StageRoutines({});return false;}
+    }catch(const std::exception& e){error=e.what();language::Disable();mods::StageRoutines({});texpack::SetPacks({});return false;}
 }
 }
 

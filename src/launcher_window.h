@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <functional>
 
 namespace openshao::launcher {
@@ -17,6 +18,11 @@ public:
     void EndFrame();
     void Close();
     float Scale() const;
+
+    // An image for the interface from raw RGBA, top row first, as the handle that ImGui::Image takes (cast to ImTextureID).
+    // 0 when the renderer cannot make one, and the caller draws something else.
+    uint64_t CreateImage(const uint8_t* rgba, int width, int height);
+    void DestroyImage(uint64_t image);
 
     struct State;
 private:
