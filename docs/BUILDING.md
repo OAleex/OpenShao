@@ -84,7 +84,7 @@ The Linux build prints the minimum glibc version of the executable. Check it bef
 5. Install the Linux packages above.
 6. Add `--linux` to the Windows build command.
 
-The WSL build output goes to `~/.cache/openshao/linux-release`. The package still goes to `dist/`.
+The WSL build output goes to `~/.cache/openshao/`, in a separate folder for each source folder. The package still goes to `dist/`.
 
 ## Release
 

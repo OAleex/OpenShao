@@ -1,5 +1,6 @@
 """Build the native executable and release package (Windows, Linux or WSL), with optional tests."""
 import argparse
+import hashlib
 import os
 from pathlib import Path, PureWindowsPath
 import shutil
@@ -140,6 +141,22 @@ def glibc_requirement(exe):
     return '.'.join(map(str, max(versions))) if versions else None
 
 
+def wsl_build_dir(root):
+    """Linux build output for a source tree on a Windows mount; each checkout or worktree gets its own."""
+    cache = Path.home() / '.cache/openshao'
+    shared = cache / 'linux-release'
+    # Earlier releases used one shared folder: keep using it for the source tree that configured it.
+    try:
+        for line in (shared / 'CMakeCache.txt').read_text(errors='replace').splitlines():
+            if line.startswith('CMAKE_HOME_DIRECTORY:'):
+                if Path(line.split('=', 1)[1].strip()) == root:
+                    return shared
+                break
+    except OSError:
+        pass
+    return cache / f"linux-release-{hashlib.sha256(str(root).encode()).hexdigest()[:12]}"
+
+
 def linux_build(parser, args, root):
     sdk, xbe = args.sdk.resolve(), args.xbe.resolve()
     for file in (xbe, sdk / 'cmake/XbeRecomp.cmake'):
@@ -161,7 +178,7 @@ def linux_build(parser, args, root):
         build = args.build_dir.resolve()
     elif str(root).startswith('/mnt/'):
         # Keep build output on the Linux filesystem to avoid slow Windows mount I/O.
-        build = Path.home() / '.cache/openshao/linux-release'
+        build = wsl_build_dir(root)
     else:
         build = root / 'build/linux-release'
     build.mkdir(parents=True, exist_ok=True)
